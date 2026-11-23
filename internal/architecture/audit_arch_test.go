@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -151,25 +152,43 @@ func TestArch_NoSensitivePayloadInAudit(t *testing.T) {
 	}
 }
 
-// TestArch_NothingDeletesTheAuditTrail pins the owner rule "we never delete any data"
-// (ADR 0071) for the audit trail: no production Go or SQL source deletes from or
-// truncates common.audit_log_entry, so no scheduled job can either. The database
-// side is the revoked DELETE grant (pg.TablePrivilegeExceptions).
-// Scope: production — applies to non-test files.
-//
-// arch-test:no-negative-fixture (a source scan over production files; a planted DELETE file failed it when the gate was written)
-func TestArch_NothingDeletesTheAuditTrail(t *testing.T) {
-	t.Parallel()
+// auditDeleteRE finds a statement that removes the audit trail: DELETE FROM,
+// TRUNCATE or DROP TABLE on common.audit_log_entry. It runs over [normaliseSQLSource]
+// text, where quotes and string concatenation are gone.
+var auditDeleteRE = regexp.MustCompile(`(?is)(DELETE\s+FROM|TRUNCATE(\s+TABLE)?|DROP\s+TABLE(\s+IF\s+EXISTS)?)\s+(ONLY\s+)?(common\s*\.\s*)?audit_log_entry\b`)
 
-	root := internalDir(t)
-	delRE := regexp.MustCompile(`(?is)(DELETE\s+FROM|TRUNCATE(\s+TABLE)?)\s+(ONLY\s+)?(common\.)?audit_log_entry\b`)
+// concatRE matches the join of two adjacent string literals in Go
+// ("DELETE FROM " + "common.audit_log_entry", either quote kind, across lines).
+var concatRE = regexp.MustCompile(`[\x22\x60]\s*\+\s*[\x22\x60]`)
+
+// normaliseSQLSource undoes what hides a statement from a text scan: string
+// concatenation and the quotes around identifiers ("common"."audit_log_entry",
+// \"audit_log_entry\" inside a Go string).
+func normaliseSQLSource(src string) string {
+	src = concatRE.ReplaceAllString(src, "")
+	return strings.NewReplacer(`\"`, "", `"`, "", "`", "").Replace(src)
+}
+
+// upBlock is the part of a goose migration that runs on the way up. The Down block
+// of an earlier migration may legitimately name a statement the Up block removed.
+func upBlock(src string) string {
+	up, _, _ := strings.Cut(src, "-- +goose Down")
+	return up
+}
+
+// auditTrailDeleters returns the files under root (the repository root) that
+// remove the audit trail: production Go under internal/ and cmd/, every .sql file
+// there, and the Up block of every migration, which is the owner role's way in (the
+// application role holds no DELETE on it, the owner role can).
+func auditTrailDeleters(t *testing.T, root string) []string {
+	t.Helper()
 	var bad []string
 	check := func(path string, src []byte) {
-		if delRE.Match(src) {
+		if auditDeleteRE.MatchString(normaliseSQLSource(string(src))) {
 			bad = append(bad, pathToSlash(path))
 		}
 	}
-	for _, dir := range []string{root, filepath.Join(root, "..", "cmd")} {
+	for _, dir := range []string{filepath.Join(root, "internal"), filepath.Join(root, "cmd")} {
 		walkGoFiles(t, dir, false, check)
 		_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() || filepath.Ext(path) != ".sql" {
@@ -181,7 +200,73 @@ func TestArch_NothingDeletesTheAuditTrail(t *testing.T) {
 			return nil
 		})
 	}
-	if len(bad) > 0 {
+	_ = filepath.WalkDir(filepath.Join(root, "migrations"), func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || filepath.Ext(path) != ".sql" {
+			return nil
+		}
+		if src, rerr := os.ReadFile(path); rerr == nil {
+			check(path, []byte(upBlock(string(src))))
+		}
+		return nil
+	})
+	return bad
+}
+
+// TestArch_NothingDeletesTheAuditTrail pins the owner rule "we never delete any data"
+// (ADR 0071) for the audit trail: no production Go or SQL source, and no migration's
+// Up block, deletes from, truncates or drops common.audit_log_entry, quoted or
+// built by concatenation or not, so no scheduled job can either. The database side
+// is the revoked DELETE grant (pg.TablePrivilegeExceptions) and the boot check.
+// Scope: production, plus the Up block of migrations.
+//
+// arch-test:no-negative-fixture (the five plants are in TestAuditDeleteGate_CatchesItsPlants, which runs this same scan over a scratch tree)
+func TestArch_NothingDeletesTheAuditTrail(t *testing.T) {
+	t.Parallel()
+
+	if bad := auditTrailDeleters(t, repoRoot(t)); len(bad) > 0 {
 		t.Fatalf("source deletes from the audit trail (it is kept forever, ADR 0071):\n  %s", strings.Join(bad, "\n  "))
+	}
+}
+
+// TestAuditDeleteGate_CatchesItsPlants plants five ways of deleting the audit
+// trail in a scratch tree and requires the gate to name each; a REVOKE (what the
+// migration that removed the grant says) and a Down block must stay quiet.
+func TestAuditDeleteGate_CatchesItsPlants(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	write := func(rel, body string) {
+		t.Helper()
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const pkg = "package x\n\nvar q = "
+	plants := map[string]string{
+		"internal/m/plain.go":                 pkg + "`DELETE FROM common.audit_log_entry WHERE true`\n",
+		"internal/m/purge.sql":                "DELETE FROM common.audit_log_entry;\n",
+		"migrations/20990101000001_purge.sql": "-- +goose Up\nDELETE FROM common.audit_log_entry WHERE created_at < now();\n-- +goose Down\nSELECT 1;\n",
+		"cmd/x/quoted.go":                     pkg + "`DELETE FROM \"common\".\"audit_log_entry\"`\n",
+		"internal/m/concat.go":                pkg + "\"DELETE FROM \" +\n\t\"common.\" + \"audit_log_entry\"\n",
+	}
+	for rel, body := range plants {
+		write(rel, body)
+	}
+	write("migrations/20990101000002_revoke.sql", "-- +goose Up\nREVOKE DELETE ON common.audit_log_entry FROM leadkart_app;\n-- +goose Down\nGRANT DELETE ON common.audit_log_entry TO leadkart_app;\n")
+	write("migrations/20990101000003_old.sql", "-- +goose Up\nSELECT 1;\n-- +goose Down\nDELETE FROM common.audit_log_entry;\n")
+	write("internal/m/ok.go", pkg+"`SELECT * FROM common.audit_log_entry`\n")
+
+	got := auditTrailDeleters(t, root)
+	for rel := range plants {
+		if !slices.ContainsFunc(got, func(g string) bool { return strings.HasSuffix(g, rel) }) {
+			t.Errorf("the gate missed the plant %s", rel)
+		}
+	}
+	if len(got) != len(plants) {
+		t.Errorf("the gate named %d files, want exactly the %d plants: %v", len(got), len(plants), got)
 	}
 }
