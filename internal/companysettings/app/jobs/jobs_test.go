@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/riverqueue/river"
@@ -81,18 +82,35 @@ func TestRepublishWorker_ReannouncesEveryStoredTenantAcrossPages(t *testing.T) {
 	}
 }
 
-func TestRepublishWorker_OneTenantFailingDoesNotStopTheSweepButFailsTheJob(t *testing.T) {
+func TestRepublishWorker_OneTenantFailingDoesNotStopTheSweepNorReplayIt(t *testing.T) {
 	t.Parallel()
 	ids := sortedIDs(3)
 	lister := &fakeLister{ids: ids}
 	rep := &fakeRepublisher{failFor: map[string]error{ids[1].String(): errors.New("boom")}}
 	w := jobs.NewRepublishWorker(lister, rep, silent())
-	err := w.Work(t.Context(), &river.Job[jobs.RepublishJob]{})
-	if err == nil {
-		t.Fatal("a failed tenant must fail the job so river retries it")
+	if err := w.Work(t.Context(), &river.Job[jobs.RepublishJob]{}); err != nil {
+		t.Fatalf("a failed tenant must not fail the job: river would retry and re-announce every tenant (up to 25 times); the next run retries it: %v", err)
 	}
 	if len(rep.seen) != 3 {
 		t.Fatalf("the sweep stopped at the failure: %v", rep.seen)
+	}
+}
+
+// The schedule is the point of H1: River keeps no schedule across restarts, so a
+// worker deployed more often than the interval would never run an
+// interval-only job. The job must also run when the worker starts.
+func TestPeriodicJob_RunsOnStartAndEveryInterval(t *testing.T) {
+	t.Parallel()
+	opts := jobs.PeriodicOpts()
+	if !opts.RunOnStart {
+		t.Fatal("RunOnStart must be true: a worker restarted within the interval would never republish")
+	}
+	start := time.Date(2026, 11, 23, 3, 0, 0, 0, time.UTC)
+	if got := jobs.PeriodicSchedule().Next(start); !got.Equal(start.Add(jobs.RepublishInterval)) {
+		t.Fatalf("next run = %s, want start + %s", got, jobs.RepublishInterval)
+	}
+	if jobs.PeriodicJob() == nil {
+		t.Fatal("PeriodicJob must build the river periodic job the worker registers")
 	}
 }
 

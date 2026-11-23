@@ -83,8 +83,7 @@ func NewRepublishWorker(tenants TenantLister, republish Republisher, log *slog.L
 func (*RepublishWorker) Timeout(*river.Job[RepublishJob]) time.Duration { return JobTimeout }
 
 // Work walks every stored tenant page by page and re-announces its policy. One
-// tenant's failure is logged and does not stop the sweep; the job then returns
-// an error so river retries it (re-announcing is idempotent).
+// tenant's failure is logged and does not stop the sweep or fail the job.
 func (w *RepublishWorker) Work(ctx context.Context, _ *river.Job[RepublishJob]) error {
 	var failed []error
 	total := 0
@@ -109,7 +108,29 @@ func (w *RepublishWorker) Work(ctx context.Context, _ *river.Job[RepublishJob]) 
 	}
 	w.log.InfoContext(ctx, "companysettings: policies republished", "tenants", total, "failed", len(failed))
 	if len(failed) > 0 {
-		return fmt.Errorf("republish policies: %d tenant(s) failed: %w", len(failed), errors.Join(failed...))
+		// Not a job failure: river would retry the WHOLE sweep (up to 25 times),
+		// re-announcing every healthy tenant each time. Each failure is already
+		// logged with its tenant; the next run retries it.
+		w.log.ErrorContext(ctx, "companysettings: republish left tenants behind until the next run",
+			"failed", len(failed), "err", errors.Join(failed...))
 	}
 	return nil
+}
+
+// PeriodicSchedule is how often the job runs.
+func PeriodicSchedule() river.PeriodicSchedule { return river.PeriodicInterval(RepublishInterval) }
+
+// PeriodicOpts runs the job when the worker starts, not only every interval:
+// river keeps no schedule across restarts (the first run is start + interval),
+// so a worker deployed more often than the interval would never republish. The
+// job is idempotent, so running at every start is safe.
+func PeriodicOpts() *river.PeriodicJobOpts { return &river.PeriodicJobOpts{RunOnStart: true} }
+
+// PeriodicJob is the periodic registration the worker passes to river.
+func PeriodicJob() *river.PeriodicJob {
+	return river.NewPeriodicJob(
+		PeriodicSchedule(),
+		func() (river.JobArgs, *river.InsertOpts) { return RepublishJob{}, nil },
+		PeriodicOpts(),
+	)
 }

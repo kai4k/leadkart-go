@@ -533,13 +533,7 @@ func run(ctx context.Context, stdout *os.File) error {
 			},
 			&river.PeriodicJobOpts{RunOnStart: false},
 		),
-		river.NewPeriodicJob(
-			river.PeriodicInterval(companysettingsjobs.RepublishInterval),
-			func() (river.JobArgs, *river.InsertOpts) {
-				return companysettingsjobs.RepublishJob{}, nil
-			},
-			&river.PeriodicJobOpts{RunOnStart: false},
-		),
+		companysettingsjobs.PeriodicJob(),
 		river.NewPeriodicJob(
 			river.PeriodicInterval(tasksjobs.OverdueScanInterval),
 			func() (river.JobArgs, *river.InsertOpts) {
