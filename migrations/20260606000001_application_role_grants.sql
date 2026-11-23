@@ -12,7 +12,7 @@
 -- WHAT leadkart_app GETS (and nothing more):
 --   * USAGE on every application schema:
 --       app, common, identity, platform, crm, inventory, shared, tasks,
---       dispatch, orders, notifications
+--       dispatch, orders, notifications, companysettings
 --   * SELECT, INSERT, UPDATE, DELETE on all tables of every schema except app
 --     (app holds only the RLS helper functions) and except the narrower sets
 --     below
@@ -22,6 +22,8 @@
 --   * common.audit_log_entry: SELECT, INSERT, DELETE (the purge job). Never
 --     UPDATE: the audit trail is append-only for the application
 --   * common.admin_impersonation_audit: SELECT, INSERT. Never UPDATE or DELETE
+--   * companysettings.policy_history: SELECT, INSERT. Never UPDATE or DELETE
+--     (the append-only policy version ledger, ADR 0070)
 --   * USAGE, SELECT on all sequences of those schemas (serial / identity columns,
 --     e.g. common.outbox."offset"; GRANT ON TABLES does not cover sequences)
 --   * EXECUTE on the functions in schema app (app.current_tenant(),
@@ -80,7 +82,7 @@ BEGIN
 
     FOREACH s IN ARRAY ARRAY['app', 'common', 'identity', 'platform', 'crm',
                              'inventory', 'shared', 'tasks', 'dispatch', 'orders',
-                             'notifications'] LOOP
+                             'notifications', 'companysettings'] LOOP
         CONTINUE WHEN NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = s);
         EXECUTE format('GRANT USAGE ON SCHEMA %I TO leadkart_app', s);
         IF s = 'app' THEN
@@ -105,6 +107,9 @@ BEGIN
     IF to_regclass('common.admin_impersonation_audit') IS NOT NULL THEN
         REVOKE UPDATE, DELETE ON common.admin_impersonation_audit FROM leadkart_app;
     END IF;
+    IF to_regclass('companysettings.policy_history') IS NOT NULL THEN
+        REVOKE UPDATE, DELETE ON companysettings.policy_history FROM leadkart_app;
+    END IF;
 END
 $$;
 -- +goose StatementEnd
@@ -121,7 +126,7 @@ BEGIN
 
     FOREACH s IN ARRAY ARRAY['app', 'common', 'identity', 'platform', 'crm',
                              'inventory', 'shared', 'tasks', 'dispatch', 'orders',
-                             'notifications'] LOOP
+                             'notifications', 'companysettings'] LOOP
         CONTINUE WHEN NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = s);
         IF s = 'app' THEN
             EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA app REVOKE EXECUTE ON FUNCTIONS FROM leadkart_app';
