@@ -21,6 +21,7 @@ func Handlers(
 	workItemCreated *WorkItemCreatedSubscriber,
 	workItemOverdue *WorkItemOverdueSubscriber,
 	orderConfirmed *OrderConfirmedSubscriber,
+	stockAlerts *StockAlertSubscriber,
 ) []cqrs.EventHandler {
 	var handlers []cqrs.EventHandler
 	if leadAssigned != nil {
@@ -35,5 +36,18 @@ func Handlers(
 	if orderConfirmed != nil {
 		handlers = append(handlers, cqrs.NewEventHandler(HandlerOrderConfirmed, orderConfirmed.Handle))
 	}
+	if stockAlerts != nil {
+		handlers = append(handlers, StockAlertHandlers(stockAlerts)...)
+	}
 	return handlers
+}
+
+// StockAlertHandlers registers the three Inventory stock alerts (expiring soon,
+// expired on hand, below reorder level).
+func StockAlertHandlers(s *StockAlertSubscriber) []cqrs.EventHandler {
+	return []cqrs.EventHandler{
+		cqrs.NewEventHandler(HandlerBatchExpiringSoon, s.HandleExpiring),
+		cqrs.NewEventHandler(HandlerBatchExpiredOnHand, s.HandleExpiredOnHand),
+		cqrs.NewEventHandler(HandlerBelowReorder, s.HandleBelowReorder),
+	}
 }

@@ -6,12 +6,13 @@
 -- name: InsertAlertEmission :execrows
 -- Returns rows-affected — 0 when the row already existed (deduped);
 -- 1 when freshly inserted (caller publishes the integration event).
+-- emission_key is "tier:<days>" (expiry), "day:<date>" (reorder) or "once".
 INSERT INTO inventory.alert_emissions (
-    tenant_id, kind, subject_id, emitted_date
+    tenant_id, kind, subject_id, emission_key, emitted_date
 ) VALUES (
-    $1, $2, $3, $4
+    $1, $2, $3, $4, $5
 )
-ON CONFLICT (tenant_id, kind, subject_id, emitted_date) DO NOTHING;
+ON CONFLICT (tenant_id, kind, subject_id, emission_key) DO NOTHING;
 
 -- name: ListTenantsWithProducts :many
 -- Distinct tenant_ids carrying at least one LIVE product. Drives the

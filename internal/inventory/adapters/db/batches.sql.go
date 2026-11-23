@@ -209,15 +209,10 @@ func (q *Queries) ListBatchesByProductPage(ctx context.Context, arg ListBatchesB
 	return items, nil
 }
 
-const listBatchesNearExpiryForTenant = `-- name: ListBatchesNearExpiryForTenant :many
-SELECT b.id, b.product_id, b.tenant_id, b.batch_number,
-       b.manufacture_date, b.expiry_date,
-       b.manufacturer_name, b.manufacturing_licence_number,
-       b.mrp_paise, b.purchase_price_paise,
-       b.quantity_on_hand, b.version,
-       b.created_at, b.updated_at,
-       b.is_deleted, b.deleted_at, b.deleted_by,
-       p.expiry_alert_threshold_days
+const listBatchesForExpiryScan = `-- name: ListBatchesForExpiryScan :many
+SELECT b.id AS batch_id, b.product_id, b.batch_number, b.expiry_date,
+       b.quantity_on_hand, b.quantity_reserved, b.quantity_quarantined,
+       p.sku, p.name AS product_name, p.expiry_alert_threshold_days
 FROM   inventory.batches b
 JOIN   inventory.products p
     ON p.id        = b.product_id
@@ -225,69 +220,47 @@ JOIN   inventory.products p
 WHERE  b.tenant_id = $1
 AND    NOT b.is_deleted
 AND    NOT p.is_deleted
-AND    b.quantity_on_hand > 0
-AND    p.expiry_alert_threshold_days > 0
-AND    b.expiry_date <= ($2::date + p.expiry_alert_threshold_days)
+AND    b.quantity_on_hand - b.quantity_quarantined > 0
 ORDER  BY b.expiry_date ASC, b.id ASC
 `
 
-type ListBatchesNearExpiryForTenantParams struct {
-	TenantID pgtype.UUID
-	Today    pgtype.Date
+type ListBatchesForExpiryScanRow struct {
+	BatchID                  pgtype.UUID
+	ProductID                pgtype.UUID
+	BatchNumber              string
+	ExpiryDate               pgtype.Date
+	QuantityOnHand           int64
+	QuantityReserved         int64
+	QuantityQuarantined      int64
+	Sku                      string
+	ProductName              string
+	ExpiryAlertThresholdDays int32
 }
 
-type ListBatchesNearExpiryForTenantRow struct {
-	ID                         pgtype.UUID
-	ProductID                  pgtype.UUID
-	TenantID                   pgtype.UUID
-	BatchNumber                string
-	ManufactureDate            pgtype.Date
-	ExpiryDate                 pgtype.Date
-	ManufacturerName           string
-	ManufacturingLicenceNumber string
-	MrpPaise                   int64
-	PurchasePricePaise         int64
-	QuantityOnHand             int64
-	Version                    int64
-	CreatedAt                  pgtype.Timestamptz
-	UpdatedAt                  pgtype.Timestamptz
-	IsDeleted                  bool
-	DeletedAt                  pgtype.Timestamptz
-	DeletedBy                  *string
-	ExpiryAlertThresholdDays   int32
-}
-
-// ExpiryScanJob workhorse. Per-tenant scan returning batches whose
-// expiry_date <= (today + product.expiry_alert_threshold_days).
-// Excludes soft-deleted batches + zero-on-hand + threshold==0.
-// $1 = tenant_id, $2 = today (UTC, date-only).
-func (q *Queries) ListBatchesNearExpiryForTenant(ctx context.Context, arg ListBatchesNearExpiryForTenantParams) ([]ListBatchesNearExpiryForTenantRow, error) {
-	rows, err := q.db.Query(ctx, listBatchesNearExpiryForTenant, arg.TenantID, arg.Today)
+// ExpiryScanJob workhorse. Every live batch of the tenant that still holds units
+// not set apart (on hand minus quarantined > 0), with its product. The scan
+// decides the tier and whether the printed expiry has passed in Go with
+// common/expiry, the one rule; this query only narrows to batches with stock.
+// $1 = tenant_id.
+func (q *Queries) ListBatchesForExpiryScan(ctx context.Context, tenantID pgtype.UUID) ([]ListBatchesForExpiryScanRow, error) {
+	rows, err := q.db.Query(ctx, listBatchesForExpiryScan, tenantID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListBatchesNearExpiryForTenantRow
+	var items []ListBatchesForExpiryScanRow
 	for rows.Next() {
-		var i ListBatchesNearExpiryForTenantRow
+		var i ListBatchesForExpiryScanRow
 		if err := rows.Scan(
-			&i.ID,
+			&i.BatchID,
 			&i.ProductID,
-			&i.TenantID,
 			&i.BatchNumber,
-			&i.ManufactureDate,
 			&i.ExpiryDate,
-			&i.ManufacturerName,
-			&i.ManufacturingLicenceNumber,
-			&i.MrpPaise,
-			&i.PurchasePricePaise,
 			&i.QuantityOnHand,
-			&i.Version,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.IsDeleted,
-			&i.DeletedAt,
-			&i.DeletedBy,
+			&i.QuantityReserved,
+			&i.QuantityQuarantined,
+			&i.Sku,
+			&i.ProductName,
 			&i.ExpiryAlertThresholdDays,
 		); err != nil {
 			return nil, err

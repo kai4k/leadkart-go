@@ -1,11 +1,11 @@
 package command_test
 
 import (
-	"time"
 	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"

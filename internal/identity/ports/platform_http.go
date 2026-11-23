@@ -403,8 +403,8 @@ func handleListImpersonationSessions(log *slog.Logger, a app.Application) http.H
 		}
 		for _, v := range views {
 			out.Sessions = append(out.Sessions, ImpersonationSessionDto{
-				SessionID:      v.SessionID,
-				OperatorID:     v.OperatorID,
+				SessionID:         v.SessionID,
+				OperatorID:        v.OperatorID,
 				TargetTenantID:    v.TargetTenantID,
 				TenantDisplayName: v.TenantDisplayName,
 				Reason:            v.Reason,

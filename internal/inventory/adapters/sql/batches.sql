@@ -118,19 +118,15 @@ AND    quantity_on_hand - quantity_reserved - quantity_quarantined > 0
 AND    expiry_date >= sqlc.arg('min_sellable')::date
 ORDER  BY expiry_date ASC, id ASC;
 
--- name: ListBatchesNearExpiryForTenant :many
--- ExpiryScanJob workhorse. Per-tenant scan returning batches whose
--- expiry_date <= (today + product.expiry_alert_threshold_days).
--- Excludes soft-deleted batches + zero-on-hand + threshold==0.
--- $1 = tenant_id, $2 = today (UTC, date-only).
-SELECT b.id, b.product_id, b.tenant_id, b.batch_number,
-       b.manufacture_date, b.expiry_date,
-       b.manufacturer_name, b.manufacturing_licence_number,
-       b.mrp_paise, b.purchase_price_paise,
-       b.quantity_on_hand, b.version,
-       b.created_at, b.updated_at,
-       b.is_deleted, b.deleted_at, b.deleted_by,
-       p.expiry_alert_threshold_days
+-- name: ListBatchesForExpiryScan :many
+-- ExpiryScanJob workhorse. Every live batch of the tenant that still holds units
+-- not set apart (on hand minus quarantined > 0), with its product. The scan
+-- decides the tier and whether the printed expiry has passed in Go with
+-- common/expiry, the one rule; this query only narrows to batches with stock.
+-- $1 = tenant_id.
+SELECT b.id AS batch_id, b.product_id, b.batch_number, b.expiry_date,
+       b.quantity_on_hand, b.quantity_reserved, b.quantity_quarantined,
+       p.sku, p.name AS product_name, p.expiry_alert_threshold_days
 FROM   inventory.batches b
 JOIN   inventory.products p
     ON p.id        = b.product_id
@@ -138,9 +134,7 @@ JOIN   inventory.products p
 WHERE  b.tenant_id = $1
 AND    NOT b.is_deleted
 AND    NOT p.is_deleted
-AND    b.quantity_on_hand > 0
-AND    p.expiry_alert_threshold_days > 0
-AND    b.expiry_date <= (sqlc.arg('today')::date + p.expiry_alert_threshold_days)
+AND    b.quantity_on_hand - b.quantity_quarantined > 0
 ORDER  BY b.expiry_date ASC, b.id ASC;
 
 -- name: ListProductsBelowReorderForTenant :many

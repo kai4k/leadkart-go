@@ -379,7 +379,7 @@ func TestTenantScopePolicy_MarkerWinsOverTable(t *testing.T) {
 		want int
 	}{
 		"reject":   {authn.RejectTenantScope, http.StatusForbidden}, // refused before any lookup
-		"honour":   {authn.HonourTenantScope, http.StatusNotFound}, // header validated: unknown tenant
+		"honour":   {authn.HonourTenantScope, http.StatusNotFound},  // header validated: unknown tenant
 		"writable": {authn.TenantScopeWritable, http.StatusNotFound},
 	} {
 		rec, s, _ := scopeServe(t, activeTenants(), operatorClaims(), alwaysFresh{}, tc.wrap, "GET", marked, unknownTenantHdr)

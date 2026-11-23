@@ -16,12 +16,12 @@
 package command_test
 
 import (
-	"sync/atomic"
 	"context"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 

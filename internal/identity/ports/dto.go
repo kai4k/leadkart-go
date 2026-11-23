@@ -434,9 +434,9 @@ type CreateImpersonationSessionResponse struct {
 
 // ImpersonationSessionDto is one entry in the GET response.
 type ImpersonationSessionDto struct {
-	SessionID      string    `json:"session_id"`
-	OperatorID     string    `json:"operator_id"`
-	TargetTenantID string    `json:"target_tenant_id"`
+	SessionID      string `json:"session_id"`
+	OperatorID     string `json:"operator_id"`
+	TargetTenantID string `json:"target_tenant_id"`
 	// TenantDisplayName is the target tenant's current display name (read at
 	// response time, so a rename shows on the next read).
 	TenantDisplayName string    `json:"tenant_display_name"`

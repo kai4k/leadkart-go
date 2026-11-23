@@ -14,17 +14,18 @@ import (
 const insertAlertEmission = `-- name: InsertAlertEmission :execrows
 
 INSERT INTO inventory.alert_emissions (
-    tenant_id, kind, subject_id, emitted_date
+    tenant_id, kind, subject_id, emission_key, emitted_date
 ) VALUES (
-    $1, $2, $3, $4
+    $1, $2, $3, $4, $5
 )
-ON CONFLICT (tenant_id, kind, subject_id, emitted_date) DO NOTHING
+ON CONFLICT (tenant_id, kind, subject_id, emission_key) DO NOTHING
 `
 
 type InsertAlertEmissionParams struct {
 	TenantID    pgtype.UUID
 	Kind        string
 	SubjectID   pgtype.UUID
+	EmissionKey string
 	EmittedDate pgtype.Date
 }
 
@@ -34,11 +35,13 @@ type InsertAlertEmissionParams struct {
 // CONFLICT DO NOTHING.
 // Returns rows-affected — 0 when the row already existed (deduped);
 // 1 when freshly inserted (caller publishes the integration event).
+// emission_key is "tier:<days>" (expiry), "day:<date>" (reorder) or "once".
 func (q *Queries) InsertAlertEmission(ctx context.Context, arg InsertAlertEmissionParams) (int64, error) {
 	result, err := q.db.Exec(ctx, insertAlertEmission,
 		arg.TenantID,
 		arg.Kind,
 		arg.SubjectID,
+		arg.EmissionKey,
 		arg.EmittedDate,
 	)
 	if err != nil {

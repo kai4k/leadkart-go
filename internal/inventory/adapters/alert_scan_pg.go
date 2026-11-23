@@ -9,122 +9,119 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/inventory/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/inventory/app/jobs"
 	"github.com/leadkart/leadkart-go/internal/inventory/integrationevents"
 )
 
-// AlertScanRepository is the adapter-side concrete that backs the
-// inventory/app/jobs scan workers. Owns all pgx/sqlc concerns so the
-// app layer stays boundary-clean (ADR 0047).
-//
-// Implements the [jobs.AlertScanRepo] consumer-side interface.
+// AlertScanRepository is the pgx/sqlc-backed [jobs.AlertScanRepo]. The tenant
+// list is the one cross-tenant read (platform scope); every other read and the
+// ledger-plus-outbox write run under the tenant scope (TxScopeTenant semantics: the GUC is bound from the explicit tenant id) of the tenant they are
+// about, so RLS applies exactly as it does on the request path (a pool with no
+// scope bound sees no rows under FORCE row level security).
 type AlertScanRepository struct {
-	pool *pgxpool.Pool
-	q    *db.Queries
+	tx *pg.Transactor
+	q  *db.Queries
 }
 
-// Compile-time interface conformance.
 var _ jobs.AlertScanRepo = (*AlertScanRepository)(nil)
 
-// NewAlertScanRepository wires the adapter.
-func NewAlertScanRepository(pool *pgxpool.Pool) *AlertScanRepository {
-	return &AlertScanRepository{pool: pool, q: db.New(pool)}
+// NewAlertScanRepository constructs the repository.
+func NewAlertScanRepository(pool *pgxpool.Pool, tx *pg.Transactor) *AlertScanRepository {
+	return &AlertScanRepository{tx: tx, q: db.New(pool)}
 }
 
-// ListTenants returns every tenant with at least one live product.
+// ListTenants satisfies [jobs.AlertScanRepo].
 func (r *AlertScanRepository) ListTenants(ctx context.Context) ([]uuid.UUID, error) {
-	rows, err := r.q.ListTenantsWithProducts(ctx)
+	var out []uuid.UUID
+	err := r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := r.q.WithTx(tx).ListTenantsWithProducts(ctx)
+		if err != nil {
+			return err
+		}
+		for _, p := range rows {
+			out = append(out, uuid.UUID(p.Bytes))
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("alert scan repo: list tenants: %w", err)
 	}
-	out := make([]uuid.UUID, 0, len(rows))
-	for _, p := range rows {
-		out = append(out, uuid.UUID(p.Bytes))
-	}
 	return out, nil
 }
 
-// ListBatchesNearExpiry returns batches whose expiry falls within their
-// product's expiry_alert_threshold_days from today.
-func (r *AlertScanRepository) ListBatchesNearExpiry(ctx context.Context, tenantID uuid.UUID, today time.Time) ([]jobs.BatchExpiring, error) {
-	rows, err := r.q.ListBatchesNearExpiryForTenant(ctx, db.ListBatchesNearExpiryForTenantParams{
-		TenantID: pgconv.PgUUID(tenantID),
-		Today:    pgconv.PgDate(today),
+// ListBatchesForExpiryScan satisfies [jobs.AlertScanRepo].
+func (r *AlertScanRepository) ListBatchesForExpiryScan(ctx context.Context, tenantID uuid.UUID) ([]jobs.ExpiryCandidate, error) {
+	var out []jobs.ExpiryCandidate
+	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := r.q.WithTx(tx).ListBatchesForExpiryScan(ctx, pgconv.PgUUID(tenantID))
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			out = append(out, jobs.ExpiryCandidate{
+				TenantID: tenantID, ProductID: pgconv.UUIDFromPg(row.ProductID), BatchID: pgconv.UUIDFromPg(row.BatchID),
+				BatchNumber: row.BatchNumber, ProductSKU: row.Sku, ProductName: row.ProductName,
+				ExpiryDate: pgconv.TimeFromPgDate(row.ExpiryDate),
+				OnHand:     row.QuantityOnHand, Reserved: row.QuantityReserved, Quarantined: row.QuantityQuarantined,
+				ThresholdDays: int(row.ExpiryAlertThresholdDays),
+			})
+		}
+		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("alert scan repo: near expiry: %w", err)
-	}
-	out := make([]jobs.BatchExpiring, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, jobs.BatchExpiring{
-			TenantID:      uuid.UUID(row.TenantID.Bytes),
-			ProductID:     uuid.UUID(row.ProductID.Bytes),
-			BatchID:       uuid.UUID(row.ID.Bytes),
-			BatchNumber:   row.BatchNumber,
-			ExpiryDate:    row.ExpiryDate.Time.UTC(),
-			ThresholdDays: int(row.ExpiryAlertThresholdDays),
-		})
+		return nil, fmt.Errorf("alert scan repo: expiry candidates: %w", err)
 	}
 	return out, nil
 }
 
-// ListProductsBelowReorder returns products whose live + not-expired
-// stock-on-hand is strictly below reorder_level.
+// ListProductsBelowReorder satisfies [jobs.AlertScanRepo].
 func (r *AlertScanRepository) ListProductsBelowReorder(ctx context.Context, tenantID uuid.UUID, minSellable time.Time) ([]jobs.ReorderProduct, error) {
-	rows, err := r.q.ListProductsBelowReorderForTenant(ctx, db.ListProductsBelowReorderForTenantParams{
-		TenantID:    pgconv.PgUUID(tenantID),
-		MinSellable: pgconv.PgDate(minSellable),
+	var out []jobs.ReorderProduct
+	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := r.q.WithTx(tx).ListProductsBelowReorderForTenant(ctx, db.ListProductsBelowReorderForTenantParams{
+			TenantID:    pgconv.PgUUID(tenantID),
+			MinSellable: pgconv.PgDate(minSellable),
+		})
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			out = append(out, jobs.ReorderProduct{
+				TenantID: tenantID, ProductID: pgconv.UUIDFromPg(row.ID), SKU: row.Sku,
+				ReorderLevel: int(row.ReorderLevel), StockOnHand: row.StockOnHand,
+			})
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("alert scan repo: below reorder: %w", err)
 	}
-	out := make([]jobs.ReorderProduct, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, jobs.ReorderProduct{
-			TenantID:     tenantID,
-			ProductID:    uuid.UUID(row.ID.Bytes),
-			SKU:          row.Sku,
-			ReorderLevel: int(row.ReorderLevel),
-			StockOnHand:  row.StockOnHand,
-		})
-	}
 	return out, nil
 }
 
-// EmitIfNew atomically dedups + writes the integration event to the
-// inventory outbox. Returns (true, nil) when newly emitted; (false, nil)
-// when the dedup ledger already contained the (tenant, kind, subject,
-// day) tuple.
-func (r *AlertScanRepository) EmitIfNew(ctx context.Context, tenantID uuid.UUID, kind string, subjectID uuid.UUID, today time.Time, event integrationevents.Event) (bool, error) {
-	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return false, fmt.Errorf("alert scan repo: begin tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	q := r.q.WithTx(tx)
-	inserted, err := q.InsertAlertEmission(ctx, db.InsertAlertEmissionParams{
-		TenantID:    pgconv.PgUUID(tenantID),
-		Kind:        kind,
-		SubjectID:   pgconv.PgUUID(subjectID),
-		EmittedDate: pgconv.PgDate(today),
+// EmitIfNew satisfies [jobs.AlertScanRepo]: the ledger insert and the outbox row
+// are ONE transaction, so an event is published exactly when its ledger row is new.
+func (r *AlertScanRepository) EmitIfNew(ctx context.Context, tenantID uuid.UUID, kind string, subjectID uuid.UUID, emissionKey string, event integrationevents.Event) (bool, error) {
+	var inserted bool
+	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+		n, err := r.q.WithTx(tx).InsertAlertEmission(ctx, db.InsertAlertEmissionParams{
+			TenantID: pgconv.PgUUID(tenantID), Kind: kind, SubjectID: pgconv.PgUUID(subjectID),
+			EmissionKey: emissionKey, EmittedDate: pgconv.PgDate(event.OccurredAt()),
+		})
+		if err != nil {
+			return fmt.Errorf("dedup insert: %w", err)
+		}
+		if n == 0 {
+			return nil
+		}
+		inserted = true
+		return writeOutboxEvents(ctx, tx, tenantID, []integrationevents.Event{event})
 	})
 	if err != nil {
-		return false, fmt.Errorf("alert scan repo: dedup insert: %w", err)
+		return false, fmt.Errorf("alert scan repo: emit: %w", err)
 	}
-	if inserted == 0 {
-		return false, tx.Commit(ctx)
-	}
-
-	// Write to the shared common.outbox relay in the same tx (ADR 0064/0067) —
-	// the per-module inventory.outbox was retired.
-	if err := writeOutboxEvents(ctx, tx, tenantID, []integrationevents.Event{event}); err != nil {
-		return false, fmt.Errorf("alert scan repo: outbox write: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return false, fmt.Errorf("alert scan repo: commit: %w", err)
-	}
-	return true, nil
+	return inserted, nil
 }

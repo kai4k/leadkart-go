@@ -68,7 +68,11 @@ func TestMemberSearchPG_OffersOnlyPeopleWhoCanBeAssigned(t *testing.T) {
 	want := seed(tnA.ID(), "Active", nil)
 	seed(tnA.ID(), "Inactive", func(s *person.Snapshot) { s.IsActive = false })
 	seed(tnA.ID(), "Anonymised", func(s *person.Snapshot) { s.IsAnonymised = true; s.AnonymisedAt = testNow })
-	seed(tnA.ID(), "Suspended", func(s *person.Snapshot) { s.IsGloballySuspended = true; s.GloballySuspendedAt = testNow; s.GlobalSuspensionReason = "abuse" })
+	seed(tnA.ID(), "Suspended", func(s *person.Snapshot) {
+		s.IsGloballySuspended = true
+		s.GloballySuspendedAt = testNow
+		s.GlobalSuspensionReason = "abuse"
+	})
 	seed(tnB.ID(), "OtherTenant", nil)
 
 	ctx := tenancy.WithID(t.Context(), tenancy.ID(tnA.ID().String()))

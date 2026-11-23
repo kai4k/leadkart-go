@@ -70,6 +70,9 @@ import (
 	crmsubscribers "github.com/leadkart/leadkart-go/internal/crm/ports/subscribers"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	identityjobs "github.com/leadkart/leadkart-go/internal/identity/app/jobs"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
 	inventoryadapters "github.com/leadkart/leadkart-go/internal/inventory/adapters"
 	inventorycommand "github.com/leadkart/leadkart-go/internal/inventory/app/command"
@@ -391,8 +394,9 @@ func run(ctx context.Context, stdout *os.File) error {
 	inventoryReleaseSub := inventorysubscribers.NewReleaseStockSubscriber(inventoryRelease, logger)
 	// companysettings.policy_changed.v1 -> Inventory's replica of the company
 	// commerce policy (ADR 0070): stored only when the version is newer.
+	inventoryAlertScanner := inventoryjobs.NewScanner(inventoryadapters.NewAlertScanRepository(pool, tx), inventoryWindow, logger, time.Now)
 	inventoryPolicyChangedSub := inventorysubscribers.NewPolicyChangedSubscriber(
-		inventorycommand.NewApplyPolicyHandler(tx, inventoryPolicyReplica), logger)
+		inventorycommand.NewApplyPolicyHandler(tx, inventoryPolicyReplica), logger).WithExpiryRescan(inventoryAlertScanner)
 
 	// Notifications module (BRD §6.9 — subscriber-decides fan-out). Cross-module
 	// consumers map source events → recipient notifications:
@@ -407,6 +411,11 @@ func run(ctx context.Context, stdout *os.File) error {
 	notificationsWorkItemCreatedSub := notificationssubscribers.NewWorkItemCreatedSubscriber(notificationsCreate, logger)
 	notificationsWorkItemOverdueSub := notificationssubscribers.NewWorkItemOverdueSubscriber(notificationsCreate, logger)
 	notificationsOrderConfirmedSub := notificationssubscribers.NewOrderConfirmedSubscriber(notificationsCreate, logger)
+	// Stock alerts (expiring soon, expired on hand, below reorder) go to the people who
+	// manage stock: the company administrators and the holders of inventory.stock.manage,
+	// resolved through an Identity read bound here (Notifications cannot read the identity schema).
+	notificationsStockAlertSub := notificationssubscribers.NewStockAlertSubscriber(notificationsCreate,
+		stockAlertRecipients{holders: adapters.NewPermissionHolderReader(pool, tx)}, logger)
 
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
@@ -446,7 +455,7 @@ func run(ctx context.Context, stdout *os.File) error {
 	cqrsHandlers = append(cqrsHandlers, dispatchsubscribers.Handlers(dispatchOrderPacked, dispatchOrderCancelled)...)
 	cqrsHandlers = append(cqrsHandlers, orderssubscribers.Handlers(ordersAutoInvoiceSub, ordersConsignmentCreatedSub, ordersConsignmentDeliveredSub, ordersCancelCompensationSub, ordersPolicyChangedSub)...)
 	cqrsHandlers = append(cqrsHandlers, inventorysubscribers.Handlers(inventoryReserveSub, inventoryConsumeSub, inventoryReleaseSub, inventoryPolicyChangedSub)...)
-	cqrsHandlers = append(cqrsHandlers, notificationssubscribers.Handlers(notificationsLeadAssignedSub, notificationsWorkItemCreatedSub, notificationsWorkItemOverdueSub, notificationsOrderConfirmedSub)...)
+	cqrsHandlers = append(cqrsHandlers, notificationssubscribers.Handlers(notificationsLeadAssignedSub, notificationsWorkItemCreatedSub, notificationsWorkItemOverdueSub, notificationsOrderConfirmedSub, notificationsStockAlertSub)...)
 	for _, h := range cqrsHandlers {
 		if err := router.AddCqrsHandler(eventProcessor, h); err != nil {
 			return fmt.Errorf("register cqrs handler: %w", err)
@@ -474,8 +483,8 @@ func run(ctx context.Context, stdout *os.File) error {
 	}
 	// Inventory expiry + reorder daily scans (BRD §6.5) — emit alert events
 	// for batches nearing expiry / products below reorder level.
-	inventoryAlertScan := inventoryadapters.NewAlertScanRepository(pool)
-	if err := river.AddWorkerSafely(workers, inventoryjobs.NewExpiryScanWorker(inventoryAlertScan, logger, time.Now)); err != nil {
+	inventoryAlertScan := inventoryadapters.NewAlertScanRepository(pool, tx)
+	if err := river.AddWorkerSafely(workers, inventoryjobs.NewExpiryScanWorker(inventoryAlertScan, inventoryWindow, logger, time.Now)); err != nil {
 		return fmt.Errorf("register inventory expiry scan worker: %w", err)
 	}
 	if err := river.AddWorkerSafely(workers, inventoryjobs.NewReorderScanWorker(inventoryAlertScan, inventoryWindow, logger, time.Now)); err != nil {
@@ -521,20 +530,9 @@ func run(ctx context.Context, stdout *os.File) error {
 			},
 			&river.PeriodicJobOpts{RunOnStart: false},
 		),
-		river.NewPeriodicJob(
-			river.PeriodicInterval(inventoryjobs.ExpiryScanInterval),
-			func() (river.JobArgs, *river.InsertOpts) {
-				return inventoryjobs.ExpiryScanJob{}, nil
-			},
-			&river.PeriodicJobOpts{RunOnStart: false},
-		),
-		river.NewPeriodicJob(
-			river.PeriodicInterval(inventoryjobs.ReorderScanInterval),
-			func() (river.JobArgs, *river.InsertOpts) {
-				return inventoryjobs.ReorderScanJob{}, nil
-			},
-			&river.PeriodicJobOpts{RunOnStart: false},
-		),
+		// 00:30 at the market default offset, and at worker start; the ledger makes a re-run a no-op.
+		inventoryjobs.ExpiryPeriodicJob(),
+		inventoryjobs.ReorderPeriodicJob(),
 		companysettingsjobs.PeriodicJob(),
 		river.NewPeriodicJob(
 			river.PeriodicInterval(tasksjobs.OverdueScanInterval),
@@ -693,4 +691,15 @@ func buildSubscriberWiring(pool *pgxpool.Pool, hybridCache *cache.HybridCache) s
 		Families:   families,
 		StampCache: stampCache,
 	}
+}
+
+// stockAlertRecipients binds the Notifications port of the stock alert addressees
+// to the Identity read of who holds a permission.
+type stockAlertRecipients struct {
+	holders *adapters.PermissionHolderReader
+}
+
+func (r stockAlertRecipients) StockAlertRecipients(ctx context.Context, tenantID tenant.ID) ([]membership.ID, error) {
+	p := permission.IdentityPermissions
+	return r.holders.ActiveMembershipsHoldingAny(ctx, tenantID, []string{p.Meta.TenantAdmin, p.Inventory.Stock.Manage})
 }

@@ -421,13 +421,14 @@ type IdentityTenantMembership struct {
 	CreatedByMembershipID pgtype.UUID
 }
 
-// Per-day dedup ledger for ExpiryScanJob + ReorderScanJob emissions. PK ensures second-run-same-day = no-op.
+// Dedup ledger for the expiry and reorder scans. PK (tenant, kind, subject, emission_key): one expiry alert per warning tier, one reorder alert per business day, one expired-on-hand alert per batch.
 type InventoryAlertEmission struct {
 	TenantID    pgtype.UUID
 	Kind        string
 	SubjectID   pgtype.UUID
 	EmittedDate pgtype.Date
 	EmittedAt   pgtype.Timestamptz
+	EmissionKey string
 }
 
 // Batch aggregate. Tenant-scoped, FORCE RLS. Composite-FK to products enforces same-tenant linkage. `version` column drives optimistic-concurrency retry.

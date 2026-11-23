@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/google/uuid"
+
 	"github.com/leadkart/leadkart-go/internal/common/commercepolicy"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -69,4 +71,12 @@ func (h ApplyPolicyHandler) Handle(ctx context.Context, cmd ApplyPolicyCommand) 
 		return ApplyPolicyResult{}, fmt.Errorf("apply policy: %w", err)
 	}
 	return out, nil
+}
+
+// ExpiryRescanner raises one tenant expiry alerts at once. A tighter rule (a
+// larger stop-before, a new warning tier) puts batches inside a tier now, not at
+// the next daily run; the policy-changed subscriber calls it after storing a newer
+// version.
+type ExpiryRescanner interface {
+	ScanExpiry(ctx context.Context, tenantID uuid.UUID) (int, error)
 }

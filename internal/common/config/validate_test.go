@@ -406,10 +406,10 @@ func TestValidate_LockoutKey(t *testing.T) {
 		t.Errorf("production without a lockout key: %v, want ErrMissingLockoutKey", err)
 	}
 	for name, bad := range map[string]string{
-		"not base64":     "!!!not-base64-at-all!!!",
-		"too short":      "c2hvcnQ=",
-		"placeholder":    "CHANGE_ME_CHANGE_ME_CHANGE_ME_CHANGE_ME_CHANGE_ME",
-		"low entropy":    "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE=",
+		"not base64":      "!!!not-base64-at-all!!!",
+		"too short":       "c2hvcnQ=",
+		"placeholder":     "CHANGE_ME_CHANGE_ME_CHANGE_ME_CHANGE_ME_CHANGE_ME",
+		"low entropy":     "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE=",
 		"the signing key": validJWTKey,
 	} {
 		c := base()
