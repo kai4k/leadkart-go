@@ -1,7 +1,7 @@
 // Package commercepolicy is the one definition of a company's commerce policy:
 // the versioned value object, its defaults, and the registry of every setting.
 //
-// The company_settings module owns the stored policy; Orders and Inventory each
+// The companysettings module owns the stored policy; Orders and Inventory each
 // hold an event-fed replica and read it inside their own transaction. The three
 // share these pure types because modules may not import each other (the
 // common/parcel precedent): stdlib plus common/humantext and common/textlimit
@@ -210,7 +210,7 @@ func Default() Policy {
 }
 
 // Initial is what a company with NO stored policy reads: the defaults at
-// version 0. Every reader of a missing policy row (company_settings, the Orders
+// version 0. Every reader of a missing policy row (companysettings, the Orders
 // replica, the Inventory replica) calls this one function, so "no row" can
 // never mean two different things.
 func Initial() Versioned { return Versioned{Version: 0, Policy: Default()} }

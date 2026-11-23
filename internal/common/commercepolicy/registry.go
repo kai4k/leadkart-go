@@ -452,7 +452,6 @@ type SettingInfo struct {
 }
 
 // Permission names a setting is changed under (the suffix of
-// company_settings.<name>).
 const (
 	PermissionManage    = "manage"
 	PermissionTaxManage = "tax.manage"

@@ -78,6 +78,40 @@ type CommonOutbox struct {
 	CreatedAt pgtype.Timestamptz
 }
 
+// One versioned commerce policy per tenant (ADR 0070). No row = defaults at version 0. Tenant-scoped, FORCE RLS.
+type CompanysettingsCommercePolicy struct {
+	TenantID              pgtype.UUID
+	Version               int64
+	Policy                []byte
+	UpdatedAt             pgtype.Timestamptz
+	UpdatedByMembershipID pgtype.UUID
+}
+
+// The company's own GST rate list. Starts empty. Deactivated, never deleted.
+type CompanysettingsGstRate struct {
+	ID                    pgtype.UUID
+	TenantID              pgtype.UUID
+	RateBps               int32
+	Label                 string
+	ConfirmedBy           string
+	ConfirmedOn           pgtype.Date
+	Active                bool
+	CreatedAt             pgtype.Timestamptz
+	CreatedByMembershipID pgtype.UUID
+}
+
+// Append-only: the whole policy at every version, with actor, impersonator and reason. The application role holds SELECT and INSERT only.
+type CompanysettingsPolicyHistory struct {
+	TenantID               pgtype.UUID
+	Version                int64
+	Policy                 []byte
+	ChangedKeys            []string
+	ActorMembershipID      pgtype.UUID
+	ImpersonatorOperatorID *string
+	Reason                 string
+	ChangedAt              pgtype.Timestamptz
+}
+
 // AssignmentHistory aggregate per ADR 0060. Append-only assignment audit. Latest row by assigned_at == current assignee (mirrored on crm.crm_leads.assignee_membership_id).
 type CrmAssignmentHistory struct {
 	ID                           pgtype.UUID

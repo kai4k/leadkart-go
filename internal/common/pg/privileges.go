@@ -21,7 +21,7 @@ import (
 // own init migration carries the grants, see that migration's header).
 func ApplicationSchemas() []string {
 	return []string{"app", "common", "identity", "platform", "crm", "inventory",
-		"shared", "tasks", "dispatch", "orders", "notifications"}
+		"shared", "tasks", "dispatch", "orders", "notifications", "companysettings"}
 }
 
 // DefaultTablePrivileges are what the application holds on a table unless the
@@ -42,6 +42,8 @@ func TablePrivilegeExceptions() map[string][]string {
 	return map[string][]string{
 		"common.audit_log_entry":           {"SELECT", "INSERT", "DELETE"},
 		"common.admin_impersonation_audit": {"SELECT", "INSERT"},
+		// The policy history is append-only for the application (ADR 0070).
+		"companysettings.policy_history": {"SELECT", "INSERT"},
 	}
 }
 

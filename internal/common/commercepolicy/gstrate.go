@@ -41,9 +41,9 @@ const (
 	CodeDuplicate         = "duplicate"
 )
 
-// ErrGSTRate is the sentinel for a refused GST rate; the field codes are in a
+// ErrInvalidFields is the sentinel for refused fields; the field codes are in a
 // [FieldErrors].
-var ErrGSTRate = errors.New("commercepolicy: invalid gst rate")
+var ErrInvalidFields = errors.New("commercepolicy: invalid fields")
 
 // FieldErrors maps a field name to its stable refusal codes.
 type FieldErrors map[string][]string
@@ -54,7 +54,7 @@ func (f FieldErrors) add(field, code string) {
 	}
 }
 
-// Err returns nil for no errors, else the map as an error wrapping [ErrGSTRate].
+// Err returns nil for no errors, else the map as an error wrapping [ErrInvalidFields].
 func (f FieldErrors) Err() error {
 	if len(f) == 0 {
 		return nil
@@ -65,7 +65,7 @@ func (f FieldErrors) Err() error {
 type fieldErrorsError struct{ fields FieldErrors }
 
 func (e *fieldErrorsError) Error() string   { return "commercepolicy: invalid fields" }
-func (e *fieldErrorsError) Is(t error) bool { return t == ErrGSTRate }
+func (e *fieldErrorsError) Is(t error) bool { return t == ErrInvalidFields }
 
 // Fields returns the field errors an error from this package carries, or nil.
 func Fields(err error) FieldErrors {

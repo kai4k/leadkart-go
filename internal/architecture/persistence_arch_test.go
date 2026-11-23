@@ -569,21 +569,22 @@ func TestArch_DomainHasNoInfraImports(t *testing.T) {
 	}
 
 	allowedCommonLeaves := map[string]bool{
-		"errs":          true,
-		"ids":           true,
-		"slug":          true,
-		"email":         true,
-		"phone":         true,
-		"pan":           true,
-		"gst":           true,
-		"postaladdress": true,
-		"druglicence":   true,
-		"pagination":    true,
-		"tenancy":       true,
-		"hsncode":       true, // the one HSN code rule (trimmed, 4/6/8 digits); stdlib only. One consumer today (Inventory); why it stays in common is recorded in its package doc (ADR 0051)
-		"textlimit":     true, // the one length check + wire code for free text; stdlib only
-		"humantext":     true, // the one rule for text people type that others read; pure rune checks
-		"parcel":        true, // the pack rules Orders and Dispatch must agree on; stdlib only
+		"errs":           true,
+		"ids":            true,
+		"slug":           true,
+		"email":          true,
+		"phone":          true,
+		"pan":            true,
+		"gst":            true,
+		"postaladdress":  true,
+		"druglicence":    true,
+		"pagination":     true,
+		"tenancy":        true,
+		"hsncode":        true, // the one HSN code rule (trimmed, 4/6/8 digits); stdlib only. One consumer today (Inventory); why it stays in common is recorded in its package doc (ADR 0051)
+		"textlimit":      true, // the one length check + wire code for free text; stdlib only
+		"humantext":      true, // the one rule for text people type that others read; pure rune checks
+		"parcel":         true, // the pack rules Orders and Dispatch must agree on; stdlib only
+		"commercepolicy": true, // the one company commerce policy value object + setting registry that companysettings, Orders and Inventory share (ADR 0070); stdlib + humantext + textlimit only
 	}
 
 	type violation struct {
@@ -627,7 +628,7 @@ func TestArch_DomainHasNoInfraImports(t *testing.T) {
 		t.Logf("DOMAIN-PURITY VIOLATIONS — %d", len(violations))
 		t.Logf("Per ADR 0002 + 0047 + Vernon IDDD ch. 4: domain is pure Go.")
 		t.Logf("Allowed common/* leaves: errs, ids, slug, email, phone, pan,")
-		t.Logf("gst, postaladdress, druglicence, pagination, tenancy, humantext, parcel, textlimit, hsncode.")
+		t.Logf("gst, postaladdress, druglicence, pagination, tenancy, humantext, parcel, textlimit, hsncode, commercepolicy.")
 		for _, v := range violations {
 			t.Errorf("%s\n  imports: %s\n  why: %s", v.file, v.imp, v.reason)
 		}

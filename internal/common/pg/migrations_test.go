@@ -550,6 +550,7 @@ func TestAppRoleHasPrivilegesOnEveryApplicationTable(t *testing.T) {
 	wantTableExceptions := map[string][]string{
 		"common.audit_log_entry":           {"SELECT", "INSERT", "DELETE"},
 		"common.admin_impersonation_audit": {"SELECT", "INSERT"},
+		"companysettings.policy_history":  {"SELECT", "INSERT"},
 	}
 	if diff := cmp.Diff(wantSchemaPrivs, pg.SchemaTablePrivileges()); diff != "" {
 		t.Errorf("pg.SchemaTablePrivileges differs from the pinned set (-want +got):\n%s", diff)
