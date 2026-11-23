@@ -2723,11 +2723,16 @@ paths:
         Type (Outbound subtracts). Adjustment writes the positive
         magnitude in slice 1; future `direction` field for up/down.
 
-        Rejections (409): insufficient_stock (Outbound > on-hand),
-        batch_expired (Inbound on expired batch), conflict (concurrent
+        Rejections (409): insufficient_stock (an `outbound`, or an
+        `adjustment` that takes units away, for more than the FREE units:
+        on hand minus reserved minus quarantined), insufficient_quarantined
+        (`release_quarantine`, `write_off` or `return_to_maker` for more than is
+        set apart), batch_expired (`inbound`, `outbound` or `release_quarantine`
+        on a batch past its printed expiry month), conflict (concurrent
         modification after retry cap).
 
-        Only `inbound`, `outbound` and `adjustment` are accepted here.
+        Accepted types: `inbound`, `outbound`, `adjustment`, `quarantine`,
+        `release_quarantine`, `write_off` and `return_to_maker`.
         `reservation` and `release` belong to the order saga; asking for
         them (or any other type) is `422 invalid_movement_type`, nothing
         written.
@@ -2755,7 +2760,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
-        '422': { description: "`invalid_movement_type` — type is not inbound, outbound or adjustment (`reservation` and `release` are not public); otherwise validation (`validation_failed`)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '422': { description: "`invalid_movement_type` — type is not one of inbound, outbound, adjustment, quarantine, release_quarantine, write_off, return_to_maker (`reservation` and `release` are not public); otherwise validation (`validation_failed`)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
     get:
       tags: [inventory]
