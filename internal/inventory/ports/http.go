@@ -107,8 +107,7 @@ func handleCreateProduct(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		var req CreateProductRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+		if !decodeStrict(w, r, &req) {
 			return
 		}
 		if errs := productFieldErrors(req.ProductCategory, req.ReorderLevel, req.ExpiryAlertThresholdDays); errs != nil {
@@ -265,8 +264,7 @@ func handleUpdateProduct(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		var req UpdateProductRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+		if !decodeStrict(w, r, &req) {
 			return
 		}
 		if errs := productFieldErrors(req.ProductCategory, req.ReorderLevel, req.ExpiryAlertThresholdDays); errs != nil {
@@ -395,8 +393,7 @@ func handleAddBatch(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		var req AddBatchRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+		if !decodeStrict(w, r, &req) {
 			return
 		}
 		if req.InitialQuantity != nil && *req.InitialQuantity < 0 {
@@ -552,8 +549,7 @@ func handleLogStockMovement(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		var req LogMovementRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+		if !decodeStrict(w, r, &req) {
 			return
 		}
 		// Reservation and release are the order saga's bookkeeping, applied by

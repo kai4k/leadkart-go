@@ -200,3 +200,19 @@ func TestE2E_Inventory_ExpiredStockCanOnlyBeSetApartReturnedOrWrittenOff(t *test
 		}
 	}
 }
+
+// Review S4: the retired gst_rate_bps is refused, not silently ignored with a success.
+func TestE2E_Inventory_RetiredFieldsAreRefusedNotIgnored(t *testing.T) {
+	f := newE2EFixture(t)
+	tok := f.registerAndLogin(t, "invretired").AccessToken
+	p := invCreateProduct(t, f, tok, "RET-1", nil)
+	for name, r := range map[string]httpResp{
+		"patch gst_rate_bps":     f.authedJSON(t, http.MethodPatch, "/api/v1/inventory/products/"+p, tok, map[string]any{"gst_rate_bps": 500}),
+		"create gst_rate_bps":    f.authedJSON(t, http.MethodPost, "/api/v1/inventory/products", tok, invProductBody("RET-2", map[string]any{"gst_rate_bps": 500})),
+		"batch with expiry_date": f.authedJSON(t, http.MethodPost, "/api/v1/inventory/products/"+p+"/batches", tok, map[string]any{"batch_number": "X", "expiry_date": "2027-03-31T00:00:00Z"}),
+	} {
+		if r.status != http.StatusBadRequest || errorCode(t, r.body) != "invalid_body" {
+			t.Errorf("%s: %d %s, want 400 invalid_body", name, r.status, r.body)
+		}
+	}
+}
