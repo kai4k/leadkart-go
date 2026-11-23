@@ -989,6 +989,10 @@ func TestVerifyApplicationPrivileges_RefusesExtraPrivilegesOnAppendOnlyTables(t 
 		{`GRANT DELETE ON common.audit_log_entry TO leadkart_app`, "DELETE on table common.audit_log_entry"},
 		{`GRANT UPDATE ON companysettings.policy_history TO leadkart_app`, "UPDATE on table companysettings.policy_history"},
 		{`GRANT DELETE ON common.dead_letter_replay TO leadkart_app`, "DELETE on table common.dead_letter_replay"},
+		// Review G2c N4: what the table-level check missed.
+		{`GRANT UPDATE (handler_name) ON common.dead_letter_replay TO leadkart_app`, "UPDATE on table common.dead_letter_replay"},
+		{`GRANT TRIGGER ON common.audit_log_entry TO leadkart_app`, "TRIGGER on table common.audit_log_entry"},
+		{`GRANT pg_write_all_data TO leadkart_app`, "member of pg_write_all_data"},
 		{`GRANT INSERT ON shared.product_category_gst_defaults TO leadkart_app`, "INSERT on table shared.product_category_gst_defaults"},
 	} {
 		if _, err := db.ExecContext(t.Context(), c.grant); err != nil {

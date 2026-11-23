@@ -129,11 +129,22 @@ WITH rules AS (
       AND NOT pg_has_role(current_user, c.relowner, 'MEMBER')
 )
 SELECT tbl.s || '.' || tbl.t, p.priv
-FROM tbl CROSS JOIN unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE']) AS p(priv)
+FROM tbl CROSS JOIN unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'TRIGGER', 'pg_write_all_data']) AS p(priv)
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname = current_user AND r.rolsuper)
   AND EXISTS (SELECT 1 FROM rules r WHERE r.s = tbl.s AND r.t IN (tbl.t, '*'))
-  AND has_table_privilege(tbl.oid, p.priv)
-  AND NOT EXISTS (SELECT 1 FROM rules r WHERE r.s = tbl.s AND r.t IN (tbl.t, '*') AND r.priv = p.priv)
+  AND CASE p.priv
+        -- membership counts even when NOINHERIT (the role can SET ROLE); it writes every table
+        WHEN 'pg_write_all_data' THEN pg_has_role(current_user, 'pg_write_all_data', 'MEMBER')
+                                  AND NOT (EXISTS (SELECT 1 FROM rules r WHERE r.s = tbl.s AND r.t IN (tbl.t, '*') AND r.priv = 'UPDATE')
+                                       AND EXISTS (SELECT 1 FROM rules r WHERE r.s = tbl.s AND r.t IN (tbl.t, '*') AND r.priv = 'DELETE'))
+        -- a column-level grant lets the role change those columns: it counts like the table-level one
+        WHEN 'SELECT' THEN has_table_privilege(tbl.oid, p.priv) OR has_any_column_privilege(tbl.oid, p.priv)
+        WHEN 'INSERT' THEN has_table_privilege(tbl.oid, p.priv) OR has_any_column_privilege(tbl.oid, p.priv)
+        WHEN 'UPDATE' THEN has_table_privilege(tbl.oid, p.priv) OR has_any_column_privilege(tbl.oid, p.priv)
+        ELSE has_table_privilege(tbl.oid, p.priv)
+      END
+  AND (p.priv = 'pg_write_all_data'
+       OR NOT EXISTS (SELECT 1 FROM rules r WHERE r.s = tbl.s AND r.t IN (tbl.t, '*') AND r.priv = p.priv))
 ORDER BY 1, 2 LIMIT 1`
 
 // excessQuery returns the FIRST reason the current role holds more than the
@@ -278,6 +289,10 @@ func verifyNoExtraPrivileges(ctx context.Context, db interface {
 	var table, priv string
 	if err := rows.Scan(&table, &priv); err != nil {
 		return fmt.Errorf("pg: verify application privileges: %w", err)
+	}
+	if priv == "pg_write_all_data" {
+		return fmt.Errorf("pg: the application's database role is a member of pg_write_all_data, which writes to every table, table %s (append-only for the application, ADR 0071: data is never deleted) included. "+
+			"Fix as the OWNER role: REVOKE pg_write_all_data FROM leadkart_app", table)
 	}
 	return fmt.Errorf("pg: the application's database role holds %s on table %s, which is append-only for the application (ADR 0071: data is never deleted). "+
 		"Fix as the OWNER role: REVOKE %s ON %s FROM leadkart_app, and run the Up block of every migration that takes privileges away "+
