@@ -108,7 +108,7 @@ func TestOrderFulfilmentLifecycle(t *testing.T) {
 	}))
 
 	// Invoice → invoiced + gapless number.
-	invoiceOrder := command.NewInvoiceOrderHandler(uow, orders, invoices, alloc, now, invID)
+	invoiceOrder := command.NewInvoiceOrderHandler(uow, orders, invoices, alloc, stockFresh(), now, invID)
 	invRes, err := invoiceOrder.Handle(ctx, command.InvoiceOrderCommand{
 		TenantID: tid, OrderID: orderID, IssuedByMembership: actor,
 	})

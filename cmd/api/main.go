@@ -50,6 +50,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 
+	"github.com/leadkart/leadkart-go/cmd/internal/bridges"
 	"github.com/leadkart/leadkart-go/internal/common/audit"
 	"github.com/leadkart/leadkart-go/internal/common/cache"
 	"github.com/leadkart/leadkart-go/internal/common/config"
@@ -1121,7 +1122,7 @@ func buildOrdersApp(pool *pgxpool.Pool, now func() time.Time) ordersapp.Applicat
 	// cannot read its schema, so the composition root binds the pack gate to an
 	// Inventory query judged on the company business day.
 	heldStock := inventoryadapters.NewStockMovementRepository(pool, tx)
-	stockGuard := heldStockExpiryBridge{held: inventoryquery.NewOrderHoldExpiryHandler(
+	stockGuard := bridges.HeldStockExpiry{Held: inventoryquery.NewOrderHoldExpiryHandler(
 		heldStock, inventorysellability.NewResolver(inventoryadapters.NewPolicyReplicaRepository(pool, tx), now))}
 	newQuotationID := func() quotation.ID { return quotation.ID(ids.NewV7().String()) }
 	newOrderID := func() order.ID { return order.ID(ids.NewV7().String()) }
@@ -1138,7 +1139,7 @@ func buildOrdersApp(pool *pgxpool.Pool, now func() time.Time) ordersapp.Applicat
 			RecordTokenPayment: orderscommand.NewRecordTokenPaymentHandler(tx, orders, payments, now, newPaymentID),
 			ConfirmOrder:       orderscommand.NewConfirmOrderHandler(tx, orders, enqueuer, now),
 			PackOrder:          orderscommand.NewPackOrderHandler(tx, orders, enqueuer, stockGuard, now),
-			InvoiceOrder:       orderscommand.NewInvoiceOrderHandler(tx, orders, invoices, allocator, now, newInvoiceID),
+			InvoiceOrder:       orderscommand.NewInvoiceOrderHandler(tx, orders, invoices, allocator, stockGuard, now, newInvoiceID),
 			AttachConsignment:  orderscommand.NewAttachConsignmentHandler(orders, now),
 			MarkOrderDelivered: orderscommand.NewMarkOrderDeliveredHandler(orders, now),
 			CompleteOrder:      orderscommand.NewCompleteOrderHandler(orders, now),
@@ -1176,16 +1177,6 @@ func buildNotificationsApp(pool *pgxpool.Pool, now func() time.Time) notificatio
 			UnreadCount: notificationsquery.NewUnreadCountHandler(repo),
 		},
 	}
-}
-
-// heldStockExpiryBridge binds the Orders pack gate (does this order hold stock past
-// its printed expiry) to the Inventory query.
-type heldStockExpiryBridge struct {
-	held inventoryquery.OrderHoldExpiryHandler
-}
-
-func (b heldStockExpiryBridge) HoldsExpiredStock(ctx context.Context, tenantID tenant.ID, orderID order.ID) (bool, error) {
-	return b.held.Handle(ctx, inventoryquery.OrderHoldExpiryQuery{TenantID: tenantID, OrderID: orderID.String()})
 }
 
 // scheduleUsageBridge binds the company settings port (which drug schedule classes

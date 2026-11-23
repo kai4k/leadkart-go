@@ -27,14 +27,15 @@ import (
 
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/components/cqrs"
-	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/leadkart/leadkart-go/cmd/internal/bridges"
 	"github.com/leadkart/leadkart-go/internal/common/expiry"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/messaging"
+	"github.com/leadkart/leadkart-go/internal/common/messaging/messagingtest"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	dispatchadapters "github.com/leadkart/leadkart-go/internal/dispatch/adapters"
 	dispatchcommand "github.com/leadkart/leadkart-go/internal/dispatch/app/command"
@@ -42,6 +43,7 @@ import (
 	dispatchsubscribers "github.com/leadkart/leadkart-go/internal/dispatch/ports/subscribers"
 	inventoryadapters "github.com/leadkart/leadkart-go/internal/inventory/adapters"
 	inventorycommand "github.com/leadkart/leadkart-go/internal/inventory/app/command"
+	inventoryquery "github.com/leadkart/leadkart-go/internal/inventory/app/query"
 	inventorysellability "github.com/leadkart/leadkart-go/internal/inventory/app/sellability"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
 	inventorysubscribers "github.com/leadkart/leadkart-go/internal/inventory/ports/subscribers"
@@ -52,17 +54,25 @@ import (
 	orderssubscribers "github.com/leadkart/leadkart-go/internal/orders/ports/subscribers"
 )
 
+// fulfilmentStack is the running fulfilment event path. The forwarder can be stopped
+// and started again, so a test can let events sit in the outbox and deliver them late.
+type fulfilmentStack struct {
+	pause  func()
+	resume func()
+}
+
 // startFulfilmentStack runs the production event path for an order's fulfilment:
 // the outbox forwarder and a router with the subscribers cmd/worker registers for
 // reserve, consume, auto-invoice and the consignment note, built the way
-// cmd/worker builds them.
-func startFulfilmentStack(t *testing.T, pool *pgxpool.Pool) {
+// cmd/worker builds them, on the bus cmd/worker uses ([messaging.NewPubSub]: a
+// publish blocks until a handler has taken the message).
+func startFulfilmentStack(t *testing.T, pool *pgxpool.Pool) *fulfilmentStack {
 	t.Helper()
 	log := silentLogger()
 	tx := pg.NewTransactor(pool)
 	s := policyStack{
 		pool:   pool,
-		pubsub: gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(log)),
+		pubsub: messaging.NewPubSub(watermill.NewSlogLogger(log)),
 		tx:     tx,
 	}
 	t.Cleanup(func() { _ = s.pubsub.Close() })
@@ -85,8 +95,10 @@ func startFulfilmentStack(t *testing.T, pool *pgxpool.Pool) {
 
 	// Orders: auto-invoice on pack, dispatched on the consignment note.
 	orderRepo := ordersadapters.NewOrderRepository(pool, tx)
+	stockGuard := bridges.HeldStockExpiry{Held: inventoryquery.NewOrderHoldExpiryHandler(
+		movements, inventorysellability.NewResolver(inventoryadapters.NewPolicyReplicaRepository(pool, tx), time.Now))}
 	invoiceOrder := orderscommand.NewInvoiceOrderHandler(tx, orderRepo, ordersadapters.NewInvoiceRepository(pool, tx),
-		ordersadapters.NewInvoiceNumberAllocator(pool), time.Now, func() invoice.ID { return invoice.ID(ids.NewV7().String()) })
+		ordersadapters.NewInvoiceNumberAllocator(pool), stockGuard, time.Now, func() invoice.ID { return invoice.ID(ids.NewV7().String()) })
 	attach := orderscommand.NewAttachConsignmentHandler(orderRepo, time.Now)
 
 	var handlers []cqrs.EventHandler
@@ -97,18 +109,54 @@ func startFulfilmentStack(t *testing.T, pool *pgxpool.Pool) {
 		orderssubscribers.NewConsignmentCreatedSubscriber(invoiceOrder, attach, log), nil, nil, nil)...)
 	s.runRouter(t, handlers)
 
-	forwarder, err := messaging.NewOutboxForwarder(pool, s.pubsub, watermill.NewSlogLogger(log))
-	if err != nil {
-		t.Fatalf("messaging.NewOutboxForwarder: %v", err)
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(cancel)
-	go func() {
-		if err := forwarder.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			t.Logf("forwarder: %v", err)
+	var stop func()
+	start := func() {
+		forwarder, err := messaging.NewOutboxForwarder(pool, s.pubsub, watermill.NewSlogLogger(log))
+		if err != nil {
+			t.Fatalf("messaging.NewOutboxForwarder: %v", err)
 		}
-	}()
-	t.Cleanup(func() { _ = forwarder.Close() })
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			if err := forwarder.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				t.Logf("forwarder: %v", err)
+			}
+		}()
+		stop = func() { cancel(); <-done; _ = forwarder.Close(); stop = func() {} }
+	}
+	start()
+	t.Cleanup(func() { stop() })
+	return &fulfilmentStack{pause: func() { stop() }, resume: start}
+}
+
+// confirmedOrderOn quotes, approves, pays the token and confirms an order of 10 units of
+// the product through the API, and returns the order id and its path.
+func confirmedOrderOn(t *testing.T, f e2eFixture, tok, productID, sku string) (orderID, orderPath string) {
+	t.Helper()
+	q := f.authedJSON(t, http.MethodPost, "/api/v1/orders/quotations", tok, ordersports.CreateQuotationRequest{
+		CustomerLeadID: uuid.NewString(),
+		Items:          []ordersports.LineItemDto{{ProductID: productID, SKU: sku, Quantity: 10, UnitMrpPaise: 10000, UnitSalePaise: 9000, GstRateBps: 1200}},
+	})
+	if q.status != http.StatusCreated {
+		t.Fatalf("create quotation: %d %s", q.status, q.body)
+	}
+	quoteID, _ := invObj(t, q.body)["quotation_id"].(string)
+	ap := f.authedJSON(t, http.MethodPost, "/api/v1/orders/quotations/"+quoteID+"/approve", tok, nil)
+	if ap.status != http.StatusOK {
+		t.Fatalf("approve: %d %s", ap.status, ap.body)
+	}
+	orderID, _ = invObj(t, ap.body)["order_id"].(string)
+	orderPath = "/api/v1/orders/orders/" + orderID
+	if r := f.authedJSON(t, http.MethodPost, orderPath+"/token-payment", tok, ordersports.RecordTokenPaymentRequest{
+		Method: "upi", AmountPaise: 25000, ExternalReference: "UTR-" + uuid.NewString(),
+	}); r.status != http.StatusNoContent {
+		t.Fatalf("token payment: %d %s", r.status, r.body)
+	}
+	if r := f.authedJSON(t, http.MethodPost, orderPath+"/confirm", tok, nil); r.status != http.StatusNoContent {
+		t.Fatalf("confirm: %d %s", r.status, r.body)
+	}
+	return orderID, orderPath
 }
 
 func TestE2E_Orders_AnOrderHoldingExpiredStockCannotBePackedInvoicedOrDispatched(t *testing.T) {
@@ -132,28 +180,7 @@ func TestE2E_Orders_AnOrderHoldingExpiredStockCannotBePackedInvoicedOrDispatched
 	startFulfilmentStack(t, f.Pool)
 
 	// Quote, approve, token payment, confirm: the confirm event reserves 10 of the 20.
-	q := f.authedJSON(t, http.MethodPost, "/api/v1/orders/quotations", tok, ordersports.CreateQuotationRequest{
-		CustomerLeadID: uuid.NewString(),
-		Items:          []ordersports.LineItemDto{{ProductID: productID, SKU: "PACK-EXP", Quantity: 10, UnitMrpPaise: 10000, UnitSalePaise: 9000, GstRateBps: 1200}},
-	})
-	if q.status != http.StatusCreated {
-		t.Fatalf("create quotation: %d %s", q.status, q.body)
-	}
-	quoteID, _ := invObj(t, q.body)["quotation_id"].(string)
-	ap := f.authedJSON(t, http.MethodPost, "/api/v1/orders/quotations/"+quoteID+"/approve", tok, nil)
-	if ap.status != http.StatusOK {
-		t.Fatalf("approve: %d %s", ap.status, ap.body)
-	}
-	orderID, _ := invObj(t, ap.body)["order_id"].(string)
-	orderPath := "/api/v1/orders/orders/" + orderID
-	if r := f.authedJSON(t, http.MethodPost, orderPath+"/token-payment", tok, ordersports.RecordTokenPaymentRequest{
-		Method: "upi", AmountPaise: 25000, ExternalReference: "UTR-" + uuid.NewString(),
-	}); r.status != http.StatusNoContent {
-		t.Fatalf("token payment: %d %s", r.status, r.body)
-	}
-	if r := f.authedJSON(t, http.MethodPost, orderPath+"/confirm", tok, nil); r.status != http.StatusNoContent {
-		t.Fatalf("confirm: %d %s", r.status, r.body)
-	}
+	orderID, orderPath := confirmedOrderOn(t, f, tok, productID, "PACK-EXP")
 	stock := func() (onHand, reserved float64) {
 		b := invObj(t, f.authedJSON(t, http.MethodGet, "/api/v1/inventory/batches/"+batchID, tok, nil).body)
 		onHand, _ = b["quantity_on_hand"].(float64)
@@ -201,6 +228,84 @@ func TestE2E_Orders_AnOrderHoldingExpiredStockCannotBePackedInvoicedOrDispatched
 	}
 
 	// The order is not stuck: it can still be cancelled.
+	if r := f.authedJSON(t, http.MethodPost, orderPath+"/cancel", tok, ordersports.CancelOrderRequest{Reason: "stock expired"}); r.status != http.StatusNoContent {
+		t.Fatalf("cancel: %d %s", r.status, r.body)
+	}
+}
+
+// Review G2c B1: the guard at the pack is not the last word. An order packed in time has
+// its invoice and consignment events delivered later; when the printed month ends in
+// between, the invoice must still be refused. The events here sit in the outbox while the
+// month ends, and the bus is the production one. The order stays packed and can be cancelled;
+// the refused events wait in the dead letters for a person.
+func TestE2E_Orders_AnInvoiceEventArrivingAfterTheExpiryIssuesNoInvoice(t *testing.T) {
+	f := newE2EFixture(t)
+	reg := f.registerAndLogin(t, "invlate")
+	tok := reg.AccessToken
+	inCompany := func(fn func(tx pgx.Tx) error) {
+		t.Helper()
+		if err := pg.NewTransactor(f.Pool).WithinTxPgxTenant(t.Context(), reg.TenantID, func(_ context.Context, tx pgx.Tx) error { return fn(tx) }); err != nil {
+			t.Fatalf("company statement: %v", err)
+		}
+	}
+	productID := invCreateProduct(t, f, tok, "INV-LATE", nil)
+	now := time.Now().UTC()
+	add := invAddBatch(t, f, tok, productID, "LOT-1", expiry.MonthEnd(now.Year(), now.Month()+6), map[string]any{"initial_quantity": 20})
+	if add.status != http.StatusCreated {
+		t.Fatalf("add batch: %d %s", add.status, add.body)
+	}
+	batchID, _ := invObj(t, add.body)["batch_id"].(string)
+	stack := startFulfilmentStack(t, f.Pool)
+
+	_, orderPath := confirmedOrderOn(t, f, tok, productID, "INV-LATE")
+	stock := func() (onHand, reserved float64) {
+		b := invObj(t, f.authedJSON(t, http.MethodGet, "/api/v1/inventory/batches/"+batchID, tok, nil).body)
+		onHand, _ = b["quantity_on_hand"].(float64)
+		reserved, _ = b["quantity_reserved"].(float64)
+		return onHand, reserved
+	}
+	waitFor(t, "the confirmed order reserves 10 units", func() bool { _, r := stock(); return r == 10 })
+
+	// The pack is valid today, but its events are not delivered: the forwarder is stopped.
+	stack.pause()
+	if r := f.authedJSON(t, http.MethodPost, orderPath+"/pack", tok, ordersports.PackOrderRequest{CarrierName: "BlueDart", BoxCount: 2, WeightGrams: 1500}); r.status != http.StatusNoContent {
+		t.Fatalf("pack: %d %s", r.status, r.body)
+	}
+	// The printed month ends, then the events arrive.
+	last := expiry.MonthEnd(now.Year(), now.Month()-1)
+	inCompany(func(tx pgx.Tx) error {
+		tag, err := tx.Exec(t.Context(), `UPDATE inventory.batches SET expiry_date = $2 WHERE id = $1`, batchID, last)
+		if err == nil && tag.RowsAffected() != 1 {
+			err = errors.New("the batch was not aged")
+		}
+		return err
+	})
+	stack.resume()
+
+	waitFor(t, "the auto-invoice is refused and dead-lettered", func() bool {
+		return messagingtest.DeadLetterCount(t.Context(), t, f.Pool, orderssubscribers.HandlerAutoInvoice) == 1
+	})
+	waitFor(t, "the consume is refused and dead-lettered", func() bool {
+		return messagingtest.DeadLetterCount(t.Context(), t, f.Pool, inventorysubscribers.HandlerConsumeStock) == 1
+	})
+	time.Sleep(time.Second) // arch-test:wait-justified — negative proof: the remaining consumers have nothing to signal when they do nothing
+
+	var ord ordersports.OrderDto
+	if err := json.Unmarshal(f.authedJSON(t, http.MethodGet, orderPath, tok, nil).body, &ord); err != nil {
+		t.Fatalf("decode order: %v", err)
+	}
+	if ord.State != "packed" || ord.InvoiceID != "" {
+		t.Fatalf("order state=%q invoice=%q; want packed with no invoice", ord.State, ord.InvoiceID)
+	}
+	if r := f.authedJSON(t, http.MethodGet, orderPath+"/invoice", tok, nil); r.status != http.StatusNotFound {
+		t.Fatalf("invoice read: %d %s; want 404", r.status, r.body)
+	}
+	if r := f.authedJSON(t, http.MethodPost, orderPath+"/invoice", tok, nil); r.status != http.StatusConflict || errorCode(t, r.body) != "order_stock_expired" {
+		t.Fatalf("manual invoice: %d %s; want 409 order_stock_expired", r.status, r.body)
+	}
+	if onHand, reserved := stock(); onHand != 20 || reserved != 10 {
+		t.Fatalf("stock on hand %v reserved %v; want 20 and 10, untouched", onHand, reserved)
+	}
 	if r := f.authedJSON(t, http.MethodPost, orderPath+"/cancel", tok, ordersports.CancelOrderRequest{Reason: "stock expired"}); r.status != http.StatusNoContent {
 		t.Fatalf("cancel: %d %s", r.status, r.body)
 	}

@@ -50,6 +50,7 @@ import (
 
 	"github.com/riverqueue/river"
 
+	"github.com/leadkart/leadkart-go/cmd/internal/bridges"
 	"github.com/leadkart/leadkart-go/internal/common/audit"
 	"github.com/leadkart/leadkart-go/internal/common/cache"
 	"github.com/leadkart/leadkart-go/internal/common/config"
@@ -78,6 +79,7 @@ import (
 	inventoryadapters "github.com/leadkart/leadkart-go/internal/inventory/adapters"
 	inventorycommand "github.com/leadkart/leadkart-go/internal/inventory/app/command"
 	inventoryjobs "github.com/leadkart/leadkart-go/internal/inventory/app/jobs"
+	inventoryquery "github.com/leadkart/leadkart-go/internal/inventory/app/query"
 	inventorysellability "github.com/leadkart/leadkart-go/internal/inventory/app/sellability"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
 	inventorysubscribers "github.com/leadkart/leadkart-go/internal/inventory/ports/subscribers"
@@ -357,7 +359,12 @@ func run(ctx context.Context, stdout *os.File) error {
 	ordersAllocator := ordersadapters.NewInvoiceNumberAllocator(pool)
 	newOrdersInvoiceID := func() invoice.ID { return invoice.ID(ids.NewV7().String()) }
 	newOrdersCreditNoteID := func() creditnote.ID { return creditnote.ID(ids.NewV7().String()) }
-	ordersInvoiceOrder := orderscommand.NewInvoiceOrderHandler(tx, ordersOrderRepo, ordersInvoiceRepo, ordersAllocator, time.Now, newOrdersInvoiceID)
+	// The invoice is issued by an event that can arrive after a held batch's printed
+	// month has ended, so it asks Inventory the same expiry question the pack asks.
+	ordersStockGuard := bridges.HeldStockExpiry{Held: inventoryquery.NewOrderHoldExpiryHandler(
+		inventoryadapters.NewStockMovementRepository(pool, tx),
+		inventorysellability.NewResolver(inventoryadapters.NewPolicyReplicaRepository(pool, tx), time.Now))}
+	ordersInvoiceOrder := orderscommand.NewInvoiceOrderHandler(tx, ordersOrderRepo, ordersInvoiceRepo, ordersAllocator, ordersStockGuard, time.Now, newOrdersInvoiceID)
 	ordersAttach := orderscommand.NewAttachConsignmentHandler(ordersOrderRepo, time.Now)
 	ordersDeliver := orderscommand.NewMarkOrderDeliveredHandler(ordersOrderRepo, time.Now)
 	ordersMint := orderscommand.NewMintCreditNoteHandler(tx, ordersCreditNoteRepo, ordersInvoiceRepo, ordersOrderRepo, ordersAllocator, time.Now, newOrdersCreditNoteID)

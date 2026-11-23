@@ -36,19 +36,26 @@ type InvoiceOrderHandler struct {
 	orders       order.Repository
 	invoices     invoice.Repository
 	allocator    invoicenumber.Allocator
+	stock        StockExpiryChecker
 	now          func() time.Time
 	newInvoiceID func() invoice.ID
 }
 
-// NewInvoiceOrderHandler wires the handler.
+// NewInvoiceOrderHandler wires the handler. stock is required: the invoice is issued by
+// an event that can arrive after the printed month of a held batch has ended, so the
+// guard that runs at the pack runs here too (auto-invoice, the manual route and the
+// consignment saga's ensure-invoiced all pass through this handler).
 func NewInvoiceOrderHandler(
 	uow pg.UnitOfWork, orders order.Repository, invoices invoice.Repository,
-	allocator invoicenumber.Allocator, now func() time.Time, newInvoiceID func() invoice.ID,
+	allocator invoicenumber.Allocator, stock StockExpiryChecker, now func() time.Time, newInvoiceID func() invoice.ID,
 ) InvoiceOrderHandler {
+	if stock == nil {
+		panic("command: NewInvoiceOrderHandler stock guard required")
+	}
 	if now == nil {
 		now = time.Now
 	}
-	return InvoiceOrderHandler{uow: uow, orders: orders, invoices: invoices, allocator: allocator, now: now, newInvoiceID: newInvoiceID}
+	return InvoiceOrderHandler{uow: uow, orders: orders, invoices: invoices, allocator: allocator, stock: stock, now: now, newInvoiceID: newInvoiceID}
 }
 
 // Handle mints the invoice + attaches it, atomically.
@@ -56,8 +63,19 @@ func (h InvoiceOrderHandler) Handle(ctx context.Context, cmd InvoiceOrderCommand
 	if cmd.TenantID == "" {
 		return InvoiceOrderResult{}, errors.New("orders invoice_order: tenant id required")
 	}
+	// No tax invoice on expired stock, however late this runs. Asked outside the
+	// transaction for the reason the pack gives (another module's read, a second pooled
+	// connection inside a transaction is the pool-deadlock shape). A consume that ran
+	// before the expiry has drained the hold, so its invoice still passes.
+	expired, err := h.stock.HoldsExpiredStock(ctx, cmd.TenantID, cmd.OrderID)
+	if err != nil {
+		return InvoiceOrderResult{}, fmt.Errorf("orders invoice_order: check held stock expiry: %w", err)
+	}
+	if expired {
+		return InvoiceOrderResult{}, fmt.Errorf("orders invoice_order: %w", order.ErrStockExpired)
+	}
 	var result InvoiceOrderResult
-	err := h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
+	err = h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
 		now := h.now().UTC()
 		return h.orders.UpdateByID(ctx, cmd.TenantID, cmd.OrderID, func(o *order.Order) (bool, error) {
 			num, err := h.allocator.Allocate(ctx, cmd.TenantID, invoicenumber.FromDate(now), invoicenumber.KindInvoice)

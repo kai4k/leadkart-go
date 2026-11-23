@@ -27,6 +27,13 @@ import (
 	"github.com/leadkart/leadkart-go/internal/orders/ports/subscribers"
 )
 
+// fakeStock answers the Inventory expiry question with a switchable answer.
+type fakeStock struct{ expired bool }
+
+func (g *fakeStock) HoldsExpiredStock(context.Context, tenant.ID, order.ID) (bool, error) {
+	return g.expired, nil
+}
+
 type fakeUoW struct{}
 
 func (fakeUoW) WithinTx(ctx context.Context, _ pg.TxScope, fn func(context.Context) error) error {
@@ -46,6 +53,7 @@ type fixture struct {
 	orders   *ordertest.FakeRepository
 	invoices *invoicetest.FakeRepository
 	notes    *creditnotetest.FakeRepository
+	stock    *fakeStock
 
 	autoInvoice *subscribers.AutoInvoiceSubscriber
 	created     *subscribers.ConsignmentCreatedSubscriber
@@ -61,13 +69,14 @@ func newFixture(t *testing.T) *fixture {
 		orders:   ordertest.NewFakeRepository(),
 		invoices: invoicetest.NewFakeRepository(),
 		notes:    creditnotetest.NewFakeRepository(),
+		stock:    &fakeStock{},
 	}
 	alloc := invoicenumbertest.NewFakeAllocator()
 	uow := fakeUoW{}
 	newInvoiceID := func() invoice.ID { return invoice.ID(uuid.NewString()) }
 	newNoteID := func() creditnote.ID { return creditnote.ID(uuid.NewString()) }
 
-	invoiceOrder := command.NewInvoiceOrderHandler(uow, f.orders, f.invoices, alloc, now, newInvoiceID)
+	invoiceOrder := command.NewInvoiceOrderHandler(uow, f.orders, f.invoices, alloc, f.stock, now, newInvoiceID)
 	attach := command.NewAttachConsignmentHandler(f.orders, now)
 	deliver := command.NewMarkOrderDeliveredHandler(f.orders, now)
 	mint := command.NewMintCreditNoteHandler(uow, f.notes, f.invoices, f.orders, alloc, now, newNoteID)

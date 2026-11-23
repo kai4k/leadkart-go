@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/orders/app/command"
@@ -58,6 +59,10 @@ func (h *AutoInvoiceSubscriber) Handle(ctx context.Context, evt *integrationeven
 		// Already invoiced (replay or manual invoice) — idempotent success.
 		h.log.InfoContext(ctx, "orders: auto-invoice idempotent hit", "order_id", evt.OrderID)
 		return nil
+	case errors.Is(err, order.ErrStockExpired):
+		// The held stock passed its printed expiry: retrying cannot change that. The
+		// order stays packed (cancellable) and this stays in the dead letters for a person.
+		return messaging.NonRetryable(fmt.Errorf("orders auto-invoice: %w", err))
 	default:
 		return fmt.Errorf("orders auto-invoice: %w", err)
 	}

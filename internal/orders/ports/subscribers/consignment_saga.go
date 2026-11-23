@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	dispatchevents "github.com/leadkart/leadkart-go/internal/dispatch/integrationevents"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -148,6 +149,10 @@ func ensureInvoiced(
 		return nil
 	case errors.Is(err, invoice.ErrAlreadyExistsForOrder):
 		return nil // normal path — the auto-invoice subscriber got there first
+	case errors.Is(err, order.ErrStockExpired):
+		// Expired held stock: no retry changes that. No invoice, so the order is not
+		// dispatched; it stays packed and cancellable.
+		return messaging.NonRetryable(fmt.Errorf("ensure invoiced: %w", err))
 	default:
 		return fmt.Errorf("ensure invoiced: %w", err)
 	}
