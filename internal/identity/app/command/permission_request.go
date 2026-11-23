@@ -43,7 +43,7 @@ var ErrPermissionRequestNotPending = errors.New("permission_request: request is 
 
 // ErrPermissionRequestRequesterInactive surfaces when an approval finds the
 // requester no longer able to receive the grant (membership deactivated, person
-// suspended, locked or anonymised since the request was filed). 409; the
+// suspended or locked since the request was filed). 409; the
 // request stays pending and can be denied or cancelled.
 var ErrPermissionRequestRequesterInactive = errors.New("permission_request: requester is no longer active")
 

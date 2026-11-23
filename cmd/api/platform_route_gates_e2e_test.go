@@ -31,8 +31,6 @@ func platformGateRoutes() []platformRoute {
 	reason := func(registeredTenant) any { return ports.SuspendTenantRequest{Reason: "gate test reason"} }
 	none := func(registeredTenant) any { return nil }
 	return []platformRoute{
-		{"anonymise user", http.MethodPost, func(v registeredTenant) string { return "/api/v1/users/" + v.MembershipID + "/anonymise" }, none},
-		{"anonymise person", http.MethodPost, func(v registeredTenant) string { return "/api/v1/platform/persons/" + v.PersonID + "/anonymise" }, none},
 		{"suspend tenant", http.MethodPost, func(v registeredTenant) string { return "/api/v1/tenants/" + v.TenantID + "/suspend" }, reason},
 		{"activate tenant", http.MethodPost, func(v registeredTenant) string { return "/api/v1/tenants/" + v.TenantID + "/activate" }, none},
 		{"mark tenant for deletion", http.MethodPost, func(v registeredTenant) string { return "/api/v1/tenants/" + v.TenantID + "/mark-for-deletion" }, reason},
@@ -62,8 +60,8 @@ func platformGateRoutes() []platformRoute {
 }
 
 // assertVictimIntact proves the victim's person, membership and tenant are
-// exactly as registered: the token still verifies (anonymise / global suspend
-// rotate the stamp), the email is unchanged and the tenant is active.
+// exactly as registered: the token still verifies (global suspend
+// rotates the stamp), the email is unchanged and the tenant is active.
 func (f e2eFixture) assertVictimIntact(t *testing.T, what string, v registeredTenant) {
 	t.Helper()
 	u := f.getUser(t, v.AccessToken, v.MembershipID)
@@ -133,17 +131,17 @@ func (f e2eFixture) assertPersonNamesUnchanged(t *testing.T, what string, v regi
 	}
 }
 
-// The reported Critical, in its minimal form: anonymise another tenant's user
+// The reported Critical, in its minimal form: deactivate another tenant's user
 // through the header as a platform member with no permissions.
-func TestE2E_PlatformGates_AnonymiseViaHeaderRefusedAndUniform(t *testing.T) {
+func TestE2E_PlatformGates_DeactivateViaHeaderRefusedAndUniform(t *testing.T) {
 	f := newE2EFixture(t)
 	zero := mintOperatorJWTExact(t, f.Issuer, f.persons, "", nil, false)
-	v := f.registerAndLogin(t, "anonvictim")
-	r := f.doWithHeaders(t, http.MethodPost, "/api/v1/users/"+v.MembershipID+"/anonymise", zero, nil, scopeHdr(v.TenantID))
+	v := f.registerAndLogin(t, "deactvictim")
+	r := f.doWithHeaders(t, http.MethodPost, "/api/v1/users/"+v.MembershipID+"/deactivate", zero, ports.DeactivateUserRequest{Reason: "gate test reason"}, scopeHdr(v.TenantID))
 	if r.status != http.StatusForbidden || decodeErrorCode(t, r.body) != "tenant_scope_forbidden" {
-		t.Fatalf("zero-permission member anonymise via header: %d %s, want 403 tenant_scope_forbidden", r.status, r.body)
+		t.Fatalf("zero-permission member deactivate via header: %d %s, want 403 tenant_scope_forbidden", r.status, r.body)
 	}
-	f.assertVictimIntact(t, "anonymise via header", v)
+	f.assertVictimIntact(t, "deactivate via header", v)
 }
 
 // A zero-permission member sending a foreign tenant in the header gets the SAME
@@ -178,11 +176,11 @@ func TestE2E_PlatformGates_RightPermissionSucceeds(t *testing.T) {
 	p := permission.IdentityPermissions
 	scope := p.Platform.TenantsView
 
-	anon := mintOperatorJWTExact(t, f.Issuer, f.persons, "", []string{scope, p.Users.Anonymise}, false)
-	v := f.registerAndLogin(t, "okanon")
-	f.addSecondOwner(t, v, "okanon-b") // the last owner cannot be anonymised (ADR 0069 H6)
-	if r := f.doWithHeaders(t, http.MethodPost, "/api/v1/users/"+v.MembershipID+"/anonymise", anon, map[string]string{"reason": "erasure request, ticket 4711"}, scopeHdr(v.TenantID)); r.status != http.StatusNoContent {
-		t.Errorf("operator with identity.users.anonymise: %d %s, want 204", r.status, r.body)
+	deact := mintOperatorJWTExact(t, f.Issuer, f.persons, "", []string{scope, p.Platform.UsersManage}, false)
+	v := f.registerAndLogin(t, "okdeact")
+	f.addSecondOwner(t, v, "okdeact-b") // the last owner cannot be deactivated (ADR 0069 H6)
+	if r := f.doWithHeaders(t, http.MethodPost, "/api/v1/users/"+v.MembershipID+"/deactivate", deact, ports.DeactivateUserRequest{Reason: "gate test reason"}, scopeHdr(v.TenantID)); r.status != http.StatusNoContent {
+		t.Errorf("operator with platform.users.manage: %d %s, want 204", r.status, r.body)
 	}
 
 	susp := mintOperatorJWTExact(t, f.Issuer, f.persons, "", []string{p.Tenants.Suspend, p.Tenants.Activate}, false)

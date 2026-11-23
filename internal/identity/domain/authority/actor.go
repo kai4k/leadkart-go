@@ -169,8 +169,8 @@ func (a Actor) NeedsFreshFacts(tenantID tenant.ID) bool {
 //
 // It returns the zero Actor (which denies everything) when fresh is not valid,
 // is not the membership the token names (canonical id and tenant comparison),
-// or cannot act (inactive membership, or a person who is suspended, locked,
-// anonymised or deactivated). A super user must still hold a super-admin role:
+// or cannot act (inactive membership, or a person who is suspended, locked
+// or deactivated). A super user must still hold a super-admin role:
 // the flag in the token is a fact of the membership, so a super user whose role
 // was removed is the zero actor. Platform-operator and impersonation flags are
 // carried over unchanged; they are not facts of the membership.

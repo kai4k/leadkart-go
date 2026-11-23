@@ -20,7 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 )
@@ -135,14 +134,13 @@ func TestE2E_AuthorityLock_OwnersRemovingEachOtherLeaveOne(t *testing.T) {
 	})
 }
 
-// TestE2E_PersonLevel_LastOwnerCannotBeSuspendedOrAnonymised: the operator
+// TestE2E_PersonLevel_LastOwnerCannotBeSuspended: the operator
 // routes that take a person out of every tenant at once refuse (409
 // last_owner_protected, nothing changed) when the person is a tenant's only
 // active owner, and work once another active owner exists.
-func TestE2E_PersonLevel_LastOwnerCannotBeSuspendedOrAnonymised(t *testing.T) {
+func TestE2E_PersonLevel_LastOwnerCannotBeSuspended(t *testing.T) {
 	f := newE2EFixtureAt(t, time.Now)
-	p := permission.IdentityPermissions
-	op := f.mintPlatformTokenWith(t, []string{p.Users.Anonymise}, false)
+	op := f.mintPlatformTokenWith(t, nil, false)
 	v := f.registerAndLogin(t, "plast")
 
 	// arch-test:serial — subtests share one fixture and one tenant.
@@ -153,16 +151,6 @@ func TestE2E_PersonLevel_LastOwnerCannotBeSuspendedOrAnonymised(t *testing.T) {
 		if g := f.authedJSON(t, http.MethodGet, "/api/v1/platform/persons/"+v.PersonID, op, nil); g.status != http.StatusOK || bytesContains(g.body, `"is_globally_suspended":true`) {
 			t.Errorf("person after a refused suspend: %d %s", g.status, g.body)
 		}
-	})
-	// arch-test:serial — subtests share one fixture and one tenant.
-	t.Run("person anonymise", func(t *testing.T) {
-		r := f.authedJSON(t, http.MethodPost, "/api/v1/platform/persons/"+v.PersonID+"/anonymise", op, map[string]string{"reason": "erasure request, ticket 4711"})
-		f.wantForbidden(t, "anonymise the only owner", r, http.StatusConflict, "last_owner_protected")
-	})
-	// arch-test:serial — subtests share one fixture and one tenant.
-	t.Run("user anonymise", func(t *testing.T) {
-		r := f.doWithHeaders(t, http.MethodPost, "/api/v1/users/"+v.MembershipID+"/anonymise", op, map[string]string{"reason": "erasure request, ticket 4711"}, scopeHdr(v.TenantID))
-		f.wantForbidden(t, "anonymise the only owner via the membership route", r, http.StatusConflict, "last_owner_protected")
 	})
 	// arch-test:serial — subtests share one fixture and one tenant.
 	t.Run("a second active owner lifts the guard", func(t *testing.T) {

@@ -167,18 +167,6 @@ func TestDecodeFullBody_ANonObjectNestedValueIsATypeErrorNotRequired(t *testing.
 	}
 }
 
-func TestDecodeFullBody_AnonymiseRequiresAReason(t *testing.T) {
-	t.Parallel()
-	for _, body := range []string{``, `{}`, `{"reason":null}`} {
-		if _, rec, ok := decodeFull[AnonymiseRequest](t, body); ok || rec.Code != http.StatusBadRequest {
-			t.Errorf("body %q: ok=%v status=%d, want 400", body, ok, rec.Code)
-		}
-	}
-	if got, _, ok := decodeFull[AnonymiseRequest](t, `{"reason":"erasure request"}`); !ok || got.Reason != "erasure request" {
-		t.Errorf("valid body rejected: %+v", got)
-	}
-}
-
 func decodeOptional[T any](t *testing.T, body string) (T, *httptest.ResponseRecorder, bool) {
 	t.Helper()
 	var dst T

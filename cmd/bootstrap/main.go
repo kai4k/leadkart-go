@@ -205,8 +205,8 @@ func seedSuperAdmin(ctx context.Context, tx *sql.Tx, email, password, firstName,
 	if err := tx.QueryRowContext(ctx, `
 		INSERT INTO identity.persons (
 		    id, email, first_name, last_name,
-		    password_hash, security_stamp, is_active, is_anonymised, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, true, false, $7)
+		    password_hash, security_stamp, is_active, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, true, $7)
 		ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email
 		RETURNING id
 	`, personID, email, firstName, lastName, hash, stamp, now).

@@ -358,26 +358,15 @@ type PersonDto struct {
 	FirstName              string    `json:"first_name"`
 	LastName               string    `json:"last_name"`
 	IsActive               bool      `json:"is_active"`
-	IsAnonymised           bool      `json:"is_anonymised"`
 	IsGloballySuspended    bool      `json:"is_globally_suspended"`
 	GlobalSuspensionReason string    `json:"global_suspension_reason,omitzero"`
 	GloballySuspendedAt    time.Time `json:"globally_suspended_at,omitzero"`
 	CreatedAt              time.Time `json:"created_at"`
-	AnonymisedAt           time.Time `json:"anonymised_at,omitzero"`
 }
 
 // GlobalSuspendPersonRequest — POST /api/v1/platform/persons/{personId}/global-suspend.
 // Reason MUST be non-empty per data-retention.md audit canon.
 type GlobalSuspendPersonRequest struct {
-	Reason string `json:"reason"`
-}
-
-// AnonymiseRequest — POST /api/v1/platform/persons/{personId}/anonymise and
-// POST /api/v1/users/{userId}/anonymise. Reason is REQUIRED: the operator's
-// free-text justification for an irreversible erasure (same bound as a global
-// suspension's: not blank). It must not contain the person's data; it is kept
-// on the audit/outbox event and never logged.
-type AnonymiseRequest struct {
 	Reason string `json:"reason"`
 }
 

@@ -59,7 +59,7 @@ type LoginResult struct {
 
 // ErrInvalidCredentials is the SINGLE error returned for every
 // authentication-failure path: unknown email, wrong password, no
-// Active Membership, anonymised Person. Identical shape defeats user
+// Active Membership. Identical shape defeats user
 // enumeration per OWASP "Authentication Cheat Sheet" + RFC 6749 §5.2.
 var ErrInvalidCredentials = errors.New("login: invalid credentials")
 
@@ -161,7 +161,7 @@ type SessionTarget struct {
 }
 
 // PhantomFailureCounter mirrors the per-account lockout for login attempts that
-// have no usable account (unknown email, deactivated, anonymised) so 423 vs
+// have no usable account (unknown email, deactivated) so 423 vs
 // 401 carries no existence signal (ADR 0044 + ADR 0053; ADR 0068 D12).
 //
 // The implementation must keep the same thresholds and the same ATOMIC statement
@@ -329,7 +329,7 @@ func NewLoginHandler(
 //  2. Register the attempt atomically BEFORE the verify; locked → dummy verify, 423.
 //  3. Verify the password against the stored hash; a correct one clears the
 //     attempt's own count without ever clearing a lock.
-//  4. Reject anonymised + inactive Persons → ErrInvalidCredentials.
+//  4. Reject inactive Persons → ErrInvalidCredentials.
 //  5. Load the full membership + the Tenant (tenant_slug claim).
 //  6. In ONE transaction: re-read the person under a SHARE lock, refuse when the
 //     credential is no longer the verified one or the tenant's members may not sign
@@ -598,7 +598,7 @@ func (h LoginHandler) resolveAndVerify(ctx context.Context, cmd LoginCommand) (v
 		return verifiedLogin{}, h.failWithoutAccount(ctx, cmd)
 	}
 
-	// Terminal Persons (deactivated, anonymised, globally suspended) are "no account" for login:
+	// Terminal Persons (deactivated, globally suspended) are "no account" for login:
 	// they answer exactly like an unknown email, phantom counter included, and
 	// this check runs BEFORE the real lockout gate so a Person who was locked
 	// and then deactivated cannot answer 423 where an unknown email answers 401.
@@ -712,7 +712,7 @@ func verifyRefusal(ctx context.Context, err error) error {
 }
 
 // failWithoutAccount is the single failure surface for login attempts with no
-// usable account (unknown email, deactivated, anonymised). It does exactly what
+// usable account (unknown email, deactivated). It does exactly what
 // a real account's wrong-password branch does, in the same order: register one
 // attempt with the same atomic statement shape (the clock read once, here), then
 // run one dummy verify, then answer 423 where the row says locked and 401 otherwise,

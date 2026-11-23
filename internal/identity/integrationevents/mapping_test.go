@@ -57,29 +57,6 @@ func TestFromDomainEvent_TenantRegistered_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestFromDomainEvent_PersonAnonymised_PlatformScoped(t *testing.T) {
-	t.Parallel()
-	pid := person.ID(ids.NewV7().String())
-	got, err := integrationevents.FromDomainEvent(person.AnonymisedEvent{
-		PersonID: pid,
-		At:       fixedTime(),
-	})
-	if err != nil {
-		t.Fatalf("map: %v", err)
-	}
-	v1, ok := got.(integrationevents.PersonAnonymisedV1)
-	if !ok {
-		t.Fatalf("type: got %T", got)
-	}
-	// Compile-time guarantees Platform; confirm at runtime too.
-	if _, isPlatform := any(v1).(integrationevents.Platform); !isPlatform {
-		t.Fatal("PersonAnonymisedV1 must satisfy Platform marker")
-	}
-	if v1.Topic() != "identity.person_anonymised.v1" {
-		t.Fatalf("topic: %q", v1.Topic())
-	}
-}
-
 func TestFromDomainEvent_MembershipCreated_TenantScoped(t *testing.T) {
 	t.Parallel()
 	mid := membership.ID(ids.NewV7().String())

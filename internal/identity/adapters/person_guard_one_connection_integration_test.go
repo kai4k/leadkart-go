@@ -7,7 +7,7 @@
 // savepoint (no repository method fails on demand) and reads the app.is_platform
 // setting directly: it is the setting, not a row, that the test is about.
 
-// Identity fix round 2, I2: the person change guard (global suspension,
+// holds the tenant authority lock and the person row while it
 // anonymisation) holds the tenant authority lock and the person row while it
 // re-reads the person's memberships. That read used to take a SECOND pooled
 // connection; one guard run plus pool-1 requests waiting on its locks held every

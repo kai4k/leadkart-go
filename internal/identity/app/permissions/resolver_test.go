@@ -230,7 +230,7 @@ func TestResolve_OverlayGrantedExtendsBaseline(t *testing.T) {
 	if err := m.AssignRole(r1.ID(), testNow); err != nil {
 		t.Fatalf("AssignRole: %v", err)
 	}
-	overlayP := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
+	overlayP := permission.FromConstant(permission.IdentityPermissions.Users.Unlock)
 	if err := m.GrantPermission(overlayP, time.Time{}, testNow); err != nil {
 		t.Fatalf("GrantPermission overlay: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestResolve_OverlayGrantedExtendsBaseline(t *testing.T) {
 	}
 	want := []string{
 		permission.IdentityPermissions.Roles.View,
-		permission.IdentityPermissions.Users.Anonymise,
+		permission.IdentityPermissions.Users.Unlock,
 	}
 	slices.Sort(want)
 	if !slices.Equal(names(got), want) {

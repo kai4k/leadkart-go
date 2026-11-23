@@ -59,22 +59,6 @@ type ProfileUpdatedEvent struct {
 
 func (ProfileUpdatedEvent) isPersonEvent() {}
 
-// AnonymisedEvent fires when [Person.Anonymise] is called.
-//
-// Cross-module subscribers MUST scrub their own PII (CRM lead notes,
-// Tasks comments, audit-row author labels, etc.) per DPDP / GDPR.
-//
-// Reason is the operator's free-text justification for the (irreversible)
-// erasure, kept on the audit/outbox event like a global suspension's. It is
-// the operator's text, never the erased person's data: it must not be logged.
-type AnonymisedEvent struct {
-	PersonID ID
-	Reason   string
-	At       time.Time
-}
-
-func (AnonymisedEvent) isPersonEvent() {}
-
 // EmailChangeRequestedEvent fires when [Person.RequestEmailChange]
 // is called. Carries the proposed new email + expiry — the AUDIT-side
 // signal of the change flow.
@@ -288,7 +272,7 @@ func (AccountUnlockedEvent) isPersonEvent() {}
 //
 // Subscribers evict the cached stamp (the 401 stale_token follows on the very
 // next request); NONE revokes families — that is what distinguishes it from
-// the credential events (password change, anonymise, global suspend).
+// the credential events (password change, global suspend).
 type SecurityStampRotatedEvent struct {
 	PersonID ID
 	Reason   string

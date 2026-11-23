@@ -57,7 +57,7 @@ func (e RefreshTokenRotatedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
 //   - "admin_revoke" — operator revoked the session.
 //   - "reuse_detected" — RFC 9700 §4.13 reuse-detection fired (security
 //     incident; Notifications routes to SIEM + user alert).
-//   - "password_changed" / "person_anonymised" — Identity-internal
+//   - "password_changed" — Identity-internal
 //     cascade per the choreographed reactions.
 //   - "family_cap_exceeded" — too many active families per Person;
 //     oldest evicted.

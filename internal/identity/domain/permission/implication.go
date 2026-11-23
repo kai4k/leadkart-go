@@ -17,7 +17,6 @@ var platformReserved = func() map[string]struct{} {
 		p.PlatformUnverifiedContacts.Manage,
 		p.PlatformLeadCredits.Topup,
 		p.Tenants.Suspend, p.Tenants.Activate, p.Tenants.Delete,
-		p.Users.Anonymise,
 	}
 	m := make(map[string]struct{}, len(names))
 	for _, n := range names {

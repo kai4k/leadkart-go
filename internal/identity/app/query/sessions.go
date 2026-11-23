@@ -51,7 +51,7 @@ func NewListSessionsHandler(families refreshtoken.Repository) ListSessionsHandle
 }
 
 // Handle returns active sessions for PersonID, oldest first.
-// Empty result is not an error (e.g. freshly-anonymised user).
+// Empty result is not an error (e.g. a user who never signed in).
 func (h ListSessionsHandler) Handle(ctx context.Context, q ListSessionsQuery) ([]SessionView, error) {
 	if q.PersonID.IsZero() {
 		return nil, errors.New("list_sessions: person id required")

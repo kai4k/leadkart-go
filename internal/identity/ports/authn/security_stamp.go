@@ -67,7 +67,7 @@ const errCodeStaleToken = "stale_token"
 // key is valid until rotation, and rotation is rare (security.md key-
 // history grace window). The security-stamp claim is the per-Person
 // nonce minted at every credential-rotation event (password/email
-// change, anonymisation, global suspend); rotating it on the stored
+// change, global suspend); rotating it on the stored
 // Person while leaving the in-flight JWT unrotated is what makes the
 // session "revoked" in <=30s without a stateful blacklist on every
 // request.

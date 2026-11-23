@@ -249,7 +249,7 @@ func SatisfiesInTenant(ctx context.Context, tenantID tenancy.ID, permName string
 }
 
 // DenySelfPerson refuses /platform/persons/{pathVar}/... mutations on the
-// caller's OWN person (an operator must not globally suspend, anonymise or edit
+// caller's OWN person (an operator must not globally suspend or edit
 // themselves). Ids are compared as UUID values; an unparseable path value
 // passes through to the handler, which answers 400. Super users are exempt.
 // INNER middleware: compose inside the platform gate.

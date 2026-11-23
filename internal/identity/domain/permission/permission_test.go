@@ -51,9 +51,6 @@ func TestIdentityPermissions_Catalogue(t *testing.T) {
 	if permission.IdentityPermissions.Tenants.UpdateSettings != "identity.tenants.update_settings" {
 		t.Fatalf("Tenants.UpdateSettings: %q", permission.IdentityPermissions.Tenants.UpdateSettings)
 	}
-	if permission.IdentityPermissions.Users.Anonymise != "identity.users.anonymise" {
-		t.Fatalf("Users.Anonymise: %q", permission.IdentityPermissions.Users.Anonymise)
-	}
 	if permission.IdentityPermissions.Roles.Assign != "identity.roles.assign" {
 		t.Fatalf("Roles.Assign: %q", permission.IdentityPermissions.Roles.Assign)
 	}

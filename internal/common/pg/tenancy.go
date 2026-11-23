@@ -74,7 +74,7 @@ func SetTenantOnTxExplicit(ctx context.Context, tx pgx.Tx, tenantID string) erro
 // transaction, bypassing RLS on every tenant-scoped table. Reserved for:
 //
 //   - The outbox forwarder (drains events across tenants).
-//   - Cross-tenant maintenance (anonymise / global-suspend / impersonation
+//   - Cross-tenant maintenance (global-suspend / impersonation
 //     audit writes / system metrics).
 //   - The bootstrap migration (no tenant context exists yet).
 //

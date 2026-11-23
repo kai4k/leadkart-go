@@ -96,7 +96,7 @@ func (f authorityFacts) project(ctx context.Context, tenantID tenant.ID, m *memb
 // memberFrom is the one place a membership, its roles and its person become an
 // authority.Member (the single-member and the batch loaders both end here).
 func memberFrom(m *membership.Membership, roles []*role.Role, p *person.Person, now time.Time) (authority.Member, []*role.Role, error) {
-	state := authority.NewPersonState(p.IsActive(), p.IsGloballySuspended(), p.IsAnonymised())
+	state := authority.NewPersonState(p.IsActive(), p.IsGloballySuspended())
 	out, err := authority.MemberOf(m, roles, now, state)
 	if err != nil {
 		return authority.Member{}, nil, &memberRolesInconsistentError{membershipID: m.ID(), cause: err}

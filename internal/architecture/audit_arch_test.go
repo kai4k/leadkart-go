@@ -20,7 +20,7 @@ func TestArch_EveryAuthnEventAudited(t *testing.T) {
 
 	authChangeNames := []string{
 		"change_password", "confirm_password_reset",
-		"request_password_reset", "anonymise", "impersonation",
+		"request_password_reset", "impersonation",
 	}
 	root := internalDir(t)
 	var bad []string

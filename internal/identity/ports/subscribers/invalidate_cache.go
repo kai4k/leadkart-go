@@ -21,7 +21,7 @@ type SecurityStampInvalidator interface {
 
 // InvalidateSecurityStampCache evicts the cached SecurityStamp for a
 // Person whenever a stamp-rotation event fires
-// (PasswordChanged / Anonymised / GloballySuspended / EmailChanged).
+// (PasswordChanged / GloballySuspended / EmailChanged).
 //
 // Single responsibility: cache eviction only. Refresh-token family
 // revocation runs as an INDEPENDENT subscriber
@@ -77,14 +77,6 @@ func (h *InvalidateSecurityStampCache) HandlePasswordChanged(
 	ctx context.Context, evt *integrationevents.PersonPasswordChangedV1,
 ) error {
 	h.invalidate(ctx, evt.PersonID.String(), "password_changed")
-	return nil
-}
-
-// HandleAnonymised handles `identity.person_anonymised.v1`.
-func (h *InvalidateSecurityStampCache) HandleAnonymised(
-	ctx context.Context, evt *integrationevents.PersonAnonymisedV1,
-) error {
-	h.invalidate(ctx, evt.PersonID.String(), "person_anonymised")
 	return nil
 }
 

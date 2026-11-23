@@ -65,7 +65,7 @@ func NewRequestEmailChangeHandler(persons person.Repository, now func() time.Tim
 // Handle runs the request flow per ADR 0057:
 //
 //  1. Load Person by ID (caller's authenticated identity).
-//  2. Reject anonymised / globally-suspended.
+//  2. Reject globally-suspended.
 //  3. Reject if NewEmail equals current email (no-op).
 //  4. Reject if NewEmail already belongs to another Person (409).
 //  5. Mint ⟨plaintext, hash⟩ pair via crypto/rand + SHA-256.

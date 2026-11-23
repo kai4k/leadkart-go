@@ -191,24 +191,6 @@ func handleLiftPersonGlobalSuspension(log *slog.Logger, a app.Application) http.
 	})
 }
 
-// ----- AnonymisePerson (direct, Person-level) -------------------------------
-
-func handleAnonymisePerson(log *slog.Logger, a app.Application) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id, ok := parsePersonIDPath(w, r)
-		if !ok {
-			return
-		}
-		var req AnonymiseRequest
-		if !decodeFullBody(w, r, &req) {
-			return
-		}
-		err := a.Commands.AnonymisePerson.Handle(r.Context(),
-			command.AnonymisePersonCommand{PersonID: id, Reason: req.Reason})
-		writePersonMutationResult(w, log, r, err)
-	})
-}
-
 // ----- UpdatePersonProfile (Platform direct) --------------------------------
 
 func handleUpdatePersonProfile(log *slog.Logger, a app.Application) http.Handler {
@@ -286,12 +268,10 @@ func projectPersonViewToDto(v query.PersonView) PersonDto {
 		FirstName:              v.FirstName,
 		LastName:               v.LastName,
 		IsActive:               v.IsActive,
-		IsAnonymised:           v.IsAnonymised,
 		IsGloballySuspended:    v.IsGloballySuspended,
 		GlobalSuspensionReason: v.GlobalSuspensionReason,
 		GloballySuspendedAt:    v.GloballySuspendedAt,
 		CreatedAt:              v.CreatedAt,
-		AnonymisedAt:           v.AnonymisedAt,
 	}
 }
 

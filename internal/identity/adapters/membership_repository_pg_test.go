@@ -283,7 +283,7 @@ func TestMembershipRepository_Add_PersistsChildTablesInSameTx(t *testing.T) {
 		t.Fatalf("AssignRole r2: %v", err)
 	}
 	grantP := permission.FromConstant(permission.IdentityPermissions.Roles.Assign)
-	revokeP := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
+	revokeP := permission.FromConstant(permission.IdentityPermissions.Users.Unlock)
 	if err := m.GrantPermission(grantP, time.Time{}, testNow); err != nil {
 		t.Fatalf("GrantPermission: %v", err)
 	}

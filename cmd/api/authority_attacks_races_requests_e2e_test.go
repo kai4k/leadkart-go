@@ -216,14 +216,13 @@ func TestAttack_Races_RolesAgainstTheirHoldersAndLinks(t *testing.T) {
 
 // TestAttack_Races_PersonsAgainstTheirMemberships: (1) one person, inactive in two
 // tenants, is reactivated in both at once: at most one membership ends active and
-// no deadlock victim surfaces as a 500; (2) a global suspension (and, in fresh
-// tenants, an anonymisation) races reactivating the other owner of the only owner's
+// no deadlock victim surfaces as a 500; (2) a global suspension races reactivating the other owner of the only owner's
 // tenant: the tenant never ends without an active owner who can act.
 func TestAttack_Races_PersonsAgainstTheirMemberships(t *testing.T) {
 	w := newAttackWorld(t)
 	f := w.f
 	p := permission.IdentityPermissions
-	op := f.mintPlatformTokenWith(t, []string{p.Users.Anonymise, p.Platform.RolesView}, false)
+	op := f.mintPlatformTokenWith(t, []string{p.Platform.RolesView}, false)
 	personOf := func(id string) ports.PersonDto {
 		r := f.authedJSON(t, http.MethodGet, "/api/v1/platform/persons/"+id, op, nil)
 		var d ports.PersonDto
@@ -284,7 +283,7 @@ func TestAttack_Races_PersonsAgainstTheirMemberships(t *testing.T) {
 		}
 	})
 
-	for _, kind := range []string{"global suspension", "anonymisation"} {
+	for _, kind := range []string{"global suspension"} {
 		// arch-test:serial — see above.
 		t.Run(kind+" vs reactivating the other owner", func(t *testing.T) {
 			var zOwner registeredTenant
@@ -302,14 +301,8 @@ func TestAttack_Races_PersonsAgainstTheirMemberships(t *testing.T) {
 			}
 			fresh(0)
 			for round := range raceRounds {
-				if kind == "anonymisation" && round > 0 {
-					fresh(round) // anonymisation cannot be undone: every round gets a tenant of its own
-				}
 				verb := "/global-suspend"
 				var body any = ports.GlobalSuspendPersonRequest{Reason: "race"}
-				if kind == "anonymisation" {
-					verb, body = "/anonymise", map[string]string{"reason": "erasure request, ticket 4711"}
-				}
 				res := w.raceOnce(t,
 					w.call(http.MethodPost, "/api/v1/platform/persons/"+zOwner.PersonID+verb, op, body),
 					w.call(http.MethodPost, "/api/v1/users/"+q.membershipID+"/reactivate", zOwner.AccessToken, nil))
@@ -321,7 +314,7 @@ func TestAttack_Races_PersonsAgainstTheirMemberships(t *testing.T) {
 				ok := false
 				for _, u := range users {
 					if u.Status == "active" && slices.Contains(u.RoleIDs, ownerRole) {
-						if d := personOf(u.PersonID); d.IsActive && !d.IsAnonymised && !d.IsGloballySuspended {
+						if d := personOf(u.PersonID); d.IsActive && !d.IsGloballySuspended {
 							ok = true
 						}
 					}

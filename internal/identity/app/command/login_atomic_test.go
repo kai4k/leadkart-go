@@ -92,10 +92,6 @@ func TestLogin_DummyVerifyUsesTheDummyHashAndTheSuppliedPassword(t *testing.T) {
 			p := newPersonInactive(t, plain)
 			return routerFor(p, nil), seedPersonRepo(t, p), p.Email()
 		}, "WRONG-3"},
-		{"anonymised", func(t *testing.T) (command.AuthRouter, person.Repository, email.Address) {
-			p := newPersonAnonymised(t)
-			return routerFor(p, nil), seedPersonRepo(t, p), p.Email()
-		}, "WRONG-4"},
 	} {
 		t.Run(b.name, func(t *testing.T) {
 			t.Parallel()
@@ -237,10 +233,6 @@ func TestLogin_AGateRefusalIsTheSameOnEveryBranchAndCountsNothing(t *testing.T) 
 		}},
 		{"deactivated", func(t *testing.T) (command.AuthRouter, person.Repository, email.Address) {
 			p := newPersonInactive(t, plain)
-			return routerFor(p, nil), seedPersonRepo(t, p), p.Email()
-		}},
-		{"anonymised", func(t *testing.T) (command.AuthRouter, person.Repository, email.Address) {
-			p := newPersonAnonymised(t)
 			return routerFor(p, nil), seedPersonRepo(t, p), p.Email()
 		}},
 	} {

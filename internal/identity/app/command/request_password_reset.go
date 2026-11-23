@@ -63,7 +63,7 @@ func NewRequestPasswordResetHandler(persons person.Repository, now func() time.T
 // Flow per security.md "Password reset" + Auth0/Okta canon + ADR 0057:
 //
 //  1. Lookup Person by email globally.
-//  2. If not found / anonymised / globally-suspended: SUCCEED SILENTLY.
+//  2. If not found / globally-suspended: SUCCEED SILENTLY.
 //     No event recorded, no email sent. Return nil so the wire-shape
 //     is identical to the success path.
 //  3. Mint a fresh ⟨plaintext, hash⟩ pair via crypto/rand + SHA-256.
@@ -94,7 +94,7 @@ func (h RequestPasswordResetHandler) Handle(ctx context.Context, cmd RequestPass
 		return fmt.Errorf("request_password_reset: lookup: %w", err)
 	}
 
-	// Anonymised / globally-suspended Persons cannot reset; surface as
+	// Globally-suspended Persons cannot reset; surface as
 	// silent success too (avoid leaking suspension state).
 	if !p.MaySignIn() {
 		return nil

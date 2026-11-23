@@ -152,19 +152,17 @@ func TestPersonState(t *testing.T) {
 	t.Parallel()
 	now := t0
 	cases := []struct {
-		name               string
-		active, susp, anon bool
-		want               bool
+		name         string
+		active, susp bool
+		want         bool
 	}{
-		{"active", true, false, false, true},
-		{"deactivated", false, false, false, false},
-		{"globally suspended", true, true, false, false},
-		{"anonymised", true, false, true, false},
-		{"suspended and anonymised", true, true, true, false},
-		{"deactivated and suspended", false, true, false, false},
+		{"active", true, false, true},
+		{"deactivated", false, false, false},
+		{"globally suspended", true, true, false},
+		{"deactivated and suspended", false, true, false},
 	}
 	for _, c := range cases {
-		if got := authority.NewPersonState(c.active, c.susp, c.anon).CanAct(); got != c.want {
+		if got := authority.NewPersonState(c.active, c.susp).CanAct(); got != c.want {
 			t.Errorf("%s: CanAct = %v, want %v", c.name, got, c.want)
 		}
 	}

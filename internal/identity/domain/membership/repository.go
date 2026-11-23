@@ -109,7 +109,7 @@ type Repository interface {
 	// supplied Person holds across ALL tenants. Cross-tenant read —
 	// platform-only path. Used by:
 	//   - Platform operator "show all of this user's tenants" UI
-	//   - Person-level cascades (anonymise, global suspend) where the
+	//   - Person-level cascades (global suspend) where the
 	//     handler needs to enumerate the affected memberships before
 	//     dispatching per-tenant fanout events.
 	//

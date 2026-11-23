@@ -61,7 +61,6 @@ type Commands struct {
 	AssignUserManager              command.AssignUserManagerHandler
 	RemoveUserManager              command.RemoveUserManagerHandler
 	CreateUser                     command.CreateUserHandler
-	AnonymiseUser                  command.AnonymiseUserHandler
 
 	// Role management.
 	CreateRole             command.CreateRoleHandler
@@ -75,7 +74,6 @@ type Commands struct {
 	// Platform — cross-tenant Person + tenant ops.
 	GlobalSuspendPerson        command.GlobalSuspendPersonHandler
 	LiftPersonGlobalSuspension command.LiftPersonGlobalSuspensionHandler
-	AnonymisePerson            command.AnonymisePersonHandler
 	UpdatePersonProfile        command.UpdatePersonProfileHandler
 	HardDeleteTenant           command.HardDeleteTenantHandler
 

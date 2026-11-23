@@ -10,7 +10,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
@@ -119,66 +118,6 @@ func (h LiftPersonGlobalSuspensionHandler) Handle(ctx context.Context, cmd LiftP
 	}
 	if err != nil {
 		return fmt.Errorf("lift_person_global_suspension: %w", err)
-	}
-	return nil
-}
-
-// ----- AnonymisePerson (direct) --------------------------------------------
-
-// AnonymisePersonCommand triggers DPDP §12 / GDPR Art. 17 right-to-
-// erasure directly by PersonID. Distinct from
-// [AnonymiseUserCommand] which takes a MembershipID and resolves the
-// Person — this entry point is the operator-facing path under
-// /api/v1/platform/persons/{personId}/anonymise.
-type AnonymisePersonCommand struct {
-	PersonID person.ID
-	// Reason is the operator's required free-text justification for the
-	// irreversible erasure; it goes on the audit/outbox event and is never logged.
-	Reason string
-}
-
-// AnonymisePersonHandler runs the cascade.
-type AnonymisePersonHandler struct {
-	guard   PersonChangeGuard
-	persons person.Repository
-	now     func() time.Time
-}
-
-// NewAnonymisePersonHandler wires the handler. `now` is the explicit
-// time source per the clock-injection refactor. Nil → time.Now.
-func NewAnonymisePersonHandler(guard PersonChangeGuard, p person.Repository, now func() time.Time) AnonymisePersonHandler {
-	if p == nil {
-		panic("command: NewAnonymisePersonHandler persons repository required")
-	}
-	if now == nil {
-		now = time.Now
-	}
-	return AnonymisePersonHandler{guard: guard, persons: p, now: now}
-}
-
-// Handle dispatches to [Person.Anonymise]. Idempotent — already-
-// anonymised Persons return nil with no event.
-func (h AnonymisePersonHandler) Handle(ctx context.Context, cmd AnonymisePersonCommand) error {
-	if cmd.PersonID.IsZero() {
-		return errors.New("anonymise_person: person id required")
-	}
-	if strings.TrimSpace(cmd.Reason) == "" {
-		return fmt.Errorf("anonymise_person: %w: reason required", person.ErrInvalid)
-	}
-	now := h.now()
-	err := h.guard.Run(ctx, cmd.PersonID, func(ctx context.Context) error {
-		return h.persons.UpdateByID(ctx, cmd.PersonID, func(p *person.Person) (bool, error) {
-			if err := p.Anonymise(cmd.Reason, now); err != nil {
-				return false, err
-			}
-			return true, nil
-		})
-	})
-	if errors.Is(err, person.ErrNotFound) {
-		return ErrPersonNotFound
-	}
-	if err != nil {
-		return fmt.Errorf("anonymise_person: %w", err)
 	}
 	return nil
 }

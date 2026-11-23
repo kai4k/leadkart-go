@@ -131,7 +131,7 @@ func TestAttack_Roles_GrantCeiling(t *testing.T) {
 				body: ports.ReplaceUserPermissionOverridesRequest{Granted: []string{perm}, Revoked: []string{}}, status: http.StatusForbidden, code: "grant_exceeds_authority"})
 	}
 	reserved := []string{p.Meta.TenantAdmin, p.Platform.TenantsView, p.Platform.TenantsCreate, p.Platform.TenantsManage, p.Platform.UsersManage, p.Platform.RolesManage,
-		p.Platform.ImpersonationManage, p.Platform.TenantsOwnership, p.Tenants.Suspend, p.Tenants.Activate, p.Tenants.Delete, p.Users.Anonymise,
+		p.Platform.ImpersonationManage, p.Platform.TenantsOwnership, p.Tenants.Suspend, p.Tenants.Activate, p.Tenants.Delete,
 		p.PlatformLeadCredits.Topup}
 	for _, actor := range []string{"admin", "office", "senior", "sales", "hr", "lead", "custom", "exec"} {
 		for _, perm := range reserved {

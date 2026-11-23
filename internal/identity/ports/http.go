@@ -64,7 +64,7 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		// Every authenticated route runs RequireFreshStamp — JWT signature
 		// + expiry + tenant_id binding + security_stamp freshness check.
 		// A token whose underlying Person has rotated its stamp (via
-		// password/email change, anonymisation, global suspend) fails
+		// password/email change, global suspend) fails
 		// 401 stale_token within ~30s of the rotation, even before the
 		// outbox-driven cascade subscriber has invalidated the cache.
 		auth := authn.RequireFreshStamp(verifier, stampValidator)
@@ -189,13 +189,6 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 			writable(usersUpdate(handleRemoveUserManager(log, a))))
 		mux.Handle("POST /api/v1/users", writable(usersCreate(handleCreateUser(log, a))))
 
-		// Anonymise — DPDP §12 / GDPR Art. 17 right-to-erasure cascade.
-		// Cross-tenant blast radius (one Person ⇒ many Memberships)
-		// gates this on Platform tier per multi-tenancy.md
-		// "SuperUser god-mode" + identity.users.anonymise permission.
-		mux.Handle("POST /api/v1/users/{userId}/anonymise",
-			writable(platform(p.Users.Anonymise)(handleAnonymiseUser(log, a))))
-
 		// Role management — permission-gated per ADR 0036/0068.
 		rolesView := authn.RequirePermission(verifier, stampValidator, p.Roles.View)
 		rolesCreate := authn.RequirePermission(verifier, stampValidator, p.Roles.Create)
@@ -227,7 +220,7 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 			platform(p.Platform.TenantsView)(handleListAllTenants(log, a)))
 		mux.Handle("DELETE /api/v1/platform/tenants/{tenantId}",
 			scopePathOnly(platform(p.Tenants.Delete)(handleHardDeleteTenant(log, a))))
-		// An operator must not suspend, anonymise or edit their own person; composed
+		// An operator must not suspend or edit their own person; composed
 		// INSIDE the platform gate (DenySelfPerson is an inner middleware).
 		notSelfPerson := authn.DenySelfPerson("personId")
 		mux.Handle("GET /api/v1/platform/persons/{personId}",
@@ -246,8 +239,6 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 			platform(p.Platform.UsersManage)(notSelfPerson(handleGlobalSuspendPerson(log, a))))
 		mux.Handle("POST /api/v1/platform/persons/{personId}/lift-global-suspension",
 			platform(p.Platform.UsersManage)(notSelfPerson(handleLiftPersonGlobalSuspension(log, a))))
-		mux.Handle("POST /api/v1/platform/persons/{personId}/anonymise",
-			platform(p.Users.Anonymise)(notSelfPerson(handleAnonymisePerson(log, a))))
 
 		// Impersonation sessions per multi-tenancy.md "Impersonation".
 		// Reason captured ONCE at session creation; subsequent

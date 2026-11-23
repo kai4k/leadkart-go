@@ -2,7 +2,7 @@
 // waits for a second pooled connection, and the one read that makes that
 // possible stays the guard's alone.
 //
-// The guard (global suspension, anonymisation) holds a tenant authority lock and
+// The guard (global suspension) holds a tenant authority lock and
 // the person row while it re-reads the person's memberships across tenants. That
 // read runs on the guard's own transaction: membership.Repository's
 // ListActiveRefsForPersonInTx opens a savepoint, turns the platform scope on,

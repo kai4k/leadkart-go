@@ -37,7 +37,7 @@ import (
 //     RoleRepo.GetByIDs)
 //
 // Cache key includes the security_stamp so any rotation trigger
-// (role grant/revoke, password change, anonymise, global suspend)
+// (role grant/revoke, password change, global suspend)
 // invalidates the entry by changing the key — TTL is just a memory
 // bound. Stale enrichment is bounded by the same security_stamp
 // freshness contract the rest of the authorization surface uses.

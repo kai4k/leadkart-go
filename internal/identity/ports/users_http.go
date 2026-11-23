@@ -461,32 +461,6 @@ func handleCreateUser(log *slog.Logger, a app.Application) http.Handler {
 	})
 }
 
-// ----- AnonymiseUser --------------------------------------------------------
-
-func handleAnonymiseUser(log *slog.Logger, a app.Application) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tid, ok := tenancy.FromContext(r.Context())
-		if !ok || tid == "" {
-			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
-			return
-		}
-		mid, ok := parseUserIDPath(w, r)
-		if !ok {
-			return
-		}
-		var req AnonymiseRequest
-		if !decodeFullBody(w, r, &req) {
-			return
-		}
-		err := a.Commands.AnonymiseUser.Handle(r.Context(), command.AnonymiseUserCommand{
-			TenantID:     tenant.ID(tid),
-			MembershipID: mid,
-			Reason:       req.Reason,
-		})
-		writeUserMutationResult(w, log, r, err)
-	})
-}
-
 // ----- helpers --------------------------------------------------------------
 
 func parseUserIDPath(w http.ResponseWriter, r *http.Request) (membership.ID, bool) {

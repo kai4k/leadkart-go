@@ -33,7 +33,7 @@ func TestSatisfies_DecisionTable(t *testing.T) {
 	}{
 		{"explicit grant", &jwt.Claims{TenantID: tenantA, Permissions: []string{p.Users.View}}, tenantA, p.Users.View, true},
 		{"missing", &jwt.Claims{TenantID: tenantA}, tenantA, p.Users.View, false},
-		{"super user", &jwt.Claims{TenantID: tenantA, IsSuperUser: true}, tenantB, p.Users.Anonymise, true},
+		{"super user", &jwt.Claims{TenantID: tenantA, IsSuperUser: true}, tenantB, p.Users.Unlock, true},
 		{"tenant.admin own tenant", &jwt.Claims{TenantID: tenantA, Permissions: []string{p.Meta.TenantAdmin}}, tenantA, p.Roles.Assign, true},
 		{"tenant.admin other module", &jwt.Claims{TenantID: tenantA, Permissions: []string{p.Meta.TenantAdmin}}, tenantA, p.Crm.Leads.ReadAll, true},
 		{"tenant.admin other tenant", &jwt.Claims{TenantID: tenantA, Permissions: []string{p.Meta.TenantAdmin}}, tenantB, p.Roles.Assign, false},

@@ -23,7 +23,6 @@ func TestImpliedByTenantAdmin(t *testing.T) {
 		{p.Platform.ImpersonationManage, false}, {p.Platform.TenantsOwnership, false},
 		{p.PlatformUnverifiedContacts.Manage, false}, {p.PlatformLeadCredits.Topup, false},
 		{p.Tenants.Suspend, false}, {p.Tenants.Activate, false}, {p.Tenants.Delete, false},
-		{p.Users.Anonymise, false},
 		{"not.a.permission", false}, {"", false},
 	}
 	for _, tc := range cases {
@@ -51,7 +50,6 @@ func TestPlatformEquivalents(t *testing.T) {
 		{p.Tenants.View, []string{p.Platform.TenantsView, p.Platform.TenantsManage}},
 		{p.Tenants.UpdateSettings, []string{p.Platform.TenantsManage}},
 		{p.Crm.Leads.Read, nil},
-		{p.Users.Anonymise, nil},
 		// Impersonation has no tenant-plane twin: no tenant permission maps onto it.
 		{p.Platform.ImpersonationManage, nil},
 		// Ownership has no tenant-plane twin either.
@@ -72,7 +70,7 @@ func TestIsPlatformReserved(t *testing.T) {
 	p := permission.IdentityPermissions
 	for name, want := range map[string]bool{
 		p.Meta.TenantAdmin: true, p.Platform.TenantsManage: true, p.Tenants.Suspend: true,
-		p.Users.Anonymise: true, p.PlatformLeadCredits.Topup: true, p.Platform.ImpersonationManage: true, p.Platform.TenantsOwnership: true,
+		p.PlatformLeadCredits.Topup: true, p.Platform.ImpersonationManage: true, p.Platform.TenantsOwnership: true,
 		p.Users.View: false, p.Crm.Leads.Read: false, "not.a.permission": false, "": false,
 	} {
 		if got := permission.IsPlatformReserved(name); got != want {

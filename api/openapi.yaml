@@ -88,7 +88,7 @@ info:
     `GET /api/v1/platform/lead-credits/balance` (they are gated by tenant permissions;
     the marketplace purchase stays refused), on tenant
     registration, tenant suspend / activate / mark-for-deletion / restore,
-    `GET /api/v1/search`, `POST /api/v1/users/{userId}/anonymise`, and the routes that
+    `GET /api/v1/search`, and the routes that
     act on "the caller": change password, request email change, sessions, own
     activity, and permission-request submit / approve / deny / cancel. Capabilities
     and the permission-request reads stay available.
@@ -240,7 +240,7 @@ paths:
             failed login attempts within [person.LockoutWindow] per
             NIST 800-63B §5.2.2 + ADR 0053. Retry-After header carries
             integer seconds until unlock (RFC 7231 §7.1.3 delta-seconds).
-            An email with no usable account (unknown, deactivated, anonymised, GLOBALLY
+            An email with no usable account (unknown, deactivated, GLOBALLY
             SUSPENDED) locks on the same schedule and answers identically, so 423 does not
             reveal that an account exists (ADR 0068 D12). While locked, even the correct
             password answers 423.
@@ -1340,36 +1340,6 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
-  /api/v1/users/{userId}/anonymise:
-    post:
-      tags: [users]
-      summary: Anonymise a user (DPDP §12 / GDPR Art. 17 right-to-erasure; Platform-only)
-      description: |
-        Cross-tenant blast radius — one Person can hold many Memberships;
-        the cascade is gated on Platform tier per multi-tenancy.md
-        "SuperUser god-mode" + `identity.users.anonymise` permission.
-
-        Requires `identity.users.anonymise` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
-
-        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides, or invisible or line-breaking characters (zero-width space, soft hyphen, word joiner and invisible operators, Hangul fillers, line and paragraph separators, annotation, object-replacement and tag characters, BOM; a zero-width joiner or non-joiner is accepted only INSIDE a word, between two letters or marks): 422 `person_invalid` with `errors{<field>: ["invalid_characters"]}` for `reason`, and nothing is written.
-      parameters:
-        - $ref: '#/components/parameters/XCommandId'
-        - { $ref: '#/components/parameters/UserId' }
-        - $ref: '#/components/parameters/XTenantId'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/AnonymiseRequest' }
-      responses:
-        '429': { $ref: '#/components/responses/TooManyRequests' }
-        '204': { description: User anonymised }
-        '403': { $ref: '#/components/responses/AuthorityForbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { description: "`last_owner_protected` — the person is the only active owner of a tenant; nothing was changed. `person_memberships_changing` — the person's memberships kept changing while the change was checked (a reactivation raced it); nothing was changed, retry", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
-        '422': { $ref: '#/components/responses/Unprocessable' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-
   # ===== ROLES ==========================================================
   /api/v1/roles:
     get:
@@ -1856,32 +1826,6 @@ paths:
         '422': { $ref: '#/components/responses/Unprocessable' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '409': { description: "Conflict with the current state of the resource (see the `error` code)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
-
-  /api/v1/platform/persons/{personId}/anonymise:
-    post:
-      tags: [platform]
-      summary: Anonymise a Person record directly (DPDP §12 / GDPR Art. 17)
-      description: |
-        Requires `identity.users.anonymise` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
-        An operator cannot change their own Person: the caller's own `personId` is refused with 403 `self_modification_forbidden` (super users exempt).
-
-        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides, or invisible or line-breaking characters (zero-width space, soft hyphen, word joiner and invisible operators, Hangul fillers, line and paragraph separators, annotation, object-replacement and tag characters, BOM; a zero-width joiner or non-joiner is accepted only INSIDE a word, between two letters or marks): 422 `person_invalid` with `errors{<field>: ["invalid_characters"]}` for `reason`, and nothing is written.
-      parameters:
-        - $ref: '#/components/parameters/XCommandId'
-        - { $ref: '#/components/parameters/PersonId' }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/AnonymiseRequest' }
-      responses:
-        '429': { $ref: '#/components/responses/TooManyRequests' }
-        '204': { description: Person anonymised }
-        '403': { $ref: '#/components/responses/AuthorityForbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { description: "`last_owner_protected` — the person is the only active owner of a tenant; nothing was changed. `person_memberships_changing` — the person's memberships kept changing while the change was checked (a reactivation raced it); nothing was changed, retry", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
-        '422': { $ref: '#/components/responses/Unprocessable' }
-        '400': { $ref: '#/components/responses/BadRequest' }
 
   /api/v1/platform/persons:
     get:
@@ -4705,7 +4649,7 @@ components:
         Writes are read-only under a foreign header by default: a non-read
         request is 403 `tenant_scope_read_only` unless the route is one of the
         identity writes the operator scope tree uses (users, roles, role
-        permissions, permission overrides, manager changes, anonymise) or a
+        permissions, permission overrides, manager changes) or a
         `/api/v1/tenants/{tenantId}/...` path-tenant route. crm, orders, tasks,
         dispatch and inventory mutations are never accepted under a foreign
         header.
@@ -4841,7 +4785,7 @@ components:
         `error: password_change_required` while the token carries `must_change_password`
         (see the API description; no `WWW-Authenticate`, do not refresh), and an
         impersonation token answers `403 impersonation_not_allowed` on the routes it may
-        not reach (platform plane, tenant lifecycle, search, anonymise, self-service).
+        not reach (platform plane, tenant lifecycle, search, self-service).
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -5893,19 +5837,17 @@ components:
     # ===== Platform ====================================================
     PersonDto:
       type: object
-      required: [id, email, first_name, last_name, is_active, is_anonymised, is_globally_suspended, created_at]
+      required: [id, email, first_name, last_name, is_active, is_globally_suspended, created_at]
       properties:
         id:                       { type: string, format: uuid }
         email:                    { type: string }
         first_name:               { type: string }
         last_name:                { type: string }
         is_active:                { type: boolean }
-        is_anonymised:            { type: boolean }
         is_globally_suspended:    { type: boolean }
         global_suspension_reason: { type: string }
         globally_suspended_at:    { type: string, format: date-time }
         created_at:               { type: string, format: date-time }
-        anonymised_at:            { type: string, format: date-time }
 
     ListAllTenantsResponse:
       type: object
@@ -5940,16 +5882,6 @@ components:
       required: [reason]
       properties:
         reason: { type: string, minLength: 1 }
-
-    AnonymiseRequest:
-      type: object
-      required: [reason]
-      description: |
-        The operator's free-text justification for an irreversible erasure. It is kept on the audit/outbox
-        event (`identity.person_anonymised.v1`, field `reason`) and never logged. It must describe the
-        request (a ticket number, the data-subject request), not contain the erased person's data.
-      properties:
-        reason: { type: string, minLength: 1, description: 'Not blank after trimming (same bound as a global suspension).' }
 
     UpdatePersonProfileRequest:
       type: object

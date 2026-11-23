@@ -52,7 +52,7 @@ func (f e2eFixture) requireImpersonationRefused(t *testing.T, what, method, path
 
 // An impersonation session is refused on every platform-plane route, on the
 // self-service routes that act on "the caller", on tenant registration, the
-// lifecycle commands, omni-search and anonymisation, and NOTHING changes; it is
+// lifecycle commands and omni-search, and NOTHING changes; it is
 // still allowed on ordinary tenant routes, and dead once the session ends.
 func TestE2E_Impersonation_RefusalList_RefusedWithStateUnchangedAndOrdinaryRoutesOpen(t *testing.T) {
 	f := newE2EFixture(t)
@@ -103,7 +103,6 @@ func TestE2E_Impersonation_RefusalList_RefusedWithStateUnchangedAndOrdinaryRoute
 	f.requireImpersonationRefused(t, "platform tenants", http.MethodGet, "/api/v1/platform/tenants", tok, nil)
 	f.requireImpersonationRefused(t, "hard delete a tenant", http.MethodDelete, "/api/v1/platform/tenants/"+tenantA.TenantID, tok, nil)
 	f.requireImpersonationRefused(t, "platform persons", http.MethodGet, "/api/v1/platform/persons", tok, nil)
-	f.requireImpersonationRefused(t, "anonymise a person", http.MethodPost, "/api/v1/platform/persons/"+tenantA.PersonID+"/anonymise", tok, map[string]string{"reason": "reach e2e anonymise"})
 	f.requireImpersonationRefused(t, "marketplace purchase", http.MethodPost, "/api/v1/platform/marketplace/leads/"+someID+"/purchase", tok, map[string]string{})
 	f.requireImpersonationRefused(t, "lead credit top-up", http.MethodPost, "/api/v1/platform/lead-credits/topup", tok, map[string]string{})
 	// The two tenant-plane reads under /platform/ are NOT refused: they read the
@@ -126,7 +125,6 @@ func TestE2E_Impersonation_RefusalList_RefusedWithStateUnchangedAndOrdinaryRoute
 	f.requireImpersonationRefused(t, "suspend the tenant", http.MethodPost, "/api/v1/tenants/"+tenantA.TenantID+"/suspend", tok, ports.SuspendTenantRequest{Reason: "reach e2e suspend"})
 	f.requireImpersonationRefused(t, "mark for deletion", http.MethodPost, "/api/v1/tenants/"+tenantA.TenantID+"/mark-for-deletion", tok, ports.MarkTenantForDeletionRequest{Reason: "reach e2e delete"})
 	f.requireImpersonationRefused(t, "omni-search", http.MethodGet, "/api/v1/search?q=impreach", tok, nil)
-	f.requireImpersonationRefused(t, "anonymise a member", http.MethodPost, "/api/v1/users/"+tenantA.MembershipID+"/anonymise", tok, map[string]string{"reason": "reach e2e anonymise"})
 
 	// State is unchanged: the password still logs in, the tenant is not suspended
 	// or deleted, the owner's refresh session is intact, the session still lives.

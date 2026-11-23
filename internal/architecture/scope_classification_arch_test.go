@@ -30,7 +30,6 @@ var scopeWritableRoutes = []string{
 	"POST /api/v1/roles/{roleId}/permissions/grant",
 	"POST /api/v1/roles/{roleId}/permissions/revoke",
 	"POST /api/v1/users",
-	"POST /api/v1/users/{userId}/anonymise",
 	"POST /api/v1/users/{userId}/deactivate",
 	"POST /api/v1/users/{userId}/reactivate",
 	"POST /api/v1/users/{userId}/roles",

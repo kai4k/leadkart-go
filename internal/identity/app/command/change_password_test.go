@@ -165,14 +165,14 @@ func TestChangePassword_RejectsSameAsCurrent(t *testing.T) {
 	}
 }
 
-func TestChangePassword_AnonymisedPerson_ReturnsIncorrectCurrentPassword(t *testing.T) {
-	// Anonymised Persons surface as "incorrect current password", not
-	// "anonymised", to avoid leaking account state.
+func TestChangePassword_SuspendedPerson_ReturnsIncorrectCurrentPassword(t *testing.T) {
+	// Globally suspended Persons surface as "incorrect current password", not
+	// "suspended", to avoid leaking account state.
 	t.Parallel()
 	currentPlain := "irrelevant"
 	p := newPersonWithPassword(t, currentPlain)
-	if err := p.Anonymise("test reason", testNow); err != nil {
-		t.Fatalf("Anonymise: %v", err)
+	if err := p.GloballySuspend("test reason", testNow); err != nil {
+		t.Fatalf("GloballySuspend: %v", err)
 	}
 	repo := seedPersonRepo(t, p)
 	h := command.NewChangePasswordHandler(repo, refreshtokentest.NewFakeRepository(), tenanttest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })

@@ -92,7 +92,7 @@ func TestOwnersLoader_OnlyTheCompanyOwnerSystemRoleCountsAsOwnership(t *testing.
 // A person LOCKED by failed logins keeps their authority: the lock throttles
 // password sign-in, it is not a suspension, and counting it let anyone who knew
 // an administrator's email lock them out of administering. Deactivated,
-// globally suspended and anonymised persons still cannot act.
+// and globally suspended persons still cannot act.
 func TestMemberFrom_AFailedLoginLockDoesNotRemoveAuthority(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)
@@ -120,10 +120,6 @@ func TestMemberFrom_AFailedLoginLockDoesNotRemoveAuthority(t *testing.T) {
 	if err := suspended.GloballySuspend("test", now); err != nil {
 		t.Fatal(err)
 	}
-	anonymised := newPerson()
-	if err := anonymised.Anonymise("test", now); err != nil {
-		t.Fatal(err)
-	}
 	for _, c := range []struct {
 		name       string
 		p          *person.Person
@@ -132,7 +128,6 @@ func TestMemberFrom_AFailedLoginLockDoesNotRemoveAuthority(t *testing.T) {
 		{"locked by failed logins", locked, true},
 		{"never locked", newPerson(), true},
 		{"globally suspended", suspended, false},
-		{"anonymised", anonymised, false},
 	} {
 		got, _, err := memberFrom(m, []*role.Role{ownerRole}, c.p, now)
 		if err != nil {

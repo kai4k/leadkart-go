@@ -800,7 +800,6 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 				AssignUserManager:              command.NewAssignUserManagerHandler(tx, authorityLock, memberships, roles, persons, now),
 				RemoveUserManager:              command.NewRemoveUserManagerHandler(tx, authorityLock, memberships, roles, persons, now),
 				CreateUser:                     command.NewCreateUserHandler(tx, persons, memberships, tenants, now, newPersonID, newMembershipID).WithAuthority(authorityLock, roles).WithArgonGate(argonGate),
-				AnonymiseUser:                  command.NewAnonymiseUserHandler(personChangeGuard, memberships, persons, now),
 
 				CreateRole:             command.NewCreateRoleHandler(tx, authorityLock, memberships, roles, persons, roleHierarchyEdges, now, newRoleID, newRoleHierarchyEdgeID),
 				UpdateRole:             command.NewUpdateRoleHandler(tx, authorityLock, memberships, roles, persons, now),
@@ -812,7 +811,6 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 
 				GlobalSuspendPerson:        command.NewGlobalSuspendPersonHandler(personChangeGuard, persons, now),
 				LiftPersonGlobalSuspension: command.NewLiftPersonGlobalSuspensionHandler(persons, now),
-				AnonymisePerson:            command.NewAnonymisePersonHandler(personChangeGuard, persons, now),
 				UpdatePersonProfile:        command.NewUpdatePersonProfileHandler(persons, now),
 				HardDeleteTenant:           command.NewHardDeleteTenantHandler(tenants, memberships, tx, now),
 

@@ -87,7 +87,7 @@ type tenantsPermissions struct {
 	View, Update, UpdateSettings, Suspend, Activate, Delete string
 }
 type usersPermissions struct {
-	View, Create, Update, Deactivate, Reactivate, Unlock, Anonymise, UpdatePermissions string
+	View, Create, Update, Deactivate, Reactivate, Unlock, UpdatePermissions string
 }
 type rolesPermissions struct {
 	// Approve is the manager-approval permission introduced in ADR 0055.
@@ -292,7 +292,6 @@ var IdentityPermissions = struct {
 		Deactivate:        "identity.users.deactivate",
 		Reactivate:        "identity.users.reactivate",
 		Unlock:            "identity.users.unlock",
-		Anonymise:         "identity.users.anonymise",
 		UpdatePermissions: "identity.users.update_permissions",
 	},
 	Roles: rolesPermissions{
@@ -395,7 +394,7 @@ func allNames() []string {
 		p.Tenants.Suspend, p.Tenants.Activate, p.Tenants.Delete,
 		p.Users.View, p.Users.Create, p.Users.Update,
 		p.Users.Deactivate, p.Users.Reactivate, p.Users.Unlock,
-		p.Users.Anonymise, p.Users.UpdatePermissions,
+		p.Users.UpdatePermissions,
 		p.Roles.View, p.Roles.Create, p.Roles.Update, p.Roles.Delete,
 		p.Roles.Assign, p.Roles.Revoke, p.Roles.Approve,
 

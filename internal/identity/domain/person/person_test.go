@@ -76,9 +76,6 @@ func TestNewPerson_AcceptsValid(t *testing.T) {
 	if !p.IsActive() {
 		t.Error("new Person should default to IsActive=true")
 	}
-	if p.IsAnonymised() {
-		t.Error("new Person should not be anonymised")
-	}
 	if !p.CreatedAt().Equal(testNow) {
 		t.Errorf("CreatedAt = %v", p.CreatedAt())
 	}
@@ -255,21 +252,6 @@ func TestUpdateProfile_RejectsEmptyAndOverlong(t *testing.T) {
 	}
 }
 
-func TestUpdateProfile_RefusedOnAnonymisedPerson(t *testing.T) {
-	t.Parallel()
-	p := newPerson(t)
-	_ = p.Anonymise("test reason", testNow) // arch-test:ignore-err - test fixture setup
-	_ = p.PullEvents()
-
-	err := p.UpdateProfile("Alice", "Sharma", testNow)
-	if err == nil {
-		t.Fatal("expected error updating anonymised person")
-	}
-	if !errors.Is(err, person.ErrInvalid) {
-		t.Errorf("expected errors.Is(_, ErrInvalid), got %v", err)
-	}
-}
-
 // ----- Password reset (token flow) ------------------------------------------
 
 const validResetHash = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789" // 64 hex chars
@@ -345,15 +327,9 @@ func TestRequestPasswordReset_RejectsZeroHashAndZeroTTL(t *testing.T) {
 	}
 }
 
-func TestRequestPasswordReset_RejectedOnAnonymisedAndSuspended(t *testing.T) {
+func TestRequestPasswordReset_RejectedWhenSuspended(t *testing.T) {
 	t.Parallel()
 	h := mustResetHash(t, validResetHash)
-
-	pAnon := newPerson(t)
-	_ = pAnon.Anonymise("test reason", testNow) // arch-test:ignore-err - test fixture setup
-	if err := pAnon.RequestPasswordReset("plaintext", h, time.Hour, testNow); !errors.Is(err, person.ErrInvalid) {
-		t.Errorf("anonymised: expected ErrInvalid, got %v", err)
-	}
 
 	pSusp := newPerson(t)
 	_ = pSusp.GloballySuspend("fraud", testNow) // arch-test:ignore-err - test fixture setup
@@ -810,15 +786,6 @@ func TestGloballySuspend_RejectedOnDifferentReason(t *testing.T) {
 	}
 }
 
-func TestGloballySuspend_RejectedOnAnonymisedPerson(t *testing.T) {
-	t.Parallel()
-	p := newPerson(t)
-	_ = p.Anonymise("test reason", testNow) // arch-test:ignore-err - test fixture setup
-	if err := p.GloballySuspend("fraud", testNow); !errors.Is(err, person.ErrInvalid) {
-		t.Errorf("expected ErrInvalid on anonymised person, got %v", err)
-	}
-}
-
 func TestLiftGlobalSuspension_ClearsFlagAndEmitsEvent(t *testing.T) {
 	t.Parallel()
 	p := newPerson(t)
@@ -859,58 +826,6 @@ func TestLiftGlobalSuspension_NoOp_WhenNotSuspended(t *testing.T) {
 	}
 }
 
-// ----- Anonymise (DPDP/GDPR) ------------------------------------------------
-
-func TestAnonymise_MarksAnonymisedAndScrubsFields(t *testing.T) {
-	t.Parallel()
-
-	p := newPerson(t)
-	_ = p.PullEvents()
-
-	if err := p.Anonymise("test reason", testNow); err != nil {
-		t.Fatalf("Anonymise: %v", err)
-	}
-	if !p.IsAnonymised() {
-		t.Error("IsAnonymised() = false after Anonymise()")
-	}
-	if p.IsActive() {
-		t.Error("IsActive() should flip to false on anonymisation")
-	}
-	if p.FirstName() != "anonymised" || p.LastName() != "anonymised" {
-		t.Errorf("name not scrubbed: first=%q last=%q", p.FirstName(), p.LastName())
-	}
-	if !p.AnonymisedAt().Equal(testNow) {
-		t.Errorf("AnonymisedAt = %v", p.AnonymisedAt())
-	}
-
-	events := p.PullEvents()
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	if _, ok := events[0].(person.AnonymisedEvent); !ok {
-		t.Errorf("event[0] = %T, want AnonymisedEvent", events[0])
-	}
-}
-
-func TestAnonymise_Idempotent(t *testing.T) {
-	t.Parallel()
-
-	p := newPerson(t)
-	_ = p.PullEvents()
-
-	if err := p.Anonymise("test reason", testNow); err != nil {
-		t.Fatalf("first Anonymise: %v", err)
-	}
-	_ = p.PullEvents()
-
-	if err := p.Anonymise("test reason", testNow); err != nil {
-		t.Fatalf("second Anonymise: %v", err)
-	}
-	if got := p.PullEvents(); len(got) != 0 {
-		t.Errorf("expected 0 events on idempotent anonymise, got %d", len(got))
-	}
-}
-
 // ----- Re-hydration --------------------------------------------------------
 
 func TestUnmarshalFromDB_DoesNotEmitEvents(t *testing.T) {
@@ -924,7 +839,6 @@ func TestUnmarshalFromDB_DoesNotEmitEvents(t *testing.T) {
 		PasswordHash:  mustHash(t),
 		SecurityStamp: stamp,
 		IsActive:      true,
-		IsAnonymised:  false,
 		CreatedAt:     time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
 	})
 	if p == nil {
@@ -1006,30 +920,6 @@ func TestRotateSecurityStamp_EveryCallRotatesAgain(t *testing.T) {
 	}
 }
 
-func TestAnonymise_RequiresAReasonAndCarriesItOnTheEvent(t *testing.T) {
-	t.Parallel()
-	p := newPerson(t)
-	_ = p.PullEvents()
-	for _, blank := range []string{"", "   ", "\t\n"} {
-		if err := p.Anonymise(blank, testNow); !errors.Is(err, person.ErrInvalid) {
-			t.Errorf("Anonymise(%q) = %v, want ErrInvalid", blank, err)
-		}
-	}
-	if p.IsAnonymised() || len(p.PullEvents()) != 0 {
-		t.Fatal("a refused anonymisation changed the person or emitted an event")
-	}
-	if err := p.Anonymise("data-subject erasure request #4711", testNow); err != nil {
-		t.Fatal(err)
-	}
-	evs := p.PullEvents()
-	if len(evs) != 1 {
-		t.Fatalf("events = %d", len(evs))
-	}
-	if ev, ok := evs[0].(person.AnonymisedEvent); !ok || ev.Reason != "data-subject erasure request #4711" {
-		t.Errorf("event = %#v, want AnonymisedEvent carrying the reason", evs[0])
-	}
-}
-
 // ----- MaySignIn (fix round 13, item 1) ---------------------------------------
 
 func TestMaySignIn_IsTheOnePredicate(t *testing.T) {
@@ -1046,12 +936,9 @@ func TestMaySignIn_IsTheOnePredicate(t *testing.T) {
 	}{
 		"active":                       {func(*person.Snapshot) {}, true},
 		"deactivated":                  {func(s *person.Snapshot) { s.IsActive = false }, false},
-		"anonymised":                   {func(s *person.Snapshot) { s.IsAnonymised = true }, false},
 		"globally suspended":           {func(s *person.Snapshot) { s.IsGloballySuspended = true }, false},
 		"suspended and deactivated":    {func(s *person.Snapshot) { s.IsGloballySuspended, s.IsActive = true, false }, false},
-		"anonymised and suspended":     {func(s *person.Snapshot) { s.IsAnonymised, s.IsGloballySuspended = true, true }, false},
-		"deactivated and anonymised":   {func(s *person.Snapshot) { s.IsAnonymised, s.IsActive = true, false }, false},
-		"every terminal state at once": {func(s *person.Snapshot) { s.IsAnonymised, s.IsGloballySuspended, s.IsActive = true, true, false }, false},
+		"every terminal state at once": {func(s *person.Snapshot) { s.IsGloballySuspended, s.IsActive = true, false }, false},
 	} {
 		if got := snap(tc.mutate).MaySignIn(); got != tc.want {
 			t.Errorf("%s: MaySignIn() = %v, want %v", name, got, tc.want)
@@ -1128,7 +1015,7 @@ func TestRecordRejectedPasswordResetAttempt(t *testing.T) {
 	}
 }
 
-func TestGloballySuspendAndAnonymise_ReasonsAreStoredTrimmed(t *testing.T) {
+func TestGloballySuspend_ReasonsAreStoredTrimmed(t *testing.T) {
 	t.Parallel()
 	p := newPerson(t)
 	_ = p.PullEvents()
@@ -1142,14 +1029,6 @@ func TestGloballySuspendAndAnonymise_ReasonsAreStoredTrimmed(t *testing.T) {
 		t.Errorf("a replay with different padding was refused: %v", err)
 	}
 	_ = p.PullEvents()
-	q := newPerson(t)
-	_ = q.PullEvents()
-	if err := q.Anonymise("  erasure request #4711  ", testNow); err != nil {
-		t.Fatal(err)
-	}
-	if ev, ok := q.PullEvents()[0].(person.AnonymisedEvent); !ok || ev.Reason != "erasure request #4711" {
-		t.Errorf("anonymise event = %#v, want the reason trimmed", ev)
-	}
 }
 
 // ----- names are trimmed, measured after trimming ---------------------------------

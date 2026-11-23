@@ -345,7 +345,7 @@ func (h GetUserOverridesHandler) Handle(ctx context.Context, q GetUserOverridesQ
 		return UserOverridesView{}, fmt.Errorf("get_user_overrides: load person %s: %w", m.PersonID(), err)
 	}
 	now := h.now()
-	target, err := authority.MemberOf(m, roles, now, authority.NewPersonState(p.IsActive(), p.IsGloballySuspended(), p.IsAnonymised()))
+	target, err := authority.MemberOf(m, roles, now, authority.NewPersonState(p.IsActive(), p.IsGloballySuspended()))
 	if err != nil {
 		// A member whose roles cannot be loaded consistently has no decidable rank:
 		// show nothing rather than guess.

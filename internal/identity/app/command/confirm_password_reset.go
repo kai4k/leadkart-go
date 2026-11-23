@@ -95,7 +95,7 @@ func NewConfirmPasswordResetHandler(persons person.Repository, families refresht
 //  2. Compute hash of presented plaintext.
 //  3. Lookup Person by hash. Not found → ErrResetTokenInvalid (NEVER
 //     leak which arm matched).
-//  4. Reject a person who may not sign in (anonymised, deactivated, globally
+//  4. Reject a person who may not sign in (deactivated, globally
 //     suspended: [person.Person.MaySignIn], the predicate every path asks).
 //  5. Validate the token's own state FIRST, before any password work: an expired
 //     token is cleared (persisted) and answers ErrResetTokenInvalid whatever the

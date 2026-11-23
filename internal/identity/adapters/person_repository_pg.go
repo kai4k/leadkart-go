@@ -426,7 +426,6 @@ func insertPersonRow(ctx context.Context, q *db.Queries, p *person.Person) error
 		PasswordHash:           p.PasswordHash().String(),
 		SecurityStamp:          pgconv.PgUUID(stampUUID),
 		IsActive:               p.IsActive(),
-		IsAnonymised:           p.IsAnonymised(),
 		CreatedAt:              pgconv.PgRequiredTimestamp(p.CreatedAt()),
 		IsGloballySuspended:    p.IsGloballySuspended(),
 		GlobalSuspensionReason: p.GlobalSuspensionReason(),
@@ -509,8 +508,6 @@ func persistPerson(ctx context.Context, q *db.Queries, p *person.Person) error {
 		PasswordHash:           p.PasswordHash().String(),
 		SecurityStamp:          pgconv.PgUUID(stampUUID),
 		IsActive:               p.IsActive(),
-		IsAnonymised:           p.IsAnonymised(),
-		AnonymisedAt:           pgconv.PgTimestamp(p.AnonymisedAt()),
 		IsGloballySuspended:    p.IsGloballySuspended(),
 		GlobalSuspensionReason: p.GlobalSuspensionReason(),
 		GloballySuspendedAt:    pgconv.PgTimestamp(p.GloballySuspendedAt()),
@@ -554,8 +551,7 @@ func rowToPerson(row db.IdentityPerson) (*person.Person, error) {
 		return nil, fmt.Errorf("person repo: hydrate email %q: %w", row.Email, err)
 	}
 	hash, err := person.NewPasswordHash(row.PasswordHash)
-	if err != nil && !row.IsAnonymised {
-		// Anonymised rows store an empty hash by design; all others must round-trip.
+	if err != nil {
 		return nil, fmt.Errorf("person repo: hydrate password_hash: %w", err)
 	}
 	stamp, err := person.SecurityStampFromString(pgconv.UUIDFromPg(row.SecurityStamp).String())
@@ -570,7 +566,6 @@ func rowToPerson(row db.IdentityPerson) (*person.Person, error) {
 		PasswordHash:           hash,
 		SecurityStamp:          stamp,
 		IsActive:               row.IsActive,
-		IsAnonymised:           row.IsAnonymised,
 		IsGloballySuspended:    row.IsGloballySuspended,
 		GlobalSuspensionReason: row.GlobalSuspensionReason,
 		GloballySuspendedAt:    pgconv.TimeFromPg(row.GloballySuspendedAt),
@@ -579,7 +574,6 @@ func rowToPerson(row db.IdentityPerson) (*person.Person, error) {
 		LockedUntil:            pgconv.TimeFromPg(row.LockedUntil),
 		LastFailedLoginAt:      pgconv.TimeFromPg(row.LastFailedLoginAt),
 		CreatedAt:              pgconv.TimeFromPg(row.CreatedAt),
-		AnonymisedAt:           pgconv.TimeFromPg(row.AnonymisedAt),
 	}
 	if row.PasswordResetTokenHash != nil {
 		resetHash, herr := person.NewPasswordResetTokenHash(*row.PasswordResetTokenHash)

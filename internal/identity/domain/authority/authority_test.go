@@ -143,7 +143,7 @@ func TestPolicy_DecisionTable(t *testing.T) {
 		{"owner confers reserved", aOwner.MayChangeOverrides(user, authority.Overrides{Granted: grants(p.Platform.TenantsManage)}), authority.ErrGrantExceedsAuthority},
 		{"super confers reserved", aSuper.MayChangeOverrides(user, authority.Overrides{Granted: grants(p.Platform.TenantsManage)}), nil},
 		{"operator confers tenant.admin", aOp.MayChangeOverrides(user, authority.Overrides{Granted: grants(p.Meta.TenantAdmin)}), authority.ErrOwnershipAuthorityRequired},
-		{"operator confers anonymise", aOp.MayChangeOverrides(user, authority.Overrides{Granted: grants(p.Users.Anonymise)}), authority.ErrGrantExceedsAuthority},
+		{"operator confers tenant suspend", aOp.MayChangeOverrides(user, authority.Overrides{Granted: grants(p.Tenants.Suspend)}), authority.ErrGrantExceedsAuthority},
 		{"impersonation confers tenant.admin", aImp.MayChangeOverrides(user, authority.Overrides{Granted: grants(p.Meta.TenantAdmin)}), authority.ErrGrantExceedsAuthority},
 		{"impersonation confers crm", aImp.MayChangeOverrides(user, authority.Overrides{Granted: grants(p.Crm.Leads.Read)}), nil},
 		{"zero confers", zero.MayChangeOverrides(user, authority.Overrides{}), authority.ErrNoAuthority},
@@ -280,11 +280,11 @@ func grants(names ...string) []authority.Override {
 }
 
 func activePerson() authority.PersonState {
-	return authority.NewPersonState(true, false, false)
+	return authority.NewPersonState(true, false)
 }
 
 func suspendedPerson() authority.PersonState {
-	return authority.NewPersonState(true, true, false)
+	return authority.NewPersonState(true, true)
 }
 
 // mkMemberOv builds an active member who already holds the given overrides

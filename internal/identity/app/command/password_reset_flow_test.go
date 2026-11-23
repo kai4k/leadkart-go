@@ -256,35 +256,8 @@ func TestConfirmPasswordReset_LookupError_Wrapped(t *testing.T) {
 	}
 }
 
-// TestConfirmPasswordReset_AnonymisedPerson_ReturnsTokenInvalid — anonymised
-// Persons surface as token-invalid (no account-state disclosure).
-func TestConfirmPasswordReset_AnonymisedPerson_ReturnsTokenInvalid(t *testing.T) {
-	t.Parallel()
-	// Mint a real reset token, then anonymise before confirm.
-	addr, _ := email.New("alice@example.test")
-	p := newPersonWithPassword(t, "current-pw")
-	repo := newResettableRepo(t, p)
-	if err := command.NewRequestPasswordResetHandler(repo, func() time.Time { return testNow }).Handle(
-		t.Context(), command.RequestPasswordResetCommand{Email: addr}); err != nil {
-		t.Fatalf("Request: %v", err)
-	}
-	rawToken := repo.emailRequestedToken(t)
-	if err := p.Anonymise("test reason", testNow); err != nil {
-		t.Fatalf("Anonymise: %v", err)
-	}
-
-	confirm := command.NewConfirmPasswordResetHandler(repo, refreshtokentest.NewFakeRepository(), membershiptest.NewFakeRepository(), tenanttest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
-	err := confirm.Handle(t.Context(), command.ConfirmPasswordResetCommand{
-		RawToken:    rawToken,
-		NewPassword: "Tr0ub4dor&3-strong",
-	})
-	if !errors.Is(err, command.ErrResetTokenInvalid) {
-		t.Fatalf("err = %v, want ErrResetTokenInvalid", err)
-	}
-}
-
-// TestConfirmPasswordReset_GloballySuspendedPerson_ReturnsTokenInvalid — like
-// the anonymised arm.
+// TestConfirmPasswordReset_GloballySuspendedPerson_ReturnsTokenInvalid — a
+// suspended person surfaces as token-invalid (no account-state disclosure).
 func TestConfirmPasswordReset_GloballySuspendedPerson_ReturnsTokenInvalid(t *testing.T) {
 	t.Parallel()
 	addr, _ := email.New("alice@example.test")
@@ -467,30 +440,8 @@ func TestRequestPasswordReset_LookupError_Wrapped(t *testing.T) {
 	}
 }
 
-// TestRequestPasswordReset_AnonymisedPerson_SilentSuccess — no token, no event.
-func TestRequestPasswordReset_AnonymisedPerson_SilentSuccess(t *testing.T) {
-	t.Parallel()
-	addr, _ := email.New("alice@example.test")
-	p := newPersonWithPassword(t, "current-pw")
-	if err := p.Anonymise("test reason", testNow); err != nil {
-		t.Fatalf("Anonymise: %v", err)
-	}
-	repo := newResettableRepo(t, p)
-
-	h := command.NewRequestPasswordResetHandler(repo, func() time.Time { return testNow })
-	if err := h.Handle(t.Context(), command.RequestPasswordResetCommand{Email: addr}); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	if got := len(repo.drainedEvents); got != 0 {
-		t.Errorf("drained events = %d, want 0 (silent — anonymised)", got)
-	}
-	if !p.PendingPasswordReset().IsZero() {
-		t.Error("expected NO pending reset on anonymised Person")
-	}
-}
-
-// TestRequestPasswordReset_GloballySuspendedPerson_SilentSuccess — like the
-// anonymised arm.
+// TestRequestPasswordReset_GloballySuspendedPerson_SilentSuccess — no token,
+// no event.
 func TestRequestPasswordReset_GloballySuspendedPerson_SilentSuccess(t *testing.T) {
 	t.Parallel()
 	addr, _ := email.New("alice@example.test")

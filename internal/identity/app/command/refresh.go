@@ -269,7 +269,7 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 		return RefreshResult{}, fmt.Errorf("refresh: resolve person: %w", err)
 	}
 	if !p.MaySignIn() {
-		// Person was deactivated, anonymised or globally suspended AFTER family
+		// Person was deactivated or globally suspended AFTER family
 		// creation (a suspension's cascade may lag the next refresh): kill the
 		// family + reject, so the silent refresh never mints a token for them.
 		_ = h.families.UpdateByID(ctx, family.ID(), func(f *refreshtoken.Family) (bool, error) {

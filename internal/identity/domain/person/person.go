@@ -13,7 +13,6 @@
 //   - [PasswordHash] + [SecurityStamp]: credential VOs (defined in
 //     credential.go in this package).
 //   - IsActive: rare global suspension (compliance/fraud/operator action).
-//   - IsAnonymised: DPDP/GDPR right-to-erasure terminal state.
 //
 // Per-tenant context (Status, RoleAssignments, Designation, ReportsTo,
 // JoinedAt) lives on [TenantMembership] in the sibling package.
@@ -71,7 +70,6 @@ type Person struct {
 	passwordHash           PasswordHash
 	securityStamp          SecurityStamp
 	isActive               bool
-	isAnonymised           bool
 	isGloballySuspended    bool                 // rare global ban — compliance / fraud / cross-tenant abuse
 	globalSuspensionReason string               // populated when isGloballySuspended; cleared on Lift
 	globallySuspendedAt    time.Time            // zero unless suspended; reset on Lift
@@ -82,7 +80,6 @@ type Person struct {
 	lockedUntil            time.Time            // zero unless locked + LockedUntil > now
 	lastFailedLoginAt      time.Time            // drives the sliding-window reset
 	createdAt              time.Time
-	anonymisedAt           time.Time
 	events                 []Event
 }
 
@@ -132,7 +129,6 @@ func New(id ID, e email.Address, firstName, lastName string, passwordHash Passwo
 		passwordHash:  passwordHash,
 		securityStamp: NewSecurityStamp(),
 		isActive:      true,
-		isAnonymised:  false,
 		createdAt:     now,
 	}
 	p.recordEvent(CreatedEvent{
@@ -174,7 +170,6 @@ type Snapshot struct {
 	PasswordHash                PasswordHash
 	SecurityStamp               SecurityStamp
 	IsActive                    bool
-	IsAnonymised                bool
 	IsGloballySuspended         bool
 	GlobalSuspensionReason      string
 	GloballySuspendedAt         time.Time
@@ -189,7 +184,6 @@ type Snapshot struct {
 	LockedUntil                 time.Time
 	LastFailedLoginAt           time.Time
 	CreatedAt                   time.Time
-	AnonymisedAt                time.Time
 }
 
 // UnmarshalFromDB re-hydrates a Person from persistence. Used ONLY by
@@ -203,7 +197,6 @@ func UnmarshalFromDB(s Snapshot) *Person {
 		passwordHash:           s.PasswordHash,
 		securityStamp:          s.SecurityStamp,
 		isActive:               s.IsActive,
-		isAnonymised:           s.IsAnonymised,
 		isGloballySuspended:    s.IsGloballySuspended,
 		globalSuspensionReason: s.GlobalSuspensionReason,
 		globallySuspendedAt:    s.GloballySuspendedAt,
@@ -212,7 +205,6 @@ func UnmarshalFromDB(s Snapshot) *Person {
 		lockedUntil:            s.LockedUntil,
 		lastFailedLoginAt:      s.LastFailedLoginAt,
 		createdAt:              s.CreatedAt,
-		anonymisedAt:           s.AnonymisedAt,
 	}
 	if !s.PasswordResetTokenHash.IsZero() {
 		p.pendingPasswordReset = PendingPasswordReset{
@@ -252,29 +244,22 @@ func (p *Person) PasswordHash() PasswordHash { return p.passwordHash }
 // this; subsequent requests validate against the stored stamp.
 func (p *Person) SecurityStamp() SecurityStamp { return p.securityStamp }
 
-// IsActive reports whether the Person can authenticate. False after global
-// suspension or anonymisation.
+// IsActive reports whether the Person is active. A person is only ever made
+// inactive or active again; nothing is deleted.
 func (p *Person) IsActive() bool { return p.isActive }
 
-// IsAnonymised reports whether DPDP/GDPR right-to-erasure has been applied.
-// Anonymised Persons are terminal — never re-activate.
-func (p *Person) IsAnonymised() bool { return p.isAnonymised }
-
-// MaySignIn is THE predicate for "this person may be given a session": active,
-// not anonymised and not globally suspended. Login (before the verify and again
+// MaySignIn is THE predicate for "this person may be given a session": active
+// and not globally suspended. Login (before the verify and again
 // under the session insert's lock), refresh, the password-reset request and the
 // reset confirm all ask it, so a state added here cannot be forgotten on one path
 // (a suspended person once signed in again for exactly that reason). Everything
 // that answers "no" does so exactly like an unknown email on the anonymous routes.
 func (p *Person) MaySignIn() bool {
-	return p.isActive && !p.isAnonymised && !p.isGloballySuspended
+	return p.isActive && !p.isGloballySuspended
 }
 
 // CreatedAt returns the registration timestamp.
 func (p *Person) CreatedAt() time.Time { return p.createdAt }
-
-// AnonymisedAt returns the anonymisation timestamp; zero if not anonymised.
-func (p *Person) AnonymisedAt() time.Time { return p.anonymisedAt }
 
 // IsGloballySuspended reports whether the Person is globally banned
 // (rare — compliance, fraud, cross-tenant abuse). Distinct from
@@ -381,9 +366,7 @@ func (p *Person) RotateSecurityStamp(reason string, now time.Time) error {
 // UpdateProfile changes the Person's display name (FirstName + LastName).
 //
 // Validation mirrors [New]: both fields required, trimmed-non-empty, capped
-// at nameMaxLen. Refused on anonymised Persons (DPDP Art. 17 cascade
-// already replaced the names with "anonymised"; re-personalising would
-// undo the erasure). No-op when both fields equal current values
+// at nameMaxLen. No-op when both fields equal current values
 // (idempotent — second call with same values emits no event).
 //
 // Emits [ProfileUpdatedEvent] with OLD + NEW values for audit /
@@ -393,9 +376,6 @@ func (p *Person) RotateSecurityStamp(reason string, now time.Time) error {
 // boundary per `security.md` "SecurityStamp rotation triggers" (only
 // password / role / permission / email / logout-all rotate).
 func (p *Person) UpdateProfile(firstName, lastName string, now time.Time) error {
-	if p.isAnonymised {
-		return fmt.Errorf("%w: cannot update profile of anonymised person", ErrInvalid)
-	}
 	// A full replace re-sends the stored values: a value equal to the stored one
 	// (as stored, or once both are trimmed: a name saved before names were trimmed)
 	// is unchanged and never re-checked, so an untouched save is always accepted.
@@ -457,7 +437,6 @@ func (p *Person) UpdateProfile(firstName, lastName string, now time.Time) error 
 // recommends 1h for high-traffic SaaS, up to 24h for low-traffic B2B.
 //
 // Rejected on:
-//   - Anonymised Person (cannot reset; the credential is gone)
 //   - Globally-suspended Person (no path back via self-service reset
 //     during suspension; admin must lift first)
 //
@@ -487,9 +466,6 @@ func (p *Person) RequestPasswordReset(plaintextToken string, tokenHash PasswordR
 	}
 	if ttl <= 0 {
 		return fmt.Errorf("%w: reset ttl must be positive (got %v)", ErrInvalid, ttl)
-	}
-	if p.isAnonymised {
-		return fmt.Errorf("%w: cannot reset password for anonymised person", ErrInvalid)
 	}
 	if p.isGloballySuspended {
 		return fmt.Errorf("%w: cannot reset password while globally suspended", ErrInvalid)
@@ -539,7 +515,7 @@ func (p *Person) RequestPasswordReset(plaintextToken string, tokenHash PasswordR
 //     as expired so attackers can't distinguish "wrong token" from
 //     "expired token" via timing.
 //   - Expired (now > expiresAt at call site).
-//   - Anonymised / globally-suspended Person — same as Request gates.
+//   - Globally-suspended Person — same as Request gates.
 //   - Zero newHash.
 //
 // Idempotency: NOT idempotent. Each successful call rotates the
@@ -550,9 +526,6 @@ func (p *Person) ConfirmPasswordReset(presentedHash PasswordResetTokenHash, newH
 	}
 	if presentedHash.IsZero() {
 		return fmt.Errorf("%w: presented reset token hash required", ErrInvalid)
-	}
-	if p.isAnonymised {
-		return fmt.Errorf("%w: cannot reset password for anonymised person", ErrInvalid)
 	}
 	if p.isGloballySuspended {
 		return fmt.Errorf("%w: cannot reset password while globally suspended", ErrInvalid)
@@ -670,7 +643,6 @@ func (p *Person) CancelPasswordReset(reason string, now time.Time) error {
 //   - ttl positive
 //
 // Rejected on:
-//   - Anonymised Person (terminal — email is the FK; cannot rebind)
 //   - Globally-suspended Person (no path forward without operator lift)
 //
 // Does NOT rotate SecurityStamp — change hasn't applied yet, only
@@ -700,9 +672,6 @@ func (p *Person) RequestEmailChange(newEmail email.Address, plaintextToken strin
 	}
 	if ttl <= 0 {
 		return fmt.Errorf("%w: email change ttl must be positive (got %v)", ErrInvalid, ttl)
-	}
-	if p.isAnonymised {
-		return fmt.Errorf("%w: cannot change email of anonymised person", ErrInvalid)
 	}
 	if p.isGloballySuspended {
 		return fmt.Errorf("%w: cannot change email while globally suspended", ErrInvalid)
@@ -751,15 +720,12 @@ func (p *Person) RequestEmailChange(newEmail email.Address, plaintextToken strin
 //     within the window — same shape as ConfirmPasswordReset).
 //   - Expired (defensive cleanup: pending cleared so subsequent calls
 //     see "no pending" rather than re-rejecting on expiry).
-//   - Anonymised / globally-suspended.
+//   - Globally-suspended.
 //
 // NOT idempotent — single-use token; second call returns "no pending".
 func (p *Person) ConfirmEmailChange(presentedHash EmailChangeTokenHash, now time.Time) error {
 	if presentedHash.IsZero() {
 		return fmt.Errorf("%w: presented email change token hash required", ErrInvalid)
-	}
-	if p.isAnonymised {
-		return fmt.Errorf("%w: cannot change email of anonymised person", ErrInvalid)
 	}
 	if p.isGloballySuspended {
 		return fmt.Errorf("%w: cannot change email while globally suspended", ErrInvalid)
@@ -813,8 +779,8 @@ func (p *Person) CancelEmailChange(reason string, now time.Time) error {
 
 // GloballySuspend marks the Person as globally banned across every
 // tenant. Rare action — compliance violation, fraud, cross-tenant
-// abuse. Distinct from [Person.Anonymise] (irreversible PII scrub)
-// and Membership.Deactivate (per-tenant; Person can still log into
+// abuse. Distinct from
+// Membership.Deactivate (per-tenant; Person can still log into
 // other tenants).
 //
 // Effects:
@@ -826,8 +792,6 @@ func (p *Person) CancelEmailChange(reason string, now time.Time) error {
 // reason MUST be non-empty (audit requirement). Idempotent only when
 // reason matches existing suspension; rejected on conflicting reason
 // (audit-trail integrity).
-//
-// Rejected if Person is anonymised (terminal — already scrubbed).
 func (p *Person) GloballySuspend(reason string, now time.Time) error {
 	reason = strings.TrimSpace(reason) // stored and emitted trimmed
 	if reason == "" {
@@ -835,9 +799,6 @@ func (p *Person) GloballySuspend(reason string, now time.Time) error {
 	}
 	if err := humantext.CheckChanged("reason", p.globalSuspensionReason, reason); err != nil { // a replay of the stored reason stays idempotent
 		return fmt.Errorf("%w: %w", ErrInvalid, err)
-	}
-	if p.isAnonymised {
-		return fmt.Errorf("%w: cannot suspend anonymised person", ErrInvalid)
 	}
 	if p.isGloballySuspended {
 		if strings.TrimSpace(p.globalSuspensionReason) == reason { // a reason stored before trimming still matches
@@ -873,47 +834,6 @@ func (p *Person) LiftGlobalSuspension(now time.Time) error {
 	p.recordEvent(GlobalSuspensionLiftedEvent{
 		PersonID: p.id,
 		At:       now.UTC(),
-	})
-	return nil
-}
-
-// Anonymise scrubs PII per DPDP Act 2023 §12 / GDPR Art. 17 right-to-erasure.
-//
-// Effects:
-//   - First + last names replaced with literal "anonymised".
-//   - Email kept (FK integrity); upstream caller may have already replaced.
-//   - IsActive flipped to false.
-//   - IsAnonymised set to true.
-//   - SecurityStamp rotated (invalidates outstanding JWTs).
-//   - AnonymisedAt timestamp recorded.
-//
-// Idempotent — second call on already-anonymised Person is a no-op.
-//
-// NOTE: This is the aggregate-level scrub. A separate orchestrator
-// fans out [AnonymisedEvent] to other modules so they scrub their own
-// PII (CRM lead notes, Tasks comments, etc.).
-func (p *Person) Anonymise(reason string, now time.Time) error {
-	reason = strings.TrimSpace(reason) // emitted trimmed
-	if reason == "" {
-		return fmt.Errorf("%w: anonymisation reason required for audit", ErrInvalid)
-	}
-	if err := humantext.Check("reason", reason); err != nil {
-		return fmt.Errorf("%w: %w", ErrInvalid, err)
-	}
-	if p.isAnonymised {
-		return nil
-	}
-	now = now.UTC()
-	p.firstName = "anonymised"
-	p.lastName = "anonymised"
-	p.isActive = false
-	p.isAnonymised = true
-	p.anonymisedAt = now
-	p.securityStamp = NewSecurityStamp()
-	p.recordEvent(AnonymisedEvent{
-		PersonID: p.id,
-		Reason:   reason,
-		At:       now,
 	})
 	return nil
 }

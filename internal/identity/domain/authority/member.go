@@ -40,8 +40,8 @@ type Member struct {
 type PersonState struct{ canAct bool }
 
 // NewPersonState derives the state from the person's facts: active (not
-// deactivated), globally suspended, anonymised. The person can act only when
-// active, not suspended and not anonymised.
+// deactivated), globally suspended. The person can act only when
+// active and not suspended.
 //
 // A LOGIN LOCK (failed-login throttle) is deliberately not an input: it exists
 // to slow password guessing at the sign-in door and says nothing about a session
@@ -51,8 +51,8 @@ type PersonState struct{ canAct bool }
 // authority). Every reader of the state follows: a locked member acts, is an
 // active member of a tenant, is an eligible manager, counts as an owner for the
 // last-owner guard and as a holder.
-func NewPersonState(active, globallySuspended, anonymised bool) PersonState {
-	return PersonState{canAct: active && !globallySuspended && !anonymised}
+func NewPersonState(active, globallySuspended bool) PersonState {
+	return PersonState{canAct: active && !globallySuspended}
 }
 
 // CanAct reports whether the person can act; false for the zero PersonState.

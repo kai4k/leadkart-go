@@ -314,12 +314,12 @@ func waitFor(t *testing.T, cond func() bool, timeout time.Duration, msg string) 
 }
 
 // TestRevokeFamilies_PersonLevelCascade is the consolidated cascade
-// gate for all four Person-level revocation triggers per ADR 0021 +
-// ADR 0029. The four subscribers (password-changed, anonymised,
+// gate for all three Person-level revocation triggers per ADR 0021 +
+// ADR 0029. The three subscribers (password-changed,
 // globally-suspended, email-changed) share the SAME wiring shape —
 // only the event payload + expected `revoke_reason` string differ.
-// Table-driving them into one test cuts four pgtest-bound runs to a
-// single wired-fixture boot with four t.Run subcases.
+// Table-driving them into one test cuts three pgtest-bound runs to a
+// single wired-fixture boot with three t.Run subcases.
 //
 // SQL-contract coverage retained:
 //   - subscriber finds Active families via ListActiveForPerson (RLS-
@@ -362,17 +362,6 @@ func TestRevokeFamilies_PersonLevelCascade(t *testing.T) {
 				}
 			},
 			wantReason: "password_changed",
-		},
-		{
-			name:      "Anonymised",
-			seedEmail: "anon@flow.test",
-			event: func(pid uuid.UUID) integrationevents.Event {
-				return integrationevents.PersonAnonymisedV1{
-					PersonID:      pid,
-					OccurredAtUTC: time.Now().UTC(),
-				}
-			},
-			wantReason: "person_anonymised",
 		},
 		{
 			name:      "GloballySuspended",

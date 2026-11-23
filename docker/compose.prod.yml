@@ -227,7 +227,7 @@ services:
   # ---- Worker (outbox forwarder + subscribers + River jobs) ---------------
   # PART OF PRODUCTION. Without it: no outbox row is ever delivered, so the
   # subscribers never run (security-stamp cache eviction, the refresh-family
-  # revocation backstop, suspension / anonymisation / deactivation cascades, audit,
+  # revocation backstop, suspension / deactivation cascades, audit,
   # email), the phantom failed-login table is never purged and River jobs never run.
   # The api shows a dead worker: the gauge leadkart.outbox.oldest_unacked_age_seconds
   # and a WARN at boot (docs/deploy/production-checklist.md lists the alerts).

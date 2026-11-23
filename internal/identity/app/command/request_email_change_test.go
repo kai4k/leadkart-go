@@ -197,25 +197,6 @@ func TestRequestEmailChange_GetByID_NonNotFoundError_Wrapped(t *testing.T) {
 	}
 }
 
-func TestRequestEmailChange_AnonymisedPerson_Rejected(t *testing.T) {
-	t.Parallel()
-	p := newPersonWithPassword(t, "irrelevant")
-	if err := p.Anonymise("test reason", testNow); err != nil {
-		t.Fatalf("Anonymise: %v", err)
-	}
-	repo := seedPersonRepo(t, p)
-	h := command.NewRequestEmailChangeHandler(repo, func() time.Time { return testNow })
-
-	addr, _ := email.New("new@example.test")
-	err := h.Handle(t.Context(), command.RequestEmailChangeCommand{
-		PersonID: p.ID(),
-		NewEmail: addr,
-	})
-	if !errors.Is(err, command.ErrEmailChangeRejected) {
-		t.Fatalf("err = %v, want ErrEmailChangeRejected", err)
-	}
-}
-
 func TestRequestEmailChange_GloballySuspendedPerson_Rejected(t *testing.T) {
 	t.Parallel()
 	p := newPersonWithPassword(t, "irrelevant")
@@ -401,28 +382,6 @@ func TestConfirmEmailChange_Lookup_NonNotFoundError_Wrapped(t *testing.T) {
 	}
 	if errors.Is(err, command.ErrEmailChangeTokenInvalid) {
 		t.Errorf("non-NotFound infra error MUST NOT collapse to ErrEmailChangeTokenInvalid")
-	}
-}
-
-func TestConfirmEmailChange_AnonymisedPerson_TokenInvalid(t *testing.T) {
-	t.Parallel()
-
-	newAddr, _ := email.New("rotated@example.test")
-	p := newPersonWithPassword(t, "irrelevant")
-	_ = b2SeedPendingEmailChange(t, p, newAddr) // arch-test:ignore-err - seed-only; plaintext not needed
-	if err := p.Anonymise("test reason", testNow); err != nil {
-		t.Fatalf("Anonymise: %v", err)
-	}
-	// The fake still returns the row (no state filter) — the handler must
-	// reject before UpdateByID.
-	repo := seedPersonRepo(t, p)
-	h := command.NewConfirmEmailChangeHandler(repo, func() time.Time { return testNow })
-
-	err := h.Handle(t.Context(), command.ConfirmEmailChangeCommand{
-		RawToken: "deterministic-test-token-base64url-stable-length-32+chars",
-	})
-	if !errors.Is(err, command.ErrEmailChangeTokenInvalid) {
-		t.Fatalf("err = %v, want ErrEmailChangeTokenInvalid", err)
 	}
 }
 

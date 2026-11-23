@@ -43,8 +43,7 @@ func TestUpdateProfile_RefusesAChangedNameButAcceptsAnUnchangedLegacyOne(t *test
 	}
 }
 
-func TestSuspendAndAnonymise_RefuseReasonsWithControlCharacters(t *testing.T) {
+func TestSuspend_RefuseReasonsWithControlCharacters(t *testing.T) {
 	t.Parallel()
 	requireInvalidCharacters(t, newPerson(t).GloballySuspend("fraud"+rlo+"claim", testNow), "reason")
-	requireInvalidCharacters(t, newPerson(t).Anonymise("erasure\nrequest", testNow), "reason")
 }

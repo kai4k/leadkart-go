@@ -29,7 +29,7 @@ var errMembershipsChanged = errors.New("person change guard: memberships changed
 const maxGuardAttempts = 3
 
 // PersonChangeGuard protects every tenant's last active owner from a
-// person-level change (global suspension, anonymisation): such a change takes
+// person-level change (global suspension): such a change takes
 // the person's ownership away in every tenant at once, and no tenant-level
 // command ever sees it. Run proves, per tenant the person is an ACTIVE member
 // of, under that tenant's authority lock and RLS scope, that

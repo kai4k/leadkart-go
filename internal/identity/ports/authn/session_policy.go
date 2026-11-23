@@ -63,7 +63,7 @@ const impersonationRefusedPrefix = "/api/v1/platform/"
 //
 //   - the platform-anchored routes that live on tenant paths: tenant registration,
 //     the lifecycle commands (suspend, activate, mark-for-deletion, restore), the
-//     operator omni-search and user anonymisation (cross-tenant blast radius);
+//     operator omni-search;
 //   - the self-service routes that act on "the caller": credential, email,
 //     sessions and activity of the synthetic membership an impersonation token
 //     carries, and the permission-request commands (an impersonation session
@@ -92,7 +92,6 @@ var impersonationRefusedRoutes = []string{
 	"POST /api/v1/tenants/{tenantId}/mark-for-deletion",
 	"POST /api/v1/tenants/{tenantId}/restore",
 	"POST /api/v1/tenants/{tenantId}/suspend",
-	"POST /api/v1/users/{userId}/anonymise",
 }
 
 // ImpersonationRefusals returns a copy of the pinned refusal list (the routes

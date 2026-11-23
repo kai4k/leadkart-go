@@ -156,9 +156,9 @@ func TestEffectivePermissions_UnionRolesPlusGrantsMinusRevokes(t *testing.T) {
 	}
 	_ = auditorRole.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.View), testNow) // arch-test:ignore-err - test fixture setup
 
-	// Membership overlay: grant Anonymise, revoke Update.
-	_ = m.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.Anonymise), time.Time{}, testNow) // arch-test:ignore-err - test fixture setup
-	_ = m.RevokePermission(permission.FromConstant(permission.IdentityPermissions.Users.Update), testNow)                // arch-test:ignore-err - test fixture setup
+	// Membership overlay: grant Unlock, revoke Update.
+	_ = m.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.Unlock), time.Time{}, testNow) // arch-test:ignore-err - test fixture setup
+	_ = m.RevokePermission(permission.FromConstant(permission.IdentityPermissions.Users.Update), testNow)             // arch-test:ignore-err - test fixture setup
 
 	got := m.EffectivePermissions([]*role.Role{managerRole, auditorRole}, testNow)
 	gotSet := map[string]bool{}
@@ -169,8 +169,8 @@ func TestEffectivePermissions_UnionRolesPlusGrantsMinusRevokes(t *testing.T) {
 	if !gotSet["identity.users.view"] {
 		t.Fatal("union missing View (granted by both roles)")
 	}
-	if !gotSet["identity.users.anonymise"] {
-		t.Fatal("union missing overlay-granted Anonymise")
+	if !gotSet["identity.users.unlock"] {
+		t.Fatal("union missing overlay-granted Unlock")
 	}
 	if gotSet["identity.users.update"] {
 		t.Fatal("union should NOT include overlay-revoked Update")
@@ -213,7 +213,7 @@ func TestEffectivePermissions_RevokeWinsOverRoleGrant(t *testing.T) {
 func TestGrantPermission_AddsToOverlay(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
-	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
+	p := permission.FromConstant(permission.IdentityPermissions.Users.Unlock)
 	if err := m.GrantPermission(p, time.Time{}, testNow); err != nil {
 		t.Fatalf("Grant: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestGrantPermission_AddsToOverlay(t *testing.T) {
 func TestGrantPermission_RemovesFromRevokedIfPreviouslyRevoked(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
-	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
+	p := permission.FromConstant(permission.IdentityPermissions.Users.Unlock)
 	_ = m.RevokePermission(p, testNow) // arch-test:ignore-err - test fixture setup
 	_ = m.PullEvents()
 
@@ -251,7 +251,7 @@ func TestGrantPermission_RemovesFromRevokedIfPreviouslyRevoked(t *testing.T) {
 func TestRevokePermission_RemovesFromGrantedIfPreviouslyGranted(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
-	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
+	p := permission.FromConstant(permission.IdentityPermissions.Users.Unlock)
 	_ = m.GrantPermission(p, time.Time{}, testNow) // arch-test:ignore-err - test fixture setup
 	_ = m.PullEvents()
 
@@ -269,7 +269,7 @@ func TestRevokePermission_RemovesFromGrantedIfPreviouslyGranted(t *testing.T) {
 func TestGrantPermission_Idempotent(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
-	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
+	p := permission.FromConstant(permission.IdentityPermissions.Users.Unlock)
 	_ = m.GrantPermission(p, time.Time{}, testNow) // arch-test:ignore-err - test fixture setup
 	_ = m.PullEvents()
 	if err := m.GrantPermission(p, time.Time{}, testNow); err != nil {
@@ -283,7 +283,7 @@ func TestGrantPermission_Idempotent(t *testing.T) {
 func TestRevokePermission_Idempotent(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
-	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
+	p := permission.FromConstant(permission.IdentityPermissions.Users.Unlock)
 	_ = m.RevokePermission(p, testNow) // arch-test:ignore-err - test fixture setup
 	_ = m.PullEvents()
 	if err := m.RevokePermission(p, testNow); err != nil {
@@ -315,7 +315,7 @@ func TestRevokePermission_RejectsNil(t *testing.T) {
 func TestGrantPermission_WithExpiresAt(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
-	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
+	p := permission.FromConstant(permission.IdentityPermissions.Users.Unlock)
 	expiresAt := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
 
 	if err := m.GrantPermission(p, expiresAt, testNow); err != nil {
@@ -333,7 +333,7 @@ func TestGrantPermission_WithExpiresAt(t *testing.T) {
 func TestEffectivePermissions_FiltersExpiredOverrides(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
-	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
+	p := permission.FromConstant(permission.IdentityPermissions.Users.Unlock)
 	// Grant with an expiry 1 hour ago — already expired.
 	expiredAt := time.Date(2026, 5, 23, 11, 0, 0, 0, time.UTC)
 	now := time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC)
@@ -350,7 +350,7 @@ func TestEffectivePermissions_FiltersExpiredOverrides(t *testing.T) {
 func TestEffectivePermissions_KeepsUnexpiredOverrides(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
-	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
+	p := permission.FromConstant(permission.IdentityPermissions.Users.Unlock)
 	// Grant with an expiry 1 hour in the future — still active.
 	expiresAt := time.Date(2026, 5, 23, 13, 0, 0, 0, time.UTC)
 	now := time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC)
@@ -365,7 +365,7 @@ func TestEffectivePermissions_KeepsUnexpiredOverrides(t *testing.T) {
 func TestEffectivePermissions_PerpetualOverridesNeverExpire(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
-	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
+	p := permission.FromConstant(permission.IdentityPermissions.Users.Unlock)
 	// time.Time{} = perpetual per ADR 0055.
 	_ = m.GrantPermission(p, time.Time{}, testNow) // arch-test:ignore-err - test fixture setup
 
@@ -379,7 +379,7 @@ func TestEffectivePermissions_PerpetualOverridesNeverExpire(t *testing.T) {
 
 func TestUnmarshalFromDB_OverlayRoundTrip(t *testing.T) {
 	t.Parallel()
-	g := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
+	g := permission.FromConstant(permission.IdentityPermissions.Users.Unlock)
 	r := permission.FromConstant(permission.IdentityPermissions.Users.Update)
 	m := membership.UnmarshalFromDB(membership.Snapshot{
 		ID:                 membership.ID(ids.NewV7().String()),

@@ -24,7 +24,7 @@ const phantomKeyLabel = "leadkart/identity/login-phantom-failures/v1"
 
 // PhantomLockoutRepository is the Postgres-backed command.PhantomFailureCounter: the
 // failed-login counter for addresses with no usable account (unknown,
-// deactivated, anonymised), with the same thresholds and the same atomic
+// deactivated), with the same thresholds and the same atomic
 // statement shape as a real account's counter (sql/phantom_lockout.sql next to
 // RegisterPersonFailedLogin). Rows survive restarts and are shared by every
 // replica, and concurrent attempts are serialised by the row lock exactly as for

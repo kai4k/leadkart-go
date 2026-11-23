@@ -415,7 +415,7 @@ func TestRefresh_Idle_AGraceReplayExtendsNothing(t *testing.T) {
 // ----- MaySignIn on the credential-changing commands (item 4) -----------------------
 
 // A deactivated person is refused by change-password and the email-change request
-// exactly like an anonymised or suspended one: all of them ask Person.MaySignIn.
+// exactly like a deactivated or suspended one: all of them ask Person.MaySignIn.
 func TestChangePassword_DeactivatedPerson_IsRefusedLikeAWrongPassword(t *testing.T) {
 	t.Parallel()
 	p := newPersonInactive(t, "real-current-pw")

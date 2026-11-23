@@ -196,12 +196,11 @@ func TestLogin_RealAccountWrongPassword_HasTheSameSurfaceAsUnknownEmail(t *testi
 	}
 }
 
-func TestLogin_InactiveAndAnonymisedPersons_LockLikeAnUnknownEmail(t *testing.T) {
+func TestLogin_InactiveAndSuspendedPersons_LockLikeAnUnknownEmail(t *testing.T) {
 	t.Parallel()
 	for name, mk := range map[string]func(*testing.T) *person.Person{
-		"inactive":   func(t *testing.T) *person.Person { return newPersonInactive(t, "pw") },
-		"anonymised": newPersonAnonymised,
-		"suspended":  func(t *testing.T) *person.Person { return newPersonSuspended(t, "pw") },
+		"inactive":  func(t *testing.T) *person.Person { return newPersonInactive(t, "pw") },
+		"suspended": func(t *testing.T) *person.Person { return newPersonSuspended(t, "pw") },
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -307,7 +306,6 @@ func TestLogin_EveryFailureBranchRunsExactlyOneVerify_RealHashOnlyForWrongPasswo
 			return realAccount(t, newPersonWithPassword(t, plain), nil)
 		}, "WRONG", true},
 		{"inactive", func(t *testing.T) rig { return realAccount(t, newPersonInactive(t, plain), nil) }, plain, false},
-		{"anonymised", func(t *testing.T) rig { return realAccount(t, newPersonAnonymised(t), nil) }, plain, false},
 		{"globally suspended", func(t *testing.T) rig {
 			p := newPersonSuspended(t, plain)
 			return realAccount(t, p, someMembership(t, p))

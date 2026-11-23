@@ -23,7 +23,7 @@ func (w *authzWorld) formVersion(t *testing.T, m *membership.Membership, at time
 			t.Fatalf("form version: load roles: %v", err)
 		}
 	}
-	member, err := authority.MemberOf(m, roles, at, authority.NewPersonState(true, false, false))
+	member, err := authority.MemberOf(m, roles, at, authority.NewPersonState(true, false))
 	if err != nil {
 		t.Fatalf("form version: %v", err)
 	}

@@ -220,7 +220,6 @@ var impersonationRefusedOutsideThePlatformPlane = []string{
 	"POST /api/v1/tenants/{tenantId}/mark-for-deletion",
 	"POST /api/v1/tenants/{tenantId}/restore",
 	"POST /api/v1/tenants/{tenantId}/suspend",
-	"POST /api/v1/users/{userId}/anonymise",
 }
 
 // impersonationOpenSelfService are the routes with no permission gate that an

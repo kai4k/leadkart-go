@@ -6,7 +6,7 @@
 // on t.Context() (bounded by the test run's own deadline).
 
 // Identity fix round 2, M9: the member picker offers only people who can be
-// assigned a lead. The SQL filters (active person, not anonymised, not globally
+// assigned a lead. The SQL filters (active person, not globally
 // suspended, active membership, this tenant) were pinned only by end-to-end
 // tests that plain `go test ./...` never runs.
 
@@ -67,7 +67,6 @@ func TestMemberSearchPG_OffersOnlyPeopleWhoCanBeAssigned(t *testing.T) {
 
 	want := seed(tnA.ID(), "Active", nil)
 	seed(tnA.ID(), "Inactive", func(s *person.Snapshot) { s.IsActive = false })
-	seed(tnA.ID(), "Anonymised", func(s *person.Snapshot) { s.IsAnonymised = true; s.AnonymisedAt = testNow })
 	seed(tnA.ID(), "Suspended", func(s *person.Snapshot) {
 		s.IsGloballySuspended = true
 		s.GloballySuspendedAt = testNow

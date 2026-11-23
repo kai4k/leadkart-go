@@ -20,12 +20,10 @@ type PersonView struct {
 	FirstName              string
 	LastName               string
 	IsActive               bool
-	IsAnonymised           bool
 	IsGloballySuspended    bool
 	GlobalSuspensionReason string
 	GloballySuspendedAt    time.Time
 	CreatedAt              time.Time
-	AnonymisedAt           time.Time
 }
 
 // ----- GetPersonQuery ------------------------------------------------------
@@ -101,12 +99,10 @@ func projectPerson(p *person.Person) PersonView {
 		FirstName:              p.FirstName(),
 		LastName:               p.LastName(),
 		IsActive:               p.IsActive(),
-		IsAnonymised:           p.IsAnonymised(),
 		IsGloballySuspended:    p.IsGloballySuspended(),
 		GlobalSuspensionReason: p.GlobalSuspensionReason(),
 		GloballySuspendedAt:    p.GloballySuspendedAt().UTC(),
 		CreatedAt:              p.CreatedAt().UTC(),
-		AnonymisedAt:           p.AnonymisedAt().UTC(),
 	}
 }
 
@@ -140,7 +136,7 @@ func (h ListPersonMembershipsHandler) Handle(ctx context.Context, q ListPersonMe
 		return nil, errors.New("list_person_memberships: person id required")
 	}
 	// Fetch Person up-front; ErrNotFound here is a data-integrity issue
-	// (possible during concurrent anonymise — surface as error, not 500).
+	// (surface as error, not 500).
 	p, err := h.persons.GetByID(ctx, q.PersonID)
 	if errors.Is(err, person.ErrNotFound) {
 		return nil, person.ErrNotFound

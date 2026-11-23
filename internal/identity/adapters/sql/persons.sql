@@ -5,7 +5,7 @@
 -- name: InsertPerson :exec
 INSERT INTO identity.persons (
     id, email, first_name, last_name, password_hash, security_stamp,
-    is_active, is_anonymised, created_at,
+    is_active, created_at,
     is_globally_suspended, global_suspension_reason, globally_suspended_at,
     password_reset_token_hash, password_reset_expires_at,
     pending_email_change_new_email, pending_email_change_token_hash,
@@ -14,18 +14,18 @@ INSERT INTO identity.persons (
     must_change_password, failed_login_count, locked_until, last_failed_login_at,
     password_reset_failed_attempts
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9,
-    $10, $11, $12,
-    $13, $14,
-    $15, $16, $17,
-    $18,
-    $19, $20, $21, $22,
-    $23
+    $1, $2, $3, $4, $5, $6, $7, $8,
+    $9, $10, $11,
+    $12, $13,
+    $14, $15, $16,
+    $17,
+    $18, $19, $20, $21,
+    $22
 );
 
 -- name: GetPersonByID :one
 SELECT id, email, first_name, last_name, password_hash, security_stamp,
-       is_active, is_anonymised, created_at, anonymised_at,
+       is_active, created_at,
        is_globally_suspended, global_suspension_reason, globally_suspended_at,
        password_reset_token_hash, password_reset_expires_at,
        pending_email_change_new_email, pending_email_change_token_hash,
@@ -44,7 +44,7 @@ WHERE  id = $1;
 -- with the FOR KEY SHARE a foreign-key check takes (memberships, refresh
 -- families referencing the person).
 SELECT id, email, first_name, last_name, password_hash, security_stamp,
-       is_active, is_anonymised, created_at, anonymised_at,
+       is_active, created_at,
        is_globally_suspended, global_suspension_reason, globally_suspended_at,
        password_reset_token_hash, password_reset_expires_at,
        pending_email_change_new_email, pending_email_change_token_hash,
@@ -67,7 +67,7 @@ FOR NO KEY UPDATE;
 -- row; nothing in this transaction locks an existing family or takes a stronger
 -- person lock (the lockout writes run in their own transactions, before and after).
 SELECT id, email, first_name, last_name, password_hash, security_stamp,
-       is_active, is_anonymised, created_at, anonymised_at,
+       is_active, created_at,
        is_globally_suspended, global_suspension_reason, globally_suspended_at,
        password_reset_token_hash, password_reset_expires_at,
        pending_email_change_new_email, pending_email_change_token_hash,
@@ -84,7 +84,7 @@ FOR SHARE;
 -- N GetPersonByID calls. Column list mirrors GetPersonByID exactly so
 -- it reuses the IdentityPerson model.
 SELECT id, email, first_name, last_name, password_hash, security_stamp,
-       is_active, is_anonymised, created_at, anonymised_at,
+       is_active, created_at,
        is_globally_suspended, global_suspension_reason, globally_suspended_at,
        password_reset_token_hash, password_reset_expires_at,
        pending_email_change_new_email, pending_email_change_token_hash,
@@ -97,7 +97,7 @@ WHERE  id = ANY(sqlc.arg(ids)::uuid[]);
 
 -- name: GetPersonByEmail :one
 SELECT id, email, first_name, last_name, password_hash, security_stamp,
-       is_active, is_anonymised, created_at, anonymised_at,
+       is_active, created_at,
        is_globally_suspended, global_suspension_reason, globally_suspended_at,
        password_reset_token_hash, password_reset_expires_at,
        pending_email_change_new_email, pending_email_change_token_hash,
@@ -133,9 +133,7 @@ SELECT p.id                              AS person_id,
        p.password_hash,
        p.security_stamp,
        p.is_active,
-       p.is_anonymised,
        p.created_at                      AS person_created_at,
-       p.anonymised_at,
        p.is_globally_suspended,
        p.global_suspension_reason,
        p.globally_suspended_at,
@@ -170,7 +168,7 @@ WHERE  p.email = $1;
 -- Caller hashes the plaintext + queries here; UNIQUE index makes this
 -- a single-row lookup.
 SELECT id, email, first_name, last_name, password_hash, security_stamp,
-       is_active, is_anonymised, created_at, anonymised_at,
+       is_active, created_at,
        is_globally_suspended, global_suspension_reason, globally_suspended_at,
        password_reset_token_hash, password_reset_expires_at,
        pending_email_change_new_email, pending_email_change_token_hash,
@@ -184,7 +182,7 @@ WHERE  password_reset_token_hash = $1;
 -- name: GetPersonByEmailChangeTokenHash :one
 -- Hash-only lookup for the confirm-email-change flow.
 SELECT id, email, first_name, last_name, password_hash, security_stamp,
-       is_active, is_anonymised, created_at, anonymised_at,
+       is_active, created_at,
        is_globally_suspended, global_suspension_reason, globally_suspended_at,
        password_reset_token_hash, password_reset_expires_at,
        pending_email_change_new_email, pending_email_change_token_hash,
@@ -196,7 +194,7 @@ FROM   identity.persons
 WHERE  pending_email_change_token_hash = $1;
 
 -- name: UpdatePerson :exec
--- General-purpose update covering ChangePassword + Anonymise + global
+-- General-purpose update covering ChangePassword + global
 -- suspension / lift + password-reset request/confirm/cancel + email-
 -- change request/confirm/cancel + lockout-state transitions on the
 -- self-contained Login success path + future mutations. Repository
@@ -208,21 +206,19 @@ SET    email                            = $2,
        password_hash                    = $5,
        security_stamp                   = $6,
        is_active                        = $7,
-       is_anonymised                    = $8,
-       anonymised_at                    = $9,
-       is_globally_suspended            = $10,
-       global_suspension_reason         = $11,
-       globally_suspended_at            = $12,
-       password_reset_token_hash        = $13,
-       password_reset_expires_at        = $14,
-       pending_email_change_new_email   = $15,
-       pending_email_change_token_hash  = $16,
-       pending_email_change_expires_at  = $17,
-       must_change_password             = $18,
-       failed_login_count               = $19,
-       locked_until                     = $20,
-       last_failed_login_at             = $21,
-       password_reset_failed_attempts   = $22
+       is_globally_suspended            = $8,
+       global_suspension_reason         = $9,
+       globally_suspended_at            = $10,
+       password_reset_token_hash        = $11,
+       password_reset_expires_at        = $12,
+       pending_email_change_new_email   = $13,
+       pending_email_change_token_hash  = $14,
+       pending_email_change_expires_at  = $15,
+       must_change_password             = $16,
+       failed_login_count               = $17,
+       locked_until                     = $18,
+       last_failed_login_at             = $19,
+       password_reset_failed_attempts   = $20
 WHERE  id = $1;
 
 -- name: RegisterPersonSuccessfulLogin :one
@@ -306,7 +302,7 @@ RETURNING p.failed_login_count, p.last_failed_login_at, p.locked_until, c.prev_l
 -- name: SearchPersonsByText :many
 -- Cross-tenant person search per ADR 0040 (pg_trgm). Backed by
 -- idx_persons_search_trgm (GIN over lower(email||' '||first_name||
--- ' '||last_name) WHERE is_active AND NOT is_anonymised).
+-- ' '||last_name) WHERE is_active).
 --
 -- Operator-only path (caller must run under TxScopePlatform).
 -- similarity() ranking — closer trigram overlap surfaces first.
@@ -320,7 +316,7 @@ SELECT id, email, first_name, last_name, created_at,
            lower(sqlc.arg(query))
        ) AS rank
 FROM   identity.persons
-WHERE  is_active AND NOT is_anonymised
+WHERE  is_active
 AND    (lower(email) || ' ' || lower(first_name) || ' ' || lower(last_name))
        ILIKE '%' || lower(sqlc.arg(query)) || '%'
 ORDER  BY rank DESC, id DESC

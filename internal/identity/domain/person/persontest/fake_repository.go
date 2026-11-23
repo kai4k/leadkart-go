@@ -45,9 +45,8 @@ import (
 // instance across tests; each test creates its own.
 type FakeRepository struct {
 	// rows is the Person index by ID. Persons are not row-level soft-
-	// deleted; the aggregate carries an IsAnonymised flag for the
-	// retention path. Reads do NOT filter anonymised rows — the
-	// aggregate exposes that state and callers decide.
+	// deleted; a person is only ever active or inactive. Reads do NOT
+	// filter inactive rows — the aggregate exposes that state and callers decide.
 	rows map[person.ID]*person.Person
 
 	// emails is the email → person.ID index for ErrEmailTaken
@@ -171,7 +170,7 @@ func (f *FakeRepository) GetByID(_ context.Context, id person.ID) (*person.Perso
 
 // GetByIDs hydrates the supplied IDs into a map keyed by ID. Missing
 // IDs are silently absent — NOT an error, per the interface contract
-// (race-with-anonymise / race-with-delete is possible). An empty input
+// (race-with-delete is possible). An empty input
 // slice returns an empty (non-nil) map.
 func (f *FakeRepository) GetByIDs(_ context.Context, ids []person.ID) (map[person.ID]*person.Person, error) {
 

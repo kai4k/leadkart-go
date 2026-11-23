@@ -363,7 +363,7 @@ func RequirePlatform(verifier Verifier, validator StampValidator) func(http.Hand
 // It is also the ONE place platform routes attribute the operator: once every
 // gate has passed, a request with no act claim yet (no header scope, no path
 // re-bind, no impersonation) gets {OperatorID: caller, Reason:
-// [ScopeActReasonPlatform]}, so suspend, delete, anonymise and the platform
+// [ScopeActReasonPlatform]}, so suspend, delete and the platform
 // module's writes leave act_operator_id on their outbox rows. An existing
 // claim is never overwritten.
 //

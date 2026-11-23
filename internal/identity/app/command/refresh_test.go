@@ -590,41 +590,6 @@ func TestRefresh_PersonDeactivated_RevokesFamilyAndRejects(t *testing.T) {
 	}
 }
 
-// TestRefresh_PersonAnonymised_RevokesFamilyAndRejects covers the
-// post-rotate IsAnonymised() branch — DPDP/GDPR right-to-erasure
-// applied; refresh kills the family + rejects.
-func TestRefresh_PersonAnonymised_RevokesFamilyAndRejects(t *testing.T) {
-	t.Parallel()
-	rig := newRefreshRig(t)
-	p := newPersonAnonymised(t)
-	if err := rig.persons.Add(t.Context(), p); err != nil {
-		t.Fatalf("persons.Add: %v", err)
-	}
-	tn := newTenantWithSlug(t, "anon-acme")
-	if err := rig.tenants.Add(t.Context(), tn); err != nil {
-		t.Fatalf("tenants.Add: %v", err)
-	}
-	m := activeMembership(t, p, tn)
-	if err := rig.memberships.Add(t.Context(), m); err != nil {
-		t.Fatalf("memberships.Add: %v", err)
-	}
-	pt := seedFamilyForPerson(t, rig, p, tn)
-
-	_, err := rig.handler.Handle(t.Context(), command.RefreshCommand{
-		RefreshTokenPlain: pt,
-	})
-	if !errors.Is(err, command.ErrRefreshRejected) {
-		t.Fatalf("got %v, want ErrRefreshRejected for anonymised Person", err)
-	}
-	fams, err := rig.families.ListActiveForPerson(t.Context(), p.ID())
-	if err != nil {
-		t.Fatalf("ListActiveForPerson: %v", err)
-	}
-	if len(fams) != 0 {
-		t.Fatalf("ListActiveForPerson: got %d, want 0", len(fams))
-	}
-}
-
 // TestRefresh_PersonLookupError_Wrapped covers the persons.GetByID
 // error wrap: "refresh: resolve person: <wrapped>".
 func TestRefresh_PersonLookupError_Wrapped(t *testing.T) {

@@ -46,7 +46,6 @@ func TestSatisfies_DecisionTable_Hardening(t *testing.T) {
 		{"tenant user explicit platform.tenants.manage", &jwt.Claims{TenantID: tenantA, Permissions: []string{p.Platform.TenantsManage}}, tenantA, p.Platform.TenantsManage, false},
 		{"operator explicit platform.tenants.manage", operator(p.Platform.TenantsManage), tenantB, p.Platform.TenantsManage, true},
 		{"tenant user explicit tenants.suspend", &jwt.Claims{TenantID: tenantA, Permissions: []string{p.Tenants.Suspend}}, tenantA, p.Tenants.Suspend, false},
-		{"tenant user explicit users.anonymise", &jwt.Claims{TenantID: tenantA, Permissions: []string{p.Users.Anonymise}}, tenantA, p.Users.Anonymise, false},
 		{"non-slug platform flag explicit platform perm", &jwt.Claims{TenantID: tenantA, TenantSlug: "acme", IsPlatform: true, Permissions: []string{p.Platform.TenantsManage}}, tenantA, p.Platform.TenantsManage, false},
 		// item 5: unknown / empty names
 		{"unknown name super user", &jwt.Claims{TenantID: tenantA, IsSuperUser: true}, tenantA, "not.a.permission", false},
@@ -62,7 +61,6 @@ func TestSatisfies_DecisionTable_Hardening(t *testing.T) {
 		{"operator platform.tenants.manage is not tenants.suspend", operator(p.Platform.TenantsManage), tenantB, p.Tenants.Suspend, false},
 		{"operator platform equivalent not for crm", operator(p.Platform.UsersManage, p.Platform.RolesManage), tenantB, p.Crm.Leads.Read, false},
 		{"operator users.manage gives users.deactivate other tenant", operator(p.Platform.UsersManage), tenantB, p.Users.Deactivate, true},
-		{"operator users.manage is not users.anonymise", operator(p.Platform.UsersManage), tenantB, p.Users.Anonymise, false},
 		// platform.impersonation.manage: reserved, stands alone
 		{"operator explicit platform.impersonation.manage", operator(p.Platform.ImpersonationManage), tenantB, p.Platform.ImpersonationManage, true},
 		{"operator platform.tenants.manage is not impersonation", operator(p.Platform.TenantsManage), tenantB, p.Platform.ImpersonationManage, false},

@@ -72,7 +72,7 @@ var ErrPersonIDRequired = errors.New("change_password: person id required")
 // authenticated change-password flow per security.md "Password change":
 //
 //  1. Load person by ID (from JWT).
-//  2. Reject anonymised / globally-suspended (mirror login gates).
+//  2. Reject globally-suspended (mirror login gates).
 //  3. Check the new password against the caller's tenant password policy
 //     (size bound first; nothing has been hashed yet), then verify the
 //     current password against the stored hash.
@@ -320,7 +320,7 @@ func (h ChangePasswordHandler) spendAttempt(id person.ID) error {
 
 // loadChangeable loads the person and answers every refusal the way a wrong
 // current password is answered, so ids and account states cannot be enumerated:
-// no such person, anonymised, globally suspended, deactivated (not [person.Person.MaySignIn]).
+// no such person, globally suspended, deactivated (not [person.Person.MaySignIn]).
 func (h ChangePasswordHandler) loadChangeable(ctx context.Context, id person.ID) (*person.Person, error) {
 	p, err := h.persons.GetByID(ctx, id)
 	if err != nil {

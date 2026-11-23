@@ -250,34 +250,8 @@ func newPersonInactive(t *testing.T, plain string) *person.Person {
 		PasswordHash:     live.PasswordHash(),
 		SecurityStamp:    live.SecurityStamp(),
 		IsActive:         false, // <-- the load-bearing bit
-		IsAnonymised:     false,
 		CreatedAt:        live.CreatedAt(),
 		FailedLoginCount: live.FailedLoginCount(),
-	}
-	return person.UnmarshalFromDB(snap)
-}
-
-// newPersonAnonymised returns a Person in the anonymised terminal state
-// (DPDP/GDPR right-to-erasure). Walks the aggregate's Anonymise mutator
-// so the credential is scrubbed in the same shape the production flow
-// produces. Pre-anonymisation the Person needs IsActive=false (the
-// invariant Anonymise enforces) — call via Snapshot.
-func newPersonAnonymised(t *testing.T) *person.Person {
-	t.Helper()
-	p := newPersonWithPassword(t, "pre-anonymise-pw")
-	// Anonymise requires the global-suspension predicate; the simplest
-	// canonical path is Snapshot-rehydrate with IsAnonymised=true.
-	snap := person.Snapshot{
-		ID:            p.ID(),
-		Email:         p.Email(),
-		FirstName:     p.FirstName(),
-		LastName:      p.LastName(),
-		PasswordHash:  p.PasswordHash(),
-		SecurityStamp: p.SecurityStamp(),
-		IsActive:      false,
-		IsAnonymised:  true,
-		CreatedAt:     p.CreatedAt(),
-		AnonymisedAt:  testNow,
 	}
 	return person.UnmarshalFromDB(snap)
 }
@@ -818,31 +792,6 @@ func TestLockedUntilFromError_NonLockedError_ReturnsZero(t *testing.T) {
 }
 
 // ----- terminal-Person paths -----------------------------------------------
-
-// TestLogin_AnonymisedPerson_ReturnsInvalidCredentials — dummy verify, no
-// counter bump (admin-controlled terminal state per ADR 0053).
-func TestLogin_AnonymisedPerson_ReturnsInvalidCredentials(t *testing.T) {
-	t.Parallel()
-	p := newPersonAnonymised(t)
-	persons := seedPersonRepo(t, p)
-	router := &fakeAuthRouter{byEmail: map[email.Address]struct {
-		p *person.Person
-		m *membership.Membership
-	}{p.Email(): {p: p, m: nil}}}
-	h := loginHandlerForFailurePaths(t, router, persons)
-
-	priorFailed := p.FailedLoginCount()
-	_, err := h.Handle(t.Context(), command.LoginCommand{
-		Email:    p.Email(),
-		Password: "anything",
-	})
-	if !errors.Is(err, command.ErrInvalidCredentials) {
-		t.Fatalf("got %v, want ErrInvalidCredentials", err)
-	}
-	if p.FailedLoginCount() != priorFailed {
-		t.Errorf("FailedLoginCount bumped on anonymised-Person branch: %d → %d", priorFailed, p.FailedLoginCount())
-	}
-}
 
 // TestLogin_InactivePerson_ReturnsInvalidCredentials — !IsActive branch, same
 // collapse + no counter bump.

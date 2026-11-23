@@ -68,7 +68,7 @@ func TestGetPerson_HappyPath_ProjectsAllFields(t *testing.T) {
 	if !got.IsActive {
 		t.Errorf("IsActive = false")
 	}
-	if got.IsAnonymised || got.IsGloballySuspended {
+	if got.IsGloballySuspended {
 		t.Errorf("flags wrong: %+v", got)
 	}
 	if got.CreatedAt.IsZero() {

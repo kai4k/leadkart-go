@@ -27,7 +27,7 @@ func newPersonSuspended(t *testing.T, plain string) *person.Person {
 }
 
 // Fix round 13, item 1: a globally suspended person's CORRECT password must not
-// sign them in. Before the fix the pre-verify gate read only active/anonymised, so
+// sign them in. Before the fix the pre-verify gate read only active, so
 // the ban lasted until the next login. The answer is the unknown-email answer: 401,
 // no family, and the person's own counter never moves.
 func TestLogin_SuspendedPerson_CorrectPassword_IsRefusedWithoutASession(t *testing.T) {
@@ -99,9 +99,6 @@ func TestLogin_PersonBecomesTerminalBetweenVerifyAndInsert_IsRefused(t *testing.
 	for name, becomeTerminal := range map[string]func(t *testing.T, loaded *person.Person) error{
 		"globally suspended": func(_ *testing.T, loaded *person.Person) error {
 			return loaded.GloballySuspend("fraud", testNow)
-		},
-		"anonymised": func(_ *testing.T, loaded *person.Person) error {
-			return loaded.Anonymise("erasure request", testNow)
 		},
 		"deactivated": func(t *testing.T, loaded *person.Person) error {
 			t.Helper()

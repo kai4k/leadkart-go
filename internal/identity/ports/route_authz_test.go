@@ -308,7 +308,7 @@ func TestRouteAuthz_ImpersonationNeedsItsOwnPermission(t *testing.T) {
 	}
 }
 
-// An operator must not globally suspend, anonymise or edit their OWN person:
+// An operator must not globally suspend or edit their OWN person:
 // DenySelfPerson sits inside the platform gate on the four mutating person
 // routes. Reads and other people stay open; a super user is exempt.
 func TestRouteAuthz_PlatformPersonMutations_DenySelf(t *testing.T) {
@@ -325,7 +325,6 @@ func TestRouteAuthz_PlatformPersonMutations_DenySelf(t *testing.T) {
 		{"PATCH", "/profile", p.Platform.UsersManage},
 		{"POST", "/global-suspend", p.Platform.UsersManage},
 		{"POST", "/lift-global-suspension", p.Platform.UsersManage},
-		{"POST", "/anonymise", p.Users.Anonymise},
 	} {
 		t.Run(rt.method+" "+rt.suffix, func(t *testing.T) {
 			t.Parallel()

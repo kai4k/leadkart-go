@@ -26,7 +26,7 @@ func personFor(t *testing.T, repo *persontest.FakeRepository, id person.ID) *per
 	return p
 }
 
-func TestPersonChangeGuard_LastOwnerCannotBeSuspendedOrAnonymised(t *testing.T) {
+func TestPersonChangeGuard_LastOwnerCannotBeSuspended(t *testing.T) {
 	t.Parallel()
 	w := newAuthzWorld(t)
 	persons := persontest.NewFakeRepository()
@@ -34,15 +34,11 @@ func TestPersonChangeGuard_LastOwnerCannotBeSuspendedOrAnonymised(t *testing.T) 
 	p1 := personFor(t, persons, owner1.PersonID())
 	guard := command.NewPersonChangeGuard(fakeUoW{}, w.lock, w.members, w.roles, persons, awClock)
 	suspend := command.NewGlobalSuspendPersonHandler(guard, persons, awClock)
-	anon := command.NewAnonymisePersonHandler(guard, persons, awClock)
 
 	if err := suspend.Handle(t.Context(), command.GlobalSuspendPersonCommand{PersonID: p1.ID(), Reason: "compliance hold"}); !errors.Is(err, authority.ErrLastOwnerProtected) {
 		t.Fatalf("suspend the only owner: %v, want ErrLastOwnerProtected", err)
 	}
-	if err := anon.Handle(t.Context(), command.AnonymisePersonCommand{Reason: "test reason", PersonID: p1.ID()}); !errors.Is(err, authority.ErrLastOwnerProtected) {
-		t.Fatalf("anonymise the only owner: %v, want ErrLastOwnerProtected", err)
-	}
-	if p1.IsGloballySuspended() || p1.IsAnonymised() {
+	if p1.IsGloballySuspended() {
 		t.Fatal("a refused person-level change was applied")
 	}
 	if w.lock.calls == 0 {

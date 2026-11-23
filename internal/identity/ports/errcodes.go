@@ -233,8 +233,8 @@ const (
 	// below the Administrator tier. Owner ruling 2026-11-21. 403 surface.
 	ErrCodeAdminTierRequired = "admin_tier_required"
 
-	// ErrCodePersonMembershipsChanging — a person-level change (global suspend,
-	// anonymise) kept racing membership changes and was not applied; retry. 409 surface.
+	// ErrCodePersonMembershipsChanging — a person-level change (global suspend)
+	// kept racing membership changes and was not applied; retry. 409 surface.
 	ErrCodePersonMembershipsChanging = "person_memberships_changing"
 
 	// ErrCodeOwnershipAuthorityRequired — a cross-tenant operator under the
@@ -347,7 +347,7 @@ const (
 	ErrCodeInvalidPersonID = "invalid_person_id"
 
 	// ErrCodePersonInvalid — Person aggregate-level invariant violation
-	// (terminal-state transition, anonymise-while-not-suspended, etc.).
+	// (terminal-state transition, etc.).
 	// 422 surface.
 	ErrCodePersonInvalid = "person_invalid"
 
@@ -452,7 +452,7 @@ const (
 
 	// ErrCodePermissionRequestRequesterInactive - an approval found the
 	// requester no longer able to receive the grant (deactivated, suspended,
-	// locked or anonymised since the request was filed). 409; the request stays
+	// or locked since the request was filed). 409; the request stays
 	// pending and can be denied or cancelled.
 	ErrCodePermissionRequestRequesterInactive = "permission_request_requester_inactive"
 

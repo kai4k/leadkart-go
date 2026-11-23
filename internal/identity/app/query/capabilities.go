@@ -16,7 +16,7 @@ import (
 // JWT-resident fields are projected by the HTTP layer; this struct holds
 // the fields that require a DB lookup: Person profile + resolved Roles.
 // Cache key includes security_stamp — stamp rotation (password change,
-// role grant/revoke, anonymise) invalidates automatically (ADR 0028 + 0042).
+// role grant/revoke) invalidates automatically (ADR 0028 + 0042).
 type CapabilitiesView struct {
 	Email     string
 	FirstName string

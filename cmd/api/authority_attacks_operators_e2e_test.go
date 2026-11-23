@@ -49,7 +49,6 @@ func TestAttack_Operators_OneNarrowPermissionReachesNothingInATenant(t *testing.
 		{"override tenant.admin onto a member", http.MethodPatch, "/api/v1/users/" + exec + "/permission-overrides", ports.ReplaceUserPermissionOverridesRequest{Granted: []string{p.Meta.TenantAdmin}, Revoked: []string{}}},
 		{"clear a manager", http.MethodDelete, "/api/v1/users/" + exec + "/manager", nil},
 		{"edit a profile", http.MethodPatch, "/api/v1/users/" + exec + "/profile", ports.UpdateUserProfileRequest{Designation: "pwned"}},
-		{"anonymise a member", http.MethodPost, "/api/v1/users/" + exec + "/anonymise", nil},
 		{"create a role", http.MethodPost, "/api/v1/roles", ports.CreateRoleRequest{Name: "Operator Attack", HierarchyLevel: 60}},
 		{"grant tenant.admin to a role", http.MethodPost, "/api/v1/roles/" + shell + "/permissions/grant", ports.RolePermissionRequest{Permission: p.Meta.TenantAdmin}},
 		{"delete a role", http.MethodDelete, "/api/v1/roles/" + shell, nil},

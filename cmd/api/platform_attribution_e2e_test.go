@@ -48,8 +48,7 @@ func assertAttributed(t *testing.T, rows [][2]string, operatorID, what string) {
 	}
 }
 
-// Header-less suspend, mark-for-deletion + hard delete, and platform person
-// anonymise were attributed nowhere durable.
+// Header-less suspend, mark-for-deletion + hard delete were attributed nowhere durable.
 func TestE2E_PlatformRoutes_DestructiveWritesCarryOperatorAttribution(t *testing.T) {
 	f := newE2EFixture(t)
 	p := permission.IdentityPermissions
@@ -85,27 +84,15 @@ func TestE2E_PlatformRoutes_DestructiveWritesCarryOperatorAttribution(t *testing
 	})
 
 	// arch-test:serial — shares the fixture and the outbox with its siblings.
-	t.Run("platform person anonymise", func(t *testing.T) {
-		v := f.registerAndLogin(t, "attranon")
-		f.addSecondOwner(t, v, "attranon-b") // the last owner cannot be anonymised (ADR 0069 H6)
-		opID := "0197c4a0-7000-7000-8000-00000000a003"
-		op := mintOperatorJWTExact(t, f.Issuer, f.persons, opID, []string{p.Users.Anonymise}, false)
-		if r := f.authedJSON(t, http.MethodPost, "/api/v1/platform/persons/"+v.PersonID+"/anonymise", op, map[string]string{"reason": "erasure request, ticket 4711"}); r.status != http.StatusNoContent {
-			t.Fatalf("anonymise person: %d %s", r.status, r.body)
-		}
-		assertAttributed(t, outboxActFor(t, f, "person_anonymised"), opID, "person anonymise")
-	})
-
-	// arch-test:serial — shares the fixture and the outbox with its siblings.
 	t.Run("an existing header-scope claim is kept", func(t *testing.T) {
 		v := f.registerAndLogin(t, "attrkeep")
-		f.addSecondOwner(t, v, "attrkeep-b") // the last owner cannot be anonymised (ADR 0069 H6)
+		f.addSecondOwner(t, v, "attrkeep-b") // the last owner cannot be deactivated (ADR 0069 H6)
 		opID := "0197c4a0-7000-7000-8000-00000000a004"
-		op := mintOperatorJWTExact(t, f.Issuer, f.persons, opID, []string{p.Users.Anonymise, p.Platform.TenantsView}, false)
-		if r := f.doWithHeaders(t, http.MethodPost, "/api/v1/users/"+v.MembershipID+"/anonymise", op, map[string]string{"reason": "erasure request, ticket 4711"}, scopeHdr(v.TenantID)); r.status != http.StatusNoContent {
-			t.Fatalf("anonymise via header: %d %s", r.status, r.body)
+		op := mintOperatorJWTExact(t, f.Issuer, f.persons, opID, []string{p.Platform.UsersManage, p.Platform.TenantsView}, false)
+		if r := f.doWithHeaders(t, http.MethodPost, "/api/v1/users/"+v.MembershipID+"/deactivate", op, ports.DeactivateUserRequest{Reason: "attribution test"}, scopeHdr(v.TenantID)); r.status != http.StatusNoContent {
+			t.Fatalf("deactivate via header: %d %s", r.status, r.body)
 		}
-		rows := outboxActFor(t, f, "person_anonymised")
+		rows := outboxActFor(t, f, "membership_deactivated")
 		found := false
 		for _, r := range rows {
 			if r[0] == opID {
@@ -116,7 +103,7 @@ func TestE2E_PlatformRoutes_DestructiveWritesCarryOperatorAttribution(t *testing
 			}
 		}
 		if !found {
-			t.Fatal("no attributed anonymise row")
+			t.Fatal("no attributed deactivate row")
 		}
 	})
 }

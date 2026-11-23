@@ -220,7 +220,6 @@ Generated from `ports.AddRoutes` by `TestArch_BFFRouteGateTable` (the test fails
 | `PUT /api/v1/users/{userId}/manager` | `identity.users.update` | honoured; writes allowed |
 | `DELETE /api/v1/users/{userId}/manager` | `identity.users.update` | honoured; writes allowed |
 | `POST /api/v1/users` | `identity.users.create` | honoured; writes allowed |
-| `POST /api/v1/users/{userId}/anonymise` | platform operator and `identity.users.anonymise` | honoured; writes allowed |
 | `GET /api/v1/roles` | `identity.roles.view` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
 | `GET /api/v1/roles/{roleId}` | `identity.roles.view` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
 | `POST /api/v1/roles` | `identity.roles.create` | honoured; writes allowed |
@@ -238,7 +237,6 @@ Generated from `ports.AddRoutes` by `TestArch_BFFRouteGateTable` (the test fails
 | `PATCH /api/v1/platform/persons/{personId}/profile` | platform operator and `platform.users.manage`; not on yourself | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
 | `POST /api/v1/platform/persons/{personId}/global-suspend` | platform operator and `platform.users.manage`; not on yourself | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
 | `POST /api/v1/platform/persons/{personId}/lift-global-suspension` | platform operator and `platform.users.manage`; not on yourself | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
-| `POST /api/v1/platform/persons/{personId}/anonymise` | platform operator and `identity.users.anonymise`; not on yourself | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
 | `POST /api/v1/platform/impersonation/sessions` | platform operator and `platform.impersonation.manage` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
 | `DELETE /api/v1/platform/impersonation/sessions/{sessionId}` | platform operator | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
 | `GET /api/v1/platform/impersonation/sessions` | platform operator and `platform.impersonation.manage` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |

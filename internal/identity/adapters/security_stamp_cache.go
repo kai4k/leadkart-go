@@ -67,7 +67,7 @@ func (c *SecurityStampCache) Get(ctx context.Context, id person.ID) (string, err
 }
 
 // Invalidate evicts the cached stamp. Called by cascade subscribers
-// (PasswordChanged, EmailChanged, Anonymised, GloballySuspended,
+// (PasswordChanged, EmailChanged, GloballySuspended,
 // GlobalSuspensionLifted) to close the eventual-consistency window.
 func (c *SecurityStampCache) Invalidate(ctx context.Context, id person.ID) error {
 	return c.facade.Invalidate(ctx, id)

@@ -16,15 +16,15 @@ import (
 
 // RevokeFamiliesOnSecurityChange is the choreographed reaction to
 // Person-level security mutations: any change that rotates the
-// SecurityStamp (password change, anonymisation, global suspend,
+// SecurityStamp (password change, global suspend,
 // email change) MUST revoke every refresh-token family for that
 // Person across tenants. Plus the narrower membership-deactivation
 // cascade which only kills families bound to that (PersonID,
 // TenantID) tuple.
 //
 // Per `security.md` "SecurityStamp rotation triggers": revoke families
-// on password/email/role change + logout-all + admin password reset +
-// anonymisation. v0.2 wires the password-change + anonymise +
+// on password/email/role change + logout-all + admin password reset.
+// v0.2 wires the password-change +
 // globally-suspended + email-changed + membership-deactivated
 // reactions; future steps add role-change.
 //
@@ -79,13 +79,6 @@ func (h *RevokeFamiliesOnSecurityChange) HandlePasswordChanged(
 	ctx context.Context, evt *integrationevents.PersonPasswordChangedV1,
 ) error {
 	return h.revokeAll(ctx, evt.PersonID.String(), "password_changed")
-}
-
-// HandleAnonymised handles `identity.person_anonymised.v1`.
-func (h *RevokeFamiliesOnSecurityChange) HandleAnonymised(
-	ctx context.Context, evt *integrationevents.PersonAnonymisedV1,
-) error {
-	return h.revokeAll(ctx, evt.PersonID.String(), "person_anonymised")
 }
 
 // HandleGloballySuspended handles `identity.person_globally_suspended.v1`.

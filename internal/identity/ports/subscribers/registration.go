@@ -33,14 +33,12 @@ import (
 const (
 	// Cache-eviction subscribers (Subscriber A — opportunistic).
 	HandlerInvalidateCacheOnPasswordChanged   = "identity.subscribers.InvalidateCacheOnPasswordChanged"
-	HandlerInvalidateCacheOnAnonymised        = "identity.subscribers.InvalidateCacheOnAnonymised"
 	HandlerInvalidateCacheOnGloballySuspended = "identity.subscribers.InvalidateCacheOnGloballySuspended"
 	HandlerInvalidateCacheOnEmailChanged      = "identity.subscribers.InvalidateCacheOnEmailChanged"
 	HandlerInvalidateCacheOnStampRotated      = "identity.subscribers.InvalidateCacheOnStampRotated"
 
 	// Family-revocation subscribers (Subscriber B — must-succeed).
 	HandlerRevokeOnPasswordChange       = "identity.subscribers.RevokeFamiliesOnPasswordChange"
-	HandlerRevokeOnAnonymise            = "identity.subscribers.RevokeFamiliesOnAnonymise"
 	HandlerRevokeOnGloballySuspended    = "identity.subscribers.RevokeFamiliesOnGloballySuspended"
 	HandlerRevokeOnEmailChanged         = "identity.subscribers.RevokeFamiliesOnEmailChanged"
 	HandlerRevokeOnMembershipDeactivate = "identity.subscribers.RevokeFamiliesOnMembershipDeactivate"
@@ -90,14 +88,12 @@ func Handlers(
 	handlers := []cqrs.EventHandler{
 		// Cache-evict (opportunistic).
 		cqrs.NewEventHandler(HandlerInvalidateCacheOnPasswordChanged, invalidate.HandlePasswordChanged),
-		cqrs.NewEventHandler(HandlerInvalidateCacheOnAnonymised, invalidate.HandleAnonymised),
 		cqrs.NewEventHandler(HandlerInvalidateCacheOnGloballySuspended, invalidate.HandleGloballySuspended),
 		cqrs.NewEventHandler(HandlerInvalidateCacheOnEmailChanged, invalidate.HandleEmailChanged),
 		cqrs.NewEventHandler(HandlerInvalidateCacheOnStampRotated, invalidate.HandleSecurityStampRotated),
 
 		// Family-revoke (must-succeed).
 		cqrs.NewEventHandler(HandlerRevokeOnPasswordChange, revoke.HandlePasswordChanged),
-		cqrs.NewEventHandler(HandlerRevokeOnAnonymise, revoke.HandleAnonymised),
 		cqrs.NewEventHandler(HandlerRevokeOnGloballySuspended, revoke.HandleGloballySuspended),
 		cqrs.NewEventHandler(HandlerRevokeOnEmailChanged, revoke.HandleEmailChanged),
 		cqrs.NewEventHandler(HandlerRevokeOnMembershipDeactivate, revoke.HandleMembershipDeactivated),
