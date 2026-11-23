@@ -134,3 +134,40 @@ func TestCreateConsignmentNoteHandler_PropagatesAggregateInvariantErrors(t *test
 		t.Errorf("got %v want wrapping consignmentnote.ErrInvalid", err)
 	}
 }
+
+// I1: a pack accepted at 10:00 with delivery at 11:00, consumed at 12:00 (an
+// outage, a backlog, a dead-letter replay), must still get its consignment note:
+// the event path judges the delivery date at the moment the order was packed.
+// The HTTP create route, which has no pack moment, keeps judging at "now".
+func TestCreateConsignmentNoteHandler_DeliveryDateIsJudgedAtThePackMoment(t *testing.T) {
+	t.Parallel()
+	packedAt := fixedNow().Add(-2 * time.Hour) // 10:00
+	eta := fixedNow().Add(-time.Hour)          // 11:00: future at pack, past at the worker's 12:00
+
+	h, repo := newCreateHandler(t)
+	cmd := sampleCreateCmd()
+	cmd.ExpectedDeliveryAt = &eta
+	cmd.RulesJudgedAt = packedAt
+	out, err := h.Handle(t.Context(), cmd)
+	require.NoError(t, err, "a delivery date that was valid when the order was packed must never be refused later")
+	stored, err := repo.GetByOrderID(t.Context(), cmd.TenantID, cmd.OrderID)
+	require.NoError(t, err)
+	require.Equal(t, out.ConsignmentNoteID, stored.ID())
+	require.True(t, stored.CreatedAt().Equal(fixedNow()), "the note is still created NOW, not at the pack moment")
+
+	// A date already past at the pack moment stays refused on the event path.
+	h2, _ := newCreateHandler(t)
+	stale := packedAt.Add(-time.Minute)
+	bad := sampleCreateCmd()
+	bad.ExpectedDeliveryAt = &stale
+	bad.RulesJudgedAt = packedAt
+	_, err = h2.Handle(t.Context(), bad)
+	require.ErrorIs(t, err, consignmentnote.ErrInvalid)
+
+	// The HTTP route (no pack moment) judges at now: 11:00 is past at 12:00.
+	h3, _ := newCreateHandler(t)
+	direct := sampleCreateCmd()
+	direct.ExpectedDeliveryAt = &eta
+	_, err = h3.Handle(t.Context(), direct)
+	require.ErrorIs(t, err, consignmentnote.ErrInvalid)
+}

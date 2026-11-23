@@ -154,6 +154,13 @@ func handleListProducts(log *slog.Logger, a app.Application) http.Handler {
 		}
 		pageSize := parsePageSize(q.Get("page_size"))
 		activeFilter := q.Get("active")
+		// A filter is text sent to PostgreSQL, which cannot take U+0000 (%00).
+		for _, name := range []string{"dosage_form", "manufacturer", "search"} {
+			if strings.IndexByte(q.Get(name), 0) >= 0 {
+				writeError(w, http.StatusBadRequest, ErrCodeInvalidQuery, name+" must not contain the NUL character")
+				return
+			}
+		}
 		page, err := a.Queries.ListProductsPage.Handle(r.Context(), query.ListProductsPageQuery{
 			TenantID:     tenant.ID(effTenant),
 			Cursor:       cursor,

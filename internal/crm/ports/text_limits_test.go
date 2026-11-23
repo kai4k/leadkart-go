@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -186,4 +187,59 @@ func wrapInvalid(sentinel, cause error) error {
 
 func (directUoW) WithinTenantTx(ctx context.Context, _ string, fn func(context.Context) error) error {
 	return fn(ctx)
+}
+
+// M1: a value holding U+0000 (valid JSON, impossible to store in PostgreSQL) is
+// a 422 "<field>_invalid_characters" on every CRM text input, never a 500.
+func TestCrmWrites_NULInTextIs422WithAFieldCode(t *testing.T) {
+	t.Parallel()
+	const nul = "bad\x00value"
+	cases := []struct {
+		name string
+		run  func(t *testing.T, f textLimitFixture) (int, string)
+		code string
+	}{
+		{"assign reason", func(t *testing.T, f textLimitFixture) (int, string) {
+			return f.post(t, handleAssignLead(silentLog(), f.app), AssignLeadRequest{AssigneeMembershipID: uuid.NewString(), Reason: nul})
+		}, "reason_invalid_characters"},
+		{"call notes", func(t *testing.T, f textLimitFixture) (int, string) {
+			return f.post(t, handleLogCall(silentLog(), f.app), LogCallRequest{Outcome: "connected", Notes: nul})
+		}, "notes_invalid_characters"},
+		{"lose reason", func(t *testing.T, f textLimitFixture) (int, string) {
+			return f.post(t, handleLoseLead(silentLog(), f.app), LoseLeadRequest{Reason: nul})
+		}, "reason_invalid_characters"},
+		{"reminder notes", func(t *testing.T, f textLimitFixture) (int, string) {
+			return f.post(t, handleCreateReminder(silentLog(), f.app), CreateReminderRequest{
+				AssignedToMembershipID: uuid.NewString(), DueAt: tlNow.Add(time.Hour), Notes: nul})
+		}, "notes_invalid_characters"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			status, code := tc.run(t, newTextLimitFixture(t))
+			if status != http.StatusUnprocessableEntity || code != tc.code {
+				t.Fatalf("status %d code %q; want 422 %s", status, code, tc.code)
+			}
+		})
+	}
+
+	// The two mappers the fixture does not drive end to end: a stage-change
+	// reason and a cancel-reminder reason.
+	for name, c := range map[string]struct {
+		mapper func(http.ResponseWriter, *slog.Logger, *http.Request, error, string)
+		err    error
+	}{
+		"stage change reason":    {mapMutationErr, wrapInvalid(crmlead.ErrInvalid, textlimit.NoNUL("reason", nul))},
+		"cancel reminder reason": {mapReminderMutationErr, wrapInvalid(reminder.ErrInvalid, textlimit.Bytes("reason", nul, 1000))},
+	} {
+		rec := httptest.NewRecorder()
+		c.mapper(rec, silentLog(), httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/x", nil), c.err, name)
+		var er errorResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &er); err != nil {
+			t.Fatalf("%s: decode error body %q: %v", name, rec.Body.String(), err)
+		}
+		if rec.Code != http.StatusUnprocessableEntity || er.Error != "reason_invalid_characters" {
+			t.Fatalf("%s: status %d code %q; want 422 reason_invalid_characters", name, rec.Code, er.Error)
+		}
+	}
 }

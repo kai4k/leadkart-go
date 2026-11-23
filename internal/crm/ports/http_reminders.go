@@ -66,7 +66,7 @@ func handleCreateReminder(log *slog.Logger, a app.Application) http.Handler {
 		case errors.Is(err, command.ErrLeadNotFound):
 			writeError(w, http.StatusNotFound, errCodeLeadNotFound, "")
 			return
-		case errors.Is(err, textlimit.ErrTooLong):
+		case errors.Is(err, textlimit.ErrInvalid):
 			writeTooLong(w, err)
 			return
 		case errors.Is(err, reminder.ErrInvalid):
@@ -246,7 +246,7 @@ func mapReminderMutationErr(w http.ResponseWriter, log *slog.Logger, r *http.Req
 		writeError(w, http.StatusNotFound, errCodeReminderNotFound, "")
 	case errors.Is(err, command.ErrReminderTerminal):
 		writeError(w, http.StatusConflict, errCodeReminderTerminal, "")
-	case errors.Is(err, textlimit.ErrTooLong):
+	case errors.Is(err, textlimit.ErrInvalid):
 		writeTooLong(w, err)
 	case errors.Is(err, reminder.ErrInvalid):
 		writeError(w, http.StatusUnprocessableEntity, errCodeReasonRequired, err.Error())

@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/leadkart/leadkart-go/internal/common/textlimit"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
@@ -72,6 +73,13 @@ func (li LineItem) Validate() error {
 	}
 	if li.SKU == "" {
 		return fmt.Errorf("%w: line.sku required", ErrInvalid)
+	}
+	// The items are stored as jsonb, which cannot hold U+0000.
+	if err := textlimit.NoNUL("sku", li.SKU); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	if err := textlimit.NoNUL("description", li.Description); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if li.Quantity <= 0 {
 		return fmt.Errorf("%w: line.quantity must be positive (got %d)", ErrInvalid, li.Quantity)
@@ -192,6 +200,9 @@ func New(in NewInput) (*Quotation, error) {
 		if err := in.InitialItems[i].Validate(); err != nil {
 			return nil, fmt.Errorf("%w: item[%d]: %w", ErrInvalid, i, err)
 		}
+	}
+	if err := textlimit.NoNUL("note", in.InitialNote); err != nil { // stored in the jsonb revision
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 
 	itemsCopy := make([]LineItem, len(in.InitialItems))
@@ -339,6 +350,9 @@ func (q *Quotation) Revise(in ReviseInput) error {
 			return fmt.Errorf("%w: item[%d]: %w", ErrInvalid, i, err)
 		}
 	}
+	if err := textlimit.NoNUL("note", in.Note); err != nil { // stored in the jsonb revision
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
 	if in.RevisedByMembership == "" {
 		return fmt.Errorf("%w: revised_by required", ErrInvalid)
 	}
@@ -410,6 +424,9 @@ func (q *Quotation) Reject(rejectorID membership.ID, reason string, now time.Tim
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
 		return fmt.Errorf("%w: rejection reason required", ErrInvalid)
+	}
+	if err := textlimit.NoNUL("reason", reason); err != nil { // a text column cannot hold U+0000
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if rejectorID == "" {
 		return fmt.Errorf("%w: rejector required", ErrInvalid)

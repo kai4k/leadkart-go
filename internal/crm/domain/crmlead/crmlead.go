@@ -518,6 +518,9 @@ func (l *CrmLead) ChangeStage(newStage Stage, changedBy, reason string, now time
 	if newStage == StageConverted || newStage == StageLost {
 		return fmt.Errorf("%w: use Convert / Lose for terminal transitions", ErrInvalid)
 	}
+	if err := textlimit.NoNUL("reason", reason); err != nil { // U+0000 cannot be stored by any consumer of the event
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
 	if err := validateUUIDString("changed-by membership id", strings.TrimSpace(changedBy)); err != nil {
 		return err
 	}

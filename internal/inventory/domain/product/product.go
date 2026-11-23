@@ -19,6 +19,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/common/hsncode"
+	"github.com/leadkart/leadkart-go/internal/common/textlimit"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
@@ -177,6 +178,9 @@ func New(id ID, tenantID tenant.ID, actorID membership.ID, spec Spec, now time.T
 			ErrInvalid, spec.GSTRateBps, GSTRateBpsMin, GSTRateBpsMax)
 	}
 	manufacturer := strings.TrimSpace(spec.Manufacturer)
+	if err := textlimit.NoNUL("manufacturer", manufacturer); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
 	if len(manufacturer) > ManufacturerMaxLen {
 		return nil, fmt.Errorf("%w: manufacturer too long (max %d, got %d)",
 			ErrInvalid, ManufacturerMaxLen, len(manufacturer))
@@ -334,6 +338,9 @@ func (p *Product) Update(actorID membership.ID, spec UpdateSpec, now time.Time) 
 	}
 	if spec.Manufacturer != nil {
 		m := strings.TrimSpace(*spec.Manufacturer)
+		if err := textlimit.NoNUL("manufacturer", m); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
 		if len(m) > ManufacturerMaxLen {
 			return fmt.Errorf("%w: manufacturer too long (max %d, got %d)",
 				ErrInvalid, ManufacturerMaxLen, len(m))
@@ -531,6 +538,9 @@ func validateSKU(raw string) (string, error) {
 	if trimmed == "" {
 		return "", fmt.Errorf("%w: sku required", ErrInvalid)
 	}
+	if err := textlimit.NoNUL("sku", trimmed); err != nil { // a text column cannot hold U+0000
+		return "", fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
 	if len(trimmed) < SKUMinLength || len(trimmed) > SKUMaxLength {
 		return "", fmt.Errorf("%w: sku length %d not in [%d,%d]",
 			ErrInvalid, len(trimmed), SKUMinLength, SKUMaxLength)
@@ -542,6 +552,9 @@ func validateBoundedTrim(raw, field string, min, max int) (string, error) {
 	t := strings.TrimSpace(raw)
 	if t == "" {
 		return "", fmt.Errorf("%w: %s required", ErrInvalid, field)
+	}
+	if err := textlimit.NoNUL(field, t); err != nil { // a text column cannot hold U+0000
+		return "", fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if len(t) < min || len(t) > max {
 		return "", fmt.Errorf("%w: %s length %d not in [%d,%d]",

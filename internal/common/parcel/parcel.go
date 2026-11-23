@@ -5,8 +5,9 @@
 // order changes state; Dispatch checks it again when the consignment note is
 // created from the packed event. The two must agree: a pack that Orders accepts
 // but Dispatch refuses leaves an order packed with no consignment note, retried
-// to the dead-letter queue. Keeping the rule here, in a dependency-free common
-// package, is what makes them agree (modules may not import each other).
+// to the dead-letter queue. Keeping the rule here, in a common package that
+// imports no module (only the stdlib and common/humantext), is what makes them
+// agree (modules may not import each other).
 package parcel
 
 import (
@@ -15,6 +16,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/leadkart/leadkart-go/internal/common/humantext"
 )
 
 // MaxCarrierNameChars is the dispatch.consignment_notes.carrier_name column
@@ -24,11 +27,16 @@ const MaxCarrierNameChars = 200
 // Stable machine codes, one per rule. The HTTP layers answer 422 with the code
 // of the first rule broken.
 const (
-	CodeCarrierRequired     = "carrier_name_required"
-	CodeCarrierTooLong      = "carrier_name_too_long"
-	CodeBoxCountInvalid     = "box_count_invalid"
-	CodeWeightInvalid       = "weight_grams_invalid"
-	CodeDeliveryNotInFuture = "expected_delivery_not_in_future"
+	CodeCarrierRequired = "carrier_name_required"
+	CodeCarrierTooLong  = "carrier_name_too_long"
+	// CodeCarrierInvalidCharacters: the carrier name holds a control, direction
+	// or invisible character (the common/humantext rule for a one-line name). A
+	// NUL among them cannot be stored at all: the consignment-note insert would
+	// fail on every delivery of the packed event.
+	CodeCarrierInvalidCharacters = "carrier_name_invalid_characters"
+	CodeBoxCountInvalid          = "box_count_invalid"
+	CodeWeightInvalid            = "weight_grams_invalid"
+	CodeDeliveryNotInFuture      = "expected_delivery_not_in_future"
 )
 
 // ErrInvalid is the sentinel every [Error] matches via errors.Is.
@@ -63,6 +71,10 @@ func Validate(d Details, now time.Time) error {
 	if utf8.RuneCountInString(carrier) > MaxCarrierNameChars {
 		return &Error{Code: CodeCarrierTooLong,
 			Detail: fmt.Sprintf("carrier_name must be at most %d characters", MaxCarrierNameChars)}
+	}
+	if !humantext.Valid(carrier) {
+		return &Error{Code: CodeCarrierInvalidCharacters,
+			Detail: "carrier_name must not contain control, direction-override or invisible formatting characters"}
 	}
 	if d.BoxCount <= 0 {
 		return &Error{Code: CodeBoxCountInvalid,

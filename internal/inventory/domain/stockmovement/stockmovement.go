@@ -39,6 +39,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
+	"github.com/leadkart/leadkart-go/internal/common/textlimit"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
@@ -157,6 +158,9 @@ func New(id ID, spec Spec, now time.Time) (*Movement, error) {
 	if reason == "" {
 		return nil, fmt.Errorf("%w: reason required", ErrInvalid)
 	}
+	if err := textlimit.NoNUL("reason", reason); err != nil { // a text column cannot hold U+0000
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
 	if len(reason) < ReasonMinLength || len(reason) > ReasonMaxLength {
 		return nil, fmt.Errorf("%w: reason length %d not in [%d,%d]",
 			ErrInvalid, len(reason), ReasonMinLength, ReasonMaxLength)
@@ -164,6 +168,9 @@ func New(id ID, spec Spec, now time.Time) (*Movement, error) {
 	var sr *string
 	if spec.SourceReference != nil {
 		ref := strings.TrimSpace(*spec.SourceReference)
+		if err := textlimit.NoNUL("source_reference", ref); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
 		if len(ref) > SourceReferenceMax {
 			return nil, fmt.Errorf("%w: source_reference too long (max %d, got %d)",
 				ErrInvalid, SourceReferenceMax, len(ref))

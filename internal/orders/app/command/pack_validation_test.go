@@ -62,6 +62,9 @@ func TestPackOrder_RefusesWhatDispatchWouldRefuse(t *testing.T) {
 		code string
 	}{
 		{"blank carrier", func(c *command.PackOrderCommand) { c.CarrierName = "  " }, parcel.CodeCarrierRequired},
+		// I2: a NUL passes JSON and the json outbox column, then the consignment
+		// note insert fails (SQLSTATE 22021) on every delivery of the event.
+		{"NUL in carrier", func(c *command.PackOrderCommand) { c.CarrierName = "Blue\x00Dart" }, parcel.CodeCarrierInvalidCharacters},
 		{"zero boxes", func(c *command.PackOrderCommand) { c.BoxCount = 0 }, parcel.CodeBoxCountInvalid},
 		{"zero weight", func(c *command.PackOrderCommand) { c.WeightGrams = 0 }, parcel.CodeWeightInvalid},
 		{"past delivery", func(c *command.PackOrderCommand) { c.ExpectedDeliveryAt = &past }, parcel.CodeDeliveryNotInFuture},
@@ -88,4 +91,33 @@ func TestPackOrder_RefusesWhatDispatchWouldRefuse(t *testing.T) {
 			require.False(t, hasEvent(enq.events, integrationevents.TopicOrderPackedV1), "nothing may be published")
 		})
 	}
+}
+
+// The pack rules and the event's PackedAtUTC come from ONE clock reading: a
+// delivery date valid at the check can never already be past at the PackedAtUTC
+// Dispatch judges the consignment note at.
+func TestPackOrder_JudgesAndStampsWithOneClockReading(t *testing.T) {
+	t.Parallel()
+	orders, tid, orderID, actor := confirmedOrder(t)
+	enq := &fakeEnqueuer{}
+	tick := now()
+	clock := func() time.Time { tick = tick.Add(time.Second); return tick } // every reading is later
+	eta := tick.Add(1500 * time.Millisecond)                                // future at the 1st reading, past at the 2nd
+
+	err := command.NewPackOrderHandler(fakeUoW{}, orders, enq, clock).Handle(t.Context(), command.PackOrderCommand{
+		TenantID: tid, OrderID: orderID, CarrierName: "BlueDart", BoxCount: 2, WeightGrams: 1500,
+		ExpectedDeliveryAt: &eta, PackedByMembership: actor,
+	})
+	require.NoError(t, err)
+	var packed integrationevents.OrderPackedV1
+	for _, e := range enq.events {
+		if p, ok := e.(integrationevents.OrderPackedV1); ok {
+			packed = p
+		}
+	}
+	require.False(t, packed.PackedAtUTC.IsZero(), "the packed event must be published")
+	require.NoError(t, parcel.Validate(parcel.Details{
+		CarrierName: packed.CarrierName, BoxCount: packed.BoxCount, WeightGrams: packed.WeightGrams,
+		ExpectedDeliveryAt: packed.ExpectedDeliveryAtUTC,
+	}, packed.PackedAtUTC), "what Orders accepted must be valid at the PackedAtUTC Dispatch judges it at")
 }

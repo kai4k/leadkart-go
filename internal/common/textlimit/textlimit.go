@@ -12,16 +12,31 @@
 //
 // The code is "<field>_too_long", for example "reason_too_long" or
 // "external_reference_too_long". It is stable: the web switches on it.
+//
+// The same check refuses U+0000. PostgreSQL cannot store it in a text or jsonb
+// value (SQLSTATE 22021 / 22P05), so a value holding it would also surface as a
+// 500. Its code is "<field>_invalid_characters". Nothing else is refused here:
+// notes and reasons are multi-line, so newline and tab are valid (a one-line
+// NAME uses common/humantext instead).
 package textlimit
 
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"unicode/utf8"
 )
 
-// ErrTooLong is the sentinel every [*Error] matches with errors.Is.
+// ErrInvalid is the sentinel EVERY [*Error] matches with errors.Is: a transport
+// layer tests it once, then answers with [Error.Code].
+var ErrInvalid = errors.New("textlimit: invalid")
+
+// ErrTooLong is the sentinel a value over its limit matches with errors.Is.
 var ErrTooLong = errors.New("textlimit: too long")
+
+// ErrInvalidCharacters is the sentinel a value holding U+0000 matches with
+// errors.Is.
+var ErrInvalidCharacters = errors.New("textlimit: invalid characters")
 
 // Unit is what a limit counts.
 type Unit string
@@ -32,35 +47,73 @@ const (
 	UnitChars Unit = "characters"
 )
 
-// Error is a value over its limit.
+// Error is a refused value: over its limit, or (NUL true) holding U+0000.
 type Error struct {
 	Field string
 	Max   int
 	Unit  Unit
+	NUL   bool
 }
 
 // Error describes the refusal; it never carries the value.
 func (e *Error) Error() string {
+	if e.NUL {
+		return e.Field + " must not contain the NUL character (U+0000)"
+	}
 	return fmt.Sprintf("%s too long (max %d %s)", e.Field, e.Max, e.Unit)
 }
 
-// Is makes errors.Is(err, ErrTooLong) true.
-func (e *Error) Is(target error) bool { return target == ErrTooLong }
+// Is makes errors.Is(err, ErrInvalid) true for every refusal, and
+// errors.Is(err, ErrTooLong) / errors.Is(err, ErrInvalidCharacters) true for its
+// own kind only.
+func (e *Error) Is(target error) bool {
+	switch target {
+	case ErrInvalid:
+		return true
+	case ErrTooLong:
+		return !e.NUL
+	case ErrInvalidCharacters:
+		return e.NUL
+	}
+	return false
+}
 
-// Code is the stable wire code: "<field>_too_long".
-func (e *Error) Code() string { return e.Field + "_too_long" }
+// Code is the stable wire code: "<field>_too_long" or
+// "<field>_invalid_characters".
+func (e *Error) Code() string {
+	if e.NUL {
+		return e.Field + "_invalid_characters"
+	}
+	return e.Field + "_too_long"
+}
 
-// Bytes returns an [*Error] when s is longer than max UTF-8 bytes, else nil.
+// NoNUL returns an [*Error] when s holds U+0000, else nil. It is the check for a
+// text input that has no length limit; [Bytes] and [Chars] include it.
+func NoNUL(field, s string) error {
+	if strings.IndexByte(s, 0) >= 0 {
+		return &Error{Field: field, NUL: true}
+	}
+	return nil
+}
+
+// Bytes returns an [*Error] when s holds U+0000 or is longer than max UTF-8
+// bytes, else nil.
 func Bytes(field, s string, max int) error {
+	if err := NoNUL(field, s); err != nil {
+		return err
+	}
 	if len(s) > max {
 		return &Error{Field: field, Max: max, Unit: UnitBytes}
 	}
 	return nil
 }
 
-// Chars returns an [*Error] when s is longer than max characters (runes, the
-// unit of PostgreSQL's length()), else nil.
+// Chars returns an [*Error] when s holds U+0000 or is longer than max characters
+// (runes, the unit of PostgreSQL's length()), else nil.
 func Chars(field, s string, max int) error {
+	if err := NoNUL(field, s); err != nil {
+		return err
+	}
 	if len(s) > max && utf8.RuneCountInString(s) > max { // len(s) >= runes: skip the count when it cannot exceed
 		return &Error{Field: field, Max: max, Unit: UnitChars}
 	}

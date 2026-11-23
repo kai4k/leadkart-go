@@ -77,6 +77,10 @@ func (h *OrderPackedIngestor) Handle(ctx context.Context, evt *ordersevents.Orde
 		WeightGrams:           evt.WeightGrams,
 		ExpectedDeliveryAt:    eta,
 		CreatedByMembershipID: membership.ID(evt.PackedByMembershipID),
+		// Orders accepted this pack at PackedAtUTC; judge the delivery date at
+		// that moment, not at the worker's clock (a late consumption or a
+		// dead-letter replay must still succeed). A zero value falls back to now.
+		RulesJudgedAt: evt.PackedAtUTC,
 	})
 	if err != nil {
 		// retry — DB hiccup or transient; idempotent so safe.

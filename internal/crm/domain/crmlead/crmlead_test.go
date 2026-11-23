@@ -566,3 +566,19 @@ func TestLose_ReasonTooLong_IsTextLimit(t *testing.T) {
 		t.Fatal("a refused lose must not change the stage")
 	}
 }
+
+// M1: a stage-change reason holding U+0000 is refused (it travels in the event
+// to consumers that store it), and the stage does not move.
+func TestChangeStage_ReasonWithNUL_IsRefused(t *testing.T) {
+	t.Parallel()
+	l := newLead(t)
+	before := l.Stage()
+	err := l.ChangeStage(crmlead.StageContacted, tidMemCloser, "called\x00back", fixedNow)
+	te, ok := textlimit.Of(err)
+	if !errors.Is(err, crmlead.ErrInvalid) || !ok || te.Code() != "reason_invalid_characters" {
+		t.Fatalf("want ErrInvalid + reason_invalid_characters, got %v", err)
+	}
+	if l.Stage() != before {
+		t.Fatal("a refused stage change must not move the lead")
+	}
+}

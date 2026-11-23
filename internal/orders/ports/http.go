@@ -117,7 +117,7 @@ func handleMintCreditNote(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusUnprocessableEntity, errCodeCreditNoteExceedsInvoice, err.Error())
 		case errors.Is(err, invoice.ErrNotFound):
 			writeError(w, http.StatusNotFound, errCodeInvoiceNotFound, "order has no invoice to credit")
-		case errors.Is(err, textlimit.ErrTooLong):
+		case errors.Is(err, textlimit.ErrInvalid):
 			te, _ := textlimit.Of(err)
 			writeError(w, http.StatusUnprocessableEntity, te.Code(), te.Error())
 		case errors.Is(err, creditnote.ErrInvalid):
@@ -160,6 +160,9 @@ func handleCreateQuotation(log *slog.Logger, a app.Application) http.Handler {
 		switch {
 		case err == nil:
 			writeJSON(w, http.StatusCreated, CreateQuotationResponse{QuotationID: id.String()})
+		case errors.Is(err, textlimit.ErrInvalid):
+			te, _ := textlimit.Of(err)
+			writeError(w, http.StatusUnprocessableEntity, te.Code(), te.Error())
 		case errors.Is(err, quotation.ErrInvalid):
 			writeError(w, http.StatusUnprocessableEntity, errCodeValidation, err.Error())
 		default:
@@ -459,7 +462,7 @@ func handleRecordPayment(log *slog.Logger, a app.Application) http.Handler {
 			writeJSON(w, http.StatusCreated, RecordPaymentResponse{PaymentID: res.PaymentID.String()})
 		case errors.Is(err, payment.ErrAlreadyExistsForExternalReference):
 			writeError(w, http.StatusConflict, errCodePaymentConflict, "")
-		case errors.Is(err, textlimit.ErrTooLong):
+		case errors.Is(err, textlimit.ErrInvalid):
 			te, _ := textlimit.Of(err)
 			writeError(w, http.StatusUnprocessableEntity, te.Code(), te.Error())
 		case errors.Is(err, command.ErrTokenPaymentRoute):

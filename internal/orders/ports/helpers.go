@@ -108,6 +108,9 @@ func mapQuotationMutation(w http.ResponseWriter, log *slog.Logger, r *http.Reque
 		writeError(w, http.StatusNotFound, errCodeQuotationNotFound, "")
 	case errors.Is(err, quotation.ErrInvalidTransition):
 		writeError(w, http.StatusConflict, errCodeInvalidTransition, err.Error())
+	case errors.Is(err, textlimit.ErrInvalid):
+		te, _ := textlimit.Of(err)
+		writeError(w, http.StatusUnprocessableEntity, te.Code(), te.Error())
 	case errors.Is(err, quotation.ErrInvalid):
 		writeError(w, http.StatusUnprocessableEntity, errCodeValidation, err.Error())
 	default:
@@ -127,7 +130,7 @@ func mapOrderMutation(w http.ResponseWriter, log *slog.Logger, r *http.Request, 
 		writeError(w, http.StatusConflict, errCodeInvalidTransition, err.Error())
 	case errors.Is(err, payment.ErrAlreadyExistsForExternalReference):
 		writeError(w, http.StatusConflict, errCodePaymentConflict, "")
-	case errors.Is(err, textlimit.ErrTooLong):
+	case errors.Is(err, textlimit.ErrInvalid):
 		te, _ := textlimit.Of(err)
 		writeError(w, http.StatusUnprocessableEntity, te.Code(), te.Error())
 	case errors.Is(err, parcel.ErrInvalid):

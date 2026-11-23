@@ -2562,7 +2562,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ListProductsResponse' }
-        '400': { $ref: '#/components/responses/BadRequest' }
+        '400': { description: "`invalid_query` — a malformed cursor, or a `search`, `dosage_form` or `manufacturer` filter holding the NUL character (`%00`; it used to be a 500)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -2963,7 +2963,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
-        '422': { description: "`reason_too_long` — over 1000 bytes", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '422': { description: "`reason_too_long` — over 1000 bytes; `reason_invalid_characters` — the reason holds the NUL character (U+0000)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/crm/leads/{leadId}/stage:
     post:
@@ -2998,7 +2998,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
+        '422': { description: "`reason_invalid_characters` — the reason holds the NUL character (U+0000); otherwise `invalid_stage`", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/crm/leads/{leadId}/temperature:
     post:
@@ -3070,7 +3070,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
-        '422': { description: "`notes_too_long` — over 4000 bytes", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '422': { description: "`notes_too_long` — over 4000 bytes; `notes_invalid_characters` — the notes hold the NUL character (U+0000)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/crm/leads/{leadId}/convert:
     post:
@@ -3380,7 +3380,7 @@ paths:
         '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/TenantNotActive' }
-        '422': { description: "`carrier_name_required`, `carrier_name_too_long` (over 200 characters), `box_count_invalid`, `weight_grams_invalid`, `expected_delivery_not_in_future`; otherwise `invalid_body`", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '422': { description: "`carrier_name_required`, `carrier_name_too_long` (over 200 characters), `box_count_invalid`, `weight_grams_invalid`, `expected_delivery_not_in_future`; otherwise `invalid_body`; `carrier_name_invalid_characters` — a control (NUL, CR, LF, TAB), direction-override or invisible character in the carrier name", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '500': { $ref: '#/components/responses/InternalServerError' }
     get:
       tags: [dispatch]
@@ -3450,7 +3450,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
-        '422': { description: "`docket_number_too_long` — over 100 characters; otherwise `invalid_body`", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '422': { description: "`docket_number_too_long` — over 100 characters; otherwise `invalid_body`; `docket_number_invalid_characters` — the docket number holds the NUL character (U+0000)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /api/v1/dispatch/consignment-notes/{consignmentNoteId}/in-transit:
@@ -3524,7 +3524,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
-        '422': { description: "`reason_too_long` — over 1000 characters; otherwise `invalid_body`", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '422': { description: "`reason_too_long` — over 1000 characters; otherwise `invalid_body`; `reason_invalid_characters` — the reason holds the NUL character (U+0000)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /api/v1/orders/quotations:
@@ -3555,7 +3555,7 @@ paths:
         '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/TenantNotActive' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
+        '422': { description: "`note_invalid_characters`, `sku_invalid_characters`, `description_invalid_characters` — the note, or an item's SKU or description, holds the NUL character (U+0000; it used to be a 500); otherwise validation (`validation_failed`). Nothing is written.", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /api/v1/orders/quotations/{quotationId}:
@@ -3606,7 +3606,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
+        '422': { description: "`note_invalid_characters`, `sku_invalid_characters`, `description_invalid_characters` — the note, or an item's SKU or description, holds the NUL character (U+0000; it used to be a 500); otherwise validation (`validation_failed`). Nothing is written.", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /api/v1/orders/quotations/{quotationId}/approve:
@@ -3662,7 +3662,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '500': { $ref: '#/components/responses/InternalServerError' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
+        '422': { description: "`reason_invalid_characters` — the reason holds the NUL character (U+0000; it used to be a 500); otherwise validation (`validation_failed`)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/orders/orders/{orderId}:
     get:
@@ -3709,7 +3709,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
-        '422': { description: "`external_reference_too_long` (over 100 characters), `notes_too_long` (over 2000); otherwise validation (`validation_failed`). Nothing is written.", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '422': { description: "`external_reference_too_long` (over 100 characters), `notes_too_long` (over 2000); otherwise validation (`validation_failed`). Nothing is written. Also `external_reference_invalid_characters` / `notes_invalid_characters` — the value holds the NUL character (U+0000)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /api/v1/orders/orders/{orderId}/confirm:
@@ -3761,7 +3761,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '500': { $ref: '#/components/responses/InternalServerError' }
-        '422': { description: "Refused before the order changes state, with the rules the consignment note enforces: `carrier_name_required`, `carrier_name_too_long` (over 200 characters), `box_count_invalid` (not above 0), `weight_grams_invalid` (not above 0), `expected_delivery_not_in_future`. Otherwise validation (`validation_failed`).", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '422': { description: "Refused before the order changes state, with the rules the consignment note enforces: `carrier_name_required`, `carrier_name_too_long` (over 200 characters), `box_count_invalid` (not above 0), `weight_grams_invalid` (not above 0), `expected_delivery_not_in_future`. Otherwise validation (`validation_failed`).; `carrier_name_invalid_characters` — a control (NUL, CR, LF, TAB), direction-override or invisible character in the carrier name (a NUL used to pass and then fail the consignment note on every attempt)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/orders/orders/{orderId}/invoice:
     get:
@@ -3833,7 +3833,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '500': { $ref: '#/components/responses/InternalServerError' }
-        '422': { description: "`reason_too_long` — over 1000 characters; otherwise validation (`validation_failed`)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '422': { description: "`reason_too_long` — over 1000 characters; otherwise validation (`validation_failed`); `reason_invalid_characters` — the reason holds the NUL character (U+0000)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/orders/orders/{orderId}/complete:
     post:
@@ -3911,7 +3911,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
-        '422': { description: "`token_payment_route_required` — kind is `token`: use POST /orders/orders/{orderId}/token-payment; `external_reference_too_long` (over 100 characters), `notes_too_long` (over 2000); otherwise validation (`validation_failed`)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '422': { description: "`token_payment_route_required` — kind is `token`: use POST /orders/orders/{orderId}/token-payment; `external_reference_too_long` (over 100 characters), `notes_too_long` (over 2000); otherwise validation (`validation_failed`); `external_reference_invalid_characters` / `notes_invalid_characters` — the value holds the NUL character (U+0000)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /api/v1/orders/orders/{orderId}/credit-notes:
@@ -3949,7 +3949,7 @@ paths:
         '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/TenantNotActive' }
-        '422': { description: "`credit_note_exceeds_invoice` — the notes on the invoice, this one included, would pass its grand total; `reason_too_long` — over 1000 characters; `credit_note_invalid` — a field is invalid", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '422': { description: "`credit_note_exceeds_invoice` — the notes on the invoice, this one included, would pass its grand total; `reason_too_long` — over 1000 characters; `credit_note_invalid` — a field is invalid; `reason_invalid_characters` — the reason holds the NUL character (U+0000)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /api/v1/crm/leads/{leadId}/lose:
@@ -3985,7 +3985,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422':
-          description: "`reason_required` — reason missing; `reason_too_long` — over 1000 bytes (it used to be reported as `invalid_stage`)"
+          description: "`reason_required` — reason missing; `reason_too_long` — over 1000 bytes (it used to be reported as `invalid_stage`); `reason_invalid_characters` — the reason holds the NUL character (U+0000)"
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -4026,7 +4026,7 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/TenantNotActive' }
         '422':
-          description: "`invalid_due_at` — due_at missing or invalid; `notes_too_long` — notes over 2000 bytes (it used to be reported as `invalid_due_at`)"
+          description: "`invalid_due_at` — due_at missing or invalid; `notes_too_long` — notes over 2000 bytes (it used to be reported as `invalid_due_at`); `notes_invalid_characters` — the notes hold the NUL character (U+0000)"
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -4134,7 +4134,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422':
-          description: "`reason_required` — reason missing; `reason_too_long` — over 1000 bytes (it used to be reported as `reason_required`)"
+          description: "`reason_required` — reason missing; `reason_too_long` — over 1000 bytes (it used to be reported as `reason_required`); `reason_invalid_characters` — the reason holds the NUL character (U+0000)"
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

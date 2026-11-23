@@ -80,7 +80,7 @@ func (h CompensateOrderCancellationHandler) Handle(ctx context.Context, cmd Comp
 		TenantID:           cmd.TenantID,
 		InvoiceID:          inv.ID(),
 		Kind:               invoicenumber.KindCancellationNote.String(),
-		Reason:             "order cancelled: " + cmd.Reason,
+		Reason:             cancellationNoteReason(cmd.Reason),
 		AmountPaise:        remaining,
 		IssuedByMembership: cmd.IssuedByMembership,
 	})
@@ -91,6 +91,20 @@ func (h CompensateOrderCancellationHandler) Handle(ctx context.Context, cmd Comp
 		return CompensateOrderCancellationResult{}, fmt.Errorf("orders compensate_cancellation: %w", err)
 	}
 	return CompensateOrderCancellationResult{CreditNoteID: res.CreditNoteID, Minted: true}, nil
+}
+
+// cancellationNoteReason is the reason a cancellation note carries: a fixed
+// prefix, then the cancel reason. The cancel route accepts a reason as long as
+// the note's whole limit, so the composed text is clipped to
+// [creditnote.MaxReasonChars] characters (runes, the unit of the column CHECK):
+// an accepted cancel must always be able to reverse its invoice. The full
+// reason stays on the order (orders.cancellation_reason).
+func cancellationNoteReason(cancelReason string) string {
+	r := []rune("order cancelled: " + cancelReason)
+	if len(r) > creditnote.MaxReasonChars {
+		r = r[:creditnote.MaxReasonChars]
+	}
+	return string(r)
 }
 
 // MintCreditNoteCommand allocates a gapless credit-note / cancellation-note

@@ -34,6 +34,13 @@ type CreateConsignmentNoteCommand struct {
 	WeightGrams           int64
 	ExpectedDeliveryAt    *time.Time
 	CreatedByMembershipID membership.ID
+	// RulesJudgedAt is the moment the pack rules (a delivery date not in the
+	// past) are judged at. The packed-event path sets it to the moment the order
+	// was packed: Orders accepted the pack then, and the worker may consume the
+	// event any time later (an outage, a backlog, a dead-letter replay), so
+	// judging against the worker's clock would refuse a valid pack forever. Zero
+	// (the HTTP create route, which has no pack moment) means now.
+	RulesJudgedAt time.Time
 }
 
 // CreateConsignmentNoteResult tells the subscriber whether the row
@@ -104,6 +111,7 @@ func (h CreateConsignmentNoteHandler) Handle(
 			ExpectedDeliveryAt:    cmd.ExpectedDeliveryAt,
 			CreatedByMembershipID: cmd.CreatedByMembershipID,
 			Now:                   h.now(),
+			RulesJudgedAt:         cmd.RulesJudgedAt,
 		})
 		if err != nil {
 			return fmt.Errorf("construct: %w", err)

@@ -1,7 +1,9 @@
 package command_test
 
 import (
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -138,6 +140,55 @@ func TestCompensateOrderCancellation_MintsRemainderAfterEarlierCredit(t *testing
 	res, err = h.Handle(ctx, cmd)
 	require.NoError(t, err)
 	require.False(t, res.Minted, "replay mints nothing")
+}
+
+// I3: the cancel route accepts a reason of up to 1000 characters, and the
+// compensation prepends "order cancelled: " (17). The composed reason must be
+// clipped to the note's own limit, in characters, or the note is refused, the
+// event dead-letters and the invoice is never reversed.
+func TestCompensateOrderCancellation_LongCancelReasonStillReversesTheInvoice(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		reason string
+	}{
+		{"983 characters (always fitted)", strings.Repeat("r", 983)},
+		{"984 characters", strings.Repeat("r", 984)},
+		{"1000 characters", strings.Repeat("r", order.MaxCancellationReasonChars)},
+		{"1000 Devanagari characters (3000 bytes)", strings.Repeat("र", order.MaxCancellationReasonChars)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tid := tenant.ID(uuid.NewString())
+			actor := membership.ID(uuid.NewString())
+			ctx := t.Context()
+			notes := creditnotetest.NewFakeRepository()
+			invoices := invoicetest.NewFakeRepository()
+			orders := ordertest.NewFakeRepository()
+			alloc := invoicenumbertest.NewFakeAllocator()
+			inv := seedInvoice(t, invoices, orders, alloc, tid, 100000)
+			mint := command.NewMintCreditNoteHandler(fakeUoW{}, notes, invoices, orders, alloc, now, cnID)
+
+			res, err := command.NewCompensateOrderCancellationHandler(invoices, notes, mint).Handle(ctx, command.CompensateOrderCancellationCommand{
+				TenantID: tid, OrderID: inv.OrderID(), PriorState: order.StateInvoiced, Reason: tc.reason, IssuedByMembership: actor,
+			})
+			require.NoError(t, err, "a cancel reason the cancel route accepted must never block the reversal")
+			require.True(t, res.Minted)
+			all, err := notes.ListByInvoice(ctx, tid, inv.ID())
+			require.NoError(t, err)
+			require.Len(t, all, 1)
+			require.Equal(t, int64(0), creditnote.RemainingPaise(inv.GrandTotalPaise(), all), "invoice fully reversed")
+			got := all[0].Reason()
+			require.LessOrEqual(t, utf8.RuneCountInString(got), creditnote.MaxReasonChars)
+			require.True(t, utf8.ValidString(got), "the clip must not cut a character in half")
+			require.True(t, strings.HasPrefix(got, "order cancelled: "))
+			want := []rune("order cancelled: " + tc.reason)
+			if len(want) > creditnote.MaxReasonChars {
+				want = want[:creditnote.MaxReasonChars]
+			}
+			require.Equal(t, string(want), got, "the reason is kept up to the limit, never dropped")
+		})
+	}
 }
 
 func approvedOrder(t *testing.T, orders *ordertest.FakeRepository, tid tenant.ID, actor membership.ID) order.ID {

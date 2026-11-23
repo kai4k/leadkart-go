@@ -191,14 +191,17 @@ func NewPackOrderHandler(uow pg.UnitOfWork, orders order.Repository, enqueuer Ou
 func (h PackOrderHandler) Handle(ctx context.Context, cmd PackOrderCommand) error {
 	// The consignment note's own rules (common/parcel), checked BEFORE any
 	// state change: a pack Dispatch would refuse must never reach `packed`.
+	// ONE clock reading: the moment the rules are judged at is the PackedAtUTC
+	// the event carries, and Dispatch judges the consignment note at that same
+	// moment, so the two can never disagree about the delivery date.
+	now := h.now().UTC()
 	if err := parcel.Validate(parcel.Details{
 		CarrierName: cmd.CarrierName, BoxCount: cmd.BoxCount,
 		WeightGrams: cmd.WeightGrams, ExpectedDeliveryAt: cmd.ExpectedDeliveryAt,
-	}, h.now().UTC()); err != nil {
+	}, now); err != nil {
 		return fmt.Errorf("orders pack_order: %w", err)
 	}
 	return h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
-		now := h.now().UTC()
 		if err := h.orders.UpdateByID(ctx, cmd.TenantID, cmd.OrderID, func(o *order.Order) (bool, error) {
 			if err := o.MarkPacked(cmd.PackedByMembership, now); err != nil {
 				return false, fmt.Errorf("pack: %w", err)

@@ -147,3 +147,24 @@ func TestOrderPackedIngestor_DefaultsCarrierWhenAbsent(t *testing.T) {
 		t.Errorf("carrier=%s want Unassigned", cn.CarrierName())
 	}
 }
+
+// I1: the worker consumes the packed event late (12:00) for an order packed at
+// 10:00 with delivery expected at 11:00. The note must be created: the date is
+// judged at the event's PackedAtUTC, not at the worker's clock, otherwise the
+// event is refused on every attempt and a dead-letter replay can never succeed.
+func TestOrderPackedIngestor_LateConsumptionStillCreatesTheNote(t *testing.T) {
+	t.Parallel()
+	h, repo := buildHandler(t)
+	tid, oid := ids.NewV7().String(), ids.NewV7().String()
+	evt := validEvent(tid, oid)
+	evt.PackedAtUTC = fixedNow().Add(-2 * time.Hour)
+	eta := fixedNow().Add(-time.Hour)
+	evt.ExpectedDeliveryAtUTC = &eta
+
+	if err := h.Handle(t.Context(), &evt); err != nil {
+		t.Fatalf("a pack that was valid at PackedAtUTC must not be refused later: %v", err)
+	}
+	if _, err := repo.GetByOrderID(t.Context(), tenant.ID(tid), consignmentnote.OrderID(oid)); err != nil {
+		t.Fatalf("no consignment note was created: %v", err)
+	}
+}

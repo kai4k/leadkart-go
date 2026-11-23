@@ -30,6 +30,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/leadkart/leadkart-go/internal/common/errs"
+	"github.com/leadkart/leadkart-go/internal/common/textlimit"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
@@ -211,6 +212,9 @@ func New(id ID, productID product.ID, tenantID tenant.ID, actorID membership.ID,
 	if bn == "" {
 		return nil, fmt.Errorf("%w: batch_number required", ErrInvalid)
 	}
+	if err := textlimit.NoNUL("batch_number", bn); err != nil { // a text column cannot hold U+0000
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
 	if len(bn) < BatchNumberMinLen || len(bn) > BatchNumberMaxLen {
 		return nil, fmt.Errorf("%w: batch_number length %d not in [%d,%d]",
 			ErrInvalid, len(bn), BatchNumberMinLen, BatchNumberMaxLen)
@@ -219,12 +223,18 @@ func New(id ID, productID product.ID, tenantID tenant.ID, actorID membership.ID,
 	if man == "" {
 		return nil, fmt.Errorf("%w: manufacturer_name required", ErrInvalid)
 	}
+	if err := textlimit.NoNUL("manufacturer_name", man); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
 	if len(man) > ManufacturerNameMaxLen {
 		return nil, fmt.Errorf("%w: manufacturer_name too long (max %d)", ErrInvalid, ManufacturerNameMaxLen)
 	}
 	ml := strings.TrimSpace(spec.ManufacturingLicenceNumber)
 	if ml == "" {
 		return nil, fmt.Errorf("%w: manufacturing_licence_number required", ErrInvalid)
+	}
+	if err := textlimit.NoNUL("manufacturing_licence_number", ml); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if len(ml) > ManufacturingLicenceMax {
 		return nil, fmt.Errorf("%w: manufacturing_licence_number too long (max %d)", ErrInvalid, ManufacturingLicenceMax)

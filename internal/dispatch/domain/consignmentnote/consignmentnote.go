@@ -105,6 +105,11 @@ type NewInput struct {
 	ExpectedDeliveryAt    *time.Time
 	CreatedByMembershipID membership.ID
 	Now                   time.Time
+	// RulesJudgedAt is the moment the pack rules are judged at (a delivery date
+	// before it is in the past). Zero means Now. The packed-event path passes
+	// the moment the order was packed, so a pack Orders accepted is never
+	// refused because the event was consumed later.
+	RulesJudgedAt time.Time
 }
 
 // New constructs a pending ConsignmentNote.
@@ -126,10 +131,14 @@ func New(in NewInput) (*ConsignmentNote, error) {
 	}
 	// The pack rules live in common/parcel so Orders (which checks them before
 	// it packs) and this aggregate cannot disagree.
+	judgedAt := in.Now
+	if !in.RulesJudgedAt.IsZero() {
+		judgedAt = in.RulesJudgedAt
+	}
 	if err := parcel.Validate(parcel.Details{
 		CarrierName: in.CarrierName, BoxCount: in.BoxCount,
 		WeightGrams: in.WeightGrams, ExpectedDeliveryAt: in.ExpectedDeliveryAt,
-	}, in.Now); err != nil {
+	}, judgedAt); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	carrier := strings.TrimSpace(in.CarrierName)
