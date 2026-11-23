@@ -189,6 +189,42 @@ func (q *Queries) ListPolicyHistoryPage(ctx context.Context, arg ListPolicyHisto
 	return items, nil
 }
 
+const listStoredPolicyTenants = `-- name: ListStoredPolicyTenants :many
+SELECT tenant_id
+FROM   companysettings.commerce_policy
+WHERE  version >= 1
+  AND  tenant_id > $1
+ORDER  BY tenant_id
+LIMIT  $2
+`
+
+type ListStoredPolicyTenantsParams struct {
+	TenantID pgtype.UUID
+	Limit    int32
+}
+
+// Tenants with a stored (version >= 1) policy, keyset by tenant id, for the
+// daily republish job. The caller runs it under platform scope.
+func (q *Queries) ListStoredPolicyTenants(ctx context.Context, arg ListStoredPolicyTenantsParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listStoredPolicyTenants, arg.TenantID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []pgtype.UUID
+	for rows.Next() {
+		var tenant_id pgtype.UUID
+		if err := rows.Scan(&tenant_id); err != nil {
+			return nil, err
+		}
+		items = append(items, tenant_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateCommercePolicy = `-- name: UpdateCommercePolicy :exec
 UPDATE companysettings.commerce_policy SET
     version                  = $2,

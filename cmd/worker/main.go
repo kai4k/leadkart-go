@@ -59,6 +59,10 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/common/obs"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	companysettingsadapters "github.com/leadkart/leadkart-go/internal/companysettings/adapters"
+	companysettingscommand "github.com/leadkart/leadkart-go/internal/companysettings/app/command"
+	companysettingsjobs "github.com/leadkart/leadkart-go/internal/companysettings/app/jobs"
+	companysettingssubscribers "github.com/leadkart/leadkart-go/internal/companysettings/ports/subscribers"
 	crmadapters "github.com/leadkart/leadkart-go/internal/crm/adapters"
 	crmcommand "github.com/leadkart/leadkart-go/internal/crm/app/command"
 	crmjobs "github.com/leadkart/leadkart-go/internal/crm/app/jobs"
@@ -299,6 +303,16 @@ func run(ctx context.Context, stdout *os.File) error {
 	platformTenantRegistered := platformsubscribers.NewTenantRegisteredIngestor(
 		platformcommand.NewInitialiseLeadCreditsHandler(tx, platformCredits, time.Now), logger)
 
+	// companysettings (ADR 0070): identity.tenant_registered.v1 -> seed version 1 of
+	// the tenant's commerce policy through the normal path (history + policy_changed
+	// event, so Orders and Inventory learn it too); the daily job re-announces every
+	// stored version so a dead-lettered event cannot leave a replica stale for long.
+	companysettingsRepo := companysettingsadapters.NewSettingsRepository(pool, tx)
+	companysettingsTenantRegistered := companysettingssubscribers.NewTenantRegisteredSubscriber(
+		companysettingscommand.NewSeedSettingsHandler(companysettingsRepo, time.Now), logger)
+	companysettingsRepublish := companysettingscommand.NewRepublishHandler(companysettingsRepo, time.Now)
+	companysettingsStoredTenants := companysettingsadapters.NewStoredTenantsLister(pool, tx)
+
 	// Tasks module (Phase C.2 — BRD §6.8). Writes ride the shared
 	// common.outbox; the single Watermill Forwarder relays them. Tasks
 	// consumes CRM's call_logged + lead_converted events for follow-up
@@ -425,6 +439,7 @@ func run(ctx context.Context, stdout *os.File) error {
 	cqrsHandlers := subscribers.Handlers(subWiring.Families, subWiring.StampCache, buildEmailSender(logger), logger, time.Now)
 	cqrsHandlers = append(cqrsHandlers, crmsubscribers.Handlers(crmIngest, crmCallback)...)
 	cqrsHandlers = append(cqrsHandlers, platformsubscribers.Handlers(platformTenantRegistered)...)
+	cqrsHandlers = append(cqrsHandlers, companysettingssubscribers.Handlers(companysettingsTenantRegistered)...)
 	cqrsHandlers = append(cqrsHandlers, taskssubscribers.Handlers(tasksCallLoggedSub, tasksLeadConvertedSub)...)
 	cqrsHandlers = append(cqrsHandlers, dispatchsubscribers.Handlers(dispatchOrderPacked, dispatchOrderCancelled)...)
 	cqrsHandlers = append(cqrsHandlers, orderssubscribers.Handlers(ordersAutoInvoiceSub, ordersConsignmentCreatedSub, ordersConsignmentDeliveredSub, ordersCancelCompensationSub, ordersPolicyChangedSub)...)
@@ -463,6 +478,10 @@ func run(ctx context.Context, stdout *os.File) error {
 	}
 	if err := river.AddWorkerSafely(workers, inventoryjobs.NewReorderScanWorker(inventoryAlertScan, logger, time.Now)); err != nil {
 		return fmt.Errorf("register inventory reorder scan worker: %w", err)
+	}
+	// companysettings: daily republish of every stored commerce policy (ADR 0070).
+	if err := river.AddWorkerSafely(workers, companysettingsjobs.NewRepublishWorker(companysettingsStoredTenants, companysettingsRepublish, logger)); err != nil {
+		return fmt.Errorf("register companysettings republish worker: %w", err)
 	}
 	// Identity: purge dead rows of the phantom failed-login counter (ADR 0068 D12).
 	// The repository is built with the same server secret the API uses, but the
@@ -511,6 +530,13 @@ func run(ctx context.Context, stdout *os.File) error {
 			river.PeriodicInterval(inventoryjobs.ReorderScanInterval),
 			func() (river.JobArgs, *river.InsertOpts) {
 				return inventoryjobs.ReorderScanJob{}, nil
+			},
+			&river.PeriodicJobOpts{RunOnStart: false},
+		),
+		river.NewPeriodicJob(
+			river.PeriodicInterval(companysettingsjobs.RepublishInterval),
+			func() (river.JobArgs, *river.InsertOpts) {
+				return companysettingsjobs.RepublishJob{}, nil
 			},
 			&river.PeriodicJobOpts{RunOnStart: false},
 		),

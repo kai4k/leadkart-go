@@ -429,6 +429,10 @@ func TestArch_RepoTenantScopedReadsUseTxScopeTenant(t *testing.T) {
 		// crm.crm_leads. Per-row reminder writes happen via the
 		// CreateReminderHandler under TxScopeTenant.
 		"internal/crm/adapters/mature_lead_scanner_pg.go",
+		// companysettings daily republish lists the tenants that have a stored policy
+		// across ALL tenants under TxScopePlatform (ADR 0070); the per-tenant
+		// republish that follows runs under the tenant's own scope.
+		"internal/companysettings/adapters/stored_tenants_lister_pg.go",
 	}
 
 	type violation struct {

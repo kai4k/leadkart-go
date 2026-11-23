@@ -61,3 +61,13 @@ WHERE  tenant_id = $1
   AND  version < $2
 ORDER  BY version DESC
 LIMIT  $3;
+
+-- name: ListStoredPolicyTenants :many
+-- Tenants with a stored (version >= 1) policy, keyset by tenant id, for the
+-- daily republish job. The caller runs it under platform scope.
+SELECT tenant_id
+FROM   companysettings.commerce_policy
+WHERE  version >= 1
+  AND  tenant_id > $1
+ORDER  BY tenant_id
+LIMIT  $2;
