@@ -42,6 +42,7 @@ import (
 
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/components/forwarder"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"github.com/redis/go-redis/v9/maintnotifications"
@@ -394,9 +395,10 @@ func run(ctx context.Context, stdout *os.File) error {
 	inventoryReleaseSub := inventorysubscribers.NewReleaseStockSubscriber(inventoryRelease, logger)
 	// companysettings.policy_changed.v1 -> Inventory's replica of the company
 	// commerce policy (ADR 0070): stored only when the version is newer.
+	inventoryRescanEnqueuer := &riverRescanEnqueuer{}
 	inventoryAlertScanner := inventoryjobs.NewScanner(inventoryadapters.NewAlertScanRepository(pool, tx), inventoryWindow, logger, time.Now)
 	inventoryPolicyChangedSub := inventorysubscribers.NewPolicyChangedSubscriber(
-		inventorycommand.NewApplyPolicyHandler(tx, inventoryPolicyReplica), logger).WithExpiryRescan(inventoryAlertScanner)
+		inventorycommand.NewApplyPolicyHandler(tx, inventoryPolicyReplica), logger).WithExpiryRescan(inventoryRescanEnqueuer)
 
 	// Notifications module (BRD §6.9 — subscriber-decides fan-out). Cross-module
 	// consumers map source events → recipient notifications:
@@ -487,6 +489,9 @@ func run(ctx context.Context, stdout *os.File) error {
 	if err := river.AddWorkerSafely(workers, inventoryjobs.NewExpiryScanWorker(inventoryAlertScan, inventoryWindow, logger, time.Now)); err != nil {
 		return fmt.Errorf("register inventory expiry scan worker: %w", err)
 	}
+	if err := river.AddWorkerSafely(workers, inventoryjobs.NewExpiryRescanWorker(inventoryAlertScanner)); err != nil {
+		return fmt.Errorf("register inventory expiry rescan worker: %w", err)
+	}
 	if err := river.AddWorkerSafely(workers, inventoryjobs.NewReorderScanWorker(inventoryAlertScan, inventoryWindow, logger, time.Now)); err != nil {
 		return fmt.Errorf("register inventory reorder scan worker: %w", err)
 	}
@@ -567,6 +572,7 @@ func run(ctx context.Context, stdout *os.File) error {
 	}, healthCheckTimeout)
 	adminSrv := obs.NewAdminServer(cfg.Listen.WorkerAdmin, health)
 
+	inventoryRescanEnqueuer.client = riverClient
 	return runWorkerServices(ctx, logger, outboxForwarder, router, riverClient, adminSrv)
 }
 
@@ -702,4 +708,20 @@ type stockAlertRecipients struct {
 func (r stockAlertRecipients) StockAlertRecipients(ctx context.Context, tenantID tenant.ID) ([]membership.ID, error) {
 	p := permission.IdentityPermissions
 	return r.holders.ActiveMembershipsHoldingAny(ctx, tenantID, []string{p.Meta.TenantAdmin, p.Inventory.Stock.Manage})
+}
+
+// riverRescanEnqueuer enqueues the per-tenant expiry rescan on the River client,
+// which exists only after the subscribers are built (it is set before the router runs).
+type riverRescanEnqueuer struct {
+	client *jobs.Client
+}
+
+func (e *riverRescanEnqueuer) EnqueueExpiryRescan(ctx context.Context, tenantID uuid.UUID) error {
+	if e.client == nil {
+		return errors.New("river client not ready")
+	}
+	if _, err := e.client.Insert(ctx, inventoryjobs.ExpiryRescanJob{TenantID: tenantID.String()}, nil); err != nil {
+		return fmt.Errorf("insert expiry rescan job: %w", err)
+	}
+	return nil
 }

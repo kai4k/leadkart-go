@@ -33,12 +33,12 @@ const HandlerPolicyRepublished = "inventory.subscribers.PolicyRepublished"
 type PolicyChangedSubscriber struct {
 	applier command.ApplyPolicyHandler
 	log     *slog.Logger
-	rescan  command.ExpiryRescanner
+	rescan  command.ExpiryRescanEnqueuer
 }
 
 // WithExpiryRescan returns the subscriber that also rescans the tenant expiry
 // alerts when a newer policy version has been stored.
-func (h *PolicyChangedSubscriber) WithExpiryRescan(r command.ExpiryRescanner) *PolicyChangedSubscriber {
+func (h *PolicyChangedSubscriber) WithExpiryRescan(r command.ExpiryRescanEnqueuer) *PolicyChangedSubscriber {
 	cp := *h
 	cp.rescan = r
 	return &cp
@@ -81,8 +81,8 @@ func (h *PolicyChangedSubscriber) applyVersion(ctx context.Context, payloadTenan
 		"tenant_id", payloadTenant.String(), "version", version, "stored", out.Stored, "republish", republish)
 	if out.Stored && h.rescan != nil {
 		// Best effort: the replica is stored, the daily run is the safety net.
-		if _, err := h.rescan.ScanExpiry(ctx, payloadTenant); err != nil {
-			h.log.ErrorContext(ctx, "inventory: expiry rescan after a policy change failed", "tenant_id", payloadTenant.String(), "err", err)
+		if err := h.rescan.EnqueueExpiryRescan(ctx, payloadTenant); err != nil {
+			h.log.ErrorContext(ctx, "inventory: enqueueing the expiry rescan after a policy change failed", "tenant_id", payloadTenant.String(), "err", err)
 		}
 	}
 	return nil

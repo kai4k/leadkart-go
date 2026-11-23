@@ -73,10 +73,11 @@ func (h ApplyPolicyHandler) Handle(ctx context.Context, cmd ApplyPolicyCommand) 
 	return out, nil
 }
 
-// ExpiryRescanner raises one tenant expiry alerts at once. A tighter rule (a
-// larger stop-before, a new warning tier) puts batches inside a tier now, not at
-// the next daily run; the policy-changed subscriber calls it after storing a newer
-// version.
-type ExpiryRescanner interface {
-	ScanExpiry(ctx context.Context, tenantID uuid.UUID) (int, error)
+// ExpiryRescanEnqueuer schedules one tenant expiry rescan as a background job. A
+// tighter rule (a larger stop-before, a new warning tier) puts batches inside a
+// tier now, not at the next daily run; the policy-changed subscriber calls it after
+// storing a newer version. It only ENQUEUES: scanning a large company inside the
+// event handler held the single delivery lane for every other company (review S1).
+type ExpiryRescanEnqueuer interface {
+	EnqueueExpiryRescan(ctx context.Context, tenantID uuid.UUID) error
 }

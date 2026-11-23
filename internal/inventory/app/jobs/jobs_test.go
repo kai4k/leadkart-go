@@ -128,7 +128,7 @@ func TestExpiryScan_OneAlertPerTierCrossedNeverPerDay(t *testing.T) {
 	}
 	evt, ok := repo.emitted[0].Event.(integrationevents.BatchExpiringSoonV1)
 	if !ok || evt.TierDays != 90 || evt.DaysUntilExpiry != 68 || evt.FreeQuantity != 80 ||
-		evt.LastSellableDay.Format(time.DateOnly) != "2026-07-31" || repo.emitted[0].Key != "tier:90" {
+		evt.LastSellableDay.Format(time.DateOnly) != "2026-07-31" || repo.emitted[0].Key != "tier:90:2026-07-31" {
 		t.Fatalf("event = %+v key %q", evt, repo.emitted[0].Key)
 	}
 	for d := 1; d <= 20; d++ { // every following day inside the tier: nothing new
@@ -138,7 +138,7 @@ func TestExpiryScan_OneAlertPerTierCrossedNeverPerDay(t *testing.T) {
 		t.Fatalf("a daily repeat: %d alerts after 20 more scans, want 1", len(repo.emitted))
 	}
 	run(time.Date(2026, 7, 5, 12, 0, 0, 0, time.UTC)) // 26 days left: the 30-day tier
-	if len(repo.emitted) != 2 || repo.emitted[1].Key != "tier:30" {
+	if len(repo.emitted) != 2 || repo.emitted[1].Key != "tier:30:2026-07-31" {
 		t.Fatalf("the next tier: %d alerts, last key %q", len(repo.emitted), repo.emitted[len(repo.emitted)-1].Key)
 	}
 }
@@ -155,7 +155,7 @@ func TestExpiryScan_TheProductThresholdIsAnExtraTierAndFarBatchesAreQuiet(t *tes
 	if err := w.Work(t.Context(), &river.Job[jobs.ExpiryScanJob]{}); err != nil {
 		t.Fatal(err)
 	}
-	if len(repo.emitted) != 1 || repo.emitted[0].SubjectID != withThreshold.BatchID || repo.emitted[0].Key != "tier:200" {
+	if len(repo.emitted) != 1 || repo.emitted[0].SubjectID != withThreshold.BatchID || repo.emitted[0].Key != "tier:200:2026-11-30" {
 		t.Fatalf("emitted %+v", repo.emitted)
 	}
 }
@@ -295,5 +295,58 @@ func TestScanSchedule_FiresAt0030InTheDefaultOffsetEveryDay(t *testing.T) {
 	}
 	if !jobs.PeriodicOpts().RunOnStart || jobs.ExpiryPeriodicJob() == nil || jobs.ReorderPeriodicJob() == nil {
 		t.Fatal("the scans run when the worker starts")
+	}
+}
+
+// Review S2: the dedup key carries the last sellable day, so a tier already raised for
+// one rule is raised again when the rule changes the day: after a company tightens and
+// then loosens its stop, the real warning for the restored day still fires.
+func TestExpiryScan_ARuleChangeThatMovesTheLastSellableDayRaisesTheTierAgain(t *testing.T) {
+	t.Parallel()
+	tid := uuid.New()
+	repo := newFake()
+	repo.tenants = []uuid.UUID{tid}
+	repo.candidates[tid] = []jobs.ExpiryCandidate{candidate(tid, time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC), 10, 0, 0, 0)}
+	run := func(stop int, now time.Time) {
+		t.Helper()
+		p := commercepolicy.Default()
+		p.Expiry.StopMonthsBefore = stop
+		w := jobs.NewExpiryScanWorker(repo, sellabilitytest.ResolverWith(p, now), silentLogger(), func() time.Time { return now })
+		if err := w.Work(t.Context(), &river.Job[jobs.ExpiryScanJob]{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run(1, fixedNow) // last sellable day 31 Jul, 68 days: tier 90
+	run(2, fixedNow) // tightened: 30 Jun, 37 days: tier 90 again, for another day
+	if len(repo.emitted) != 2 {
+		t.Fatalf("after tightening: %d alerts, want 2", len(repo.emitted))
+	}
+	run(1, time.Date(2026, 7, 5, 12, 0, 0, 0, time.UTC)) // loosened, 26 days before 31 Jul: tier 30 for 31 Jul
+	if len(repo.emitted) != 3 || repo.emitted[2].Key != "tier:30:2026-07-31" {
+		t.Fatalf("after loosening the real warning must fire: %d alerts, last %q", len(repo.emitted), repo.emitted[len(repo.emitted)-1].Key)
+	}
+}
+
+// Review S1: the rescan job scans exactly the tenant it names.
+func TestExpiryRescanWorker_ScansTheNamedTenantOnly(t *testing.T) {
+	t.Parallel()
+	a, b := uuid.New(), uuid.New()
+	repo := newFake()
+	repo.tenants = []uuid.UUID{a, b}
+	repo.candidates[a] = []jobs.ExpiryCandidate{candidate(a, time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC), 10, 0, 0, 0)}
+	repo.candidates[b] = []jobs.ExpiryCandidate{candidate(b, time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC), 10, 0, 0, 0)}
+	scanner := jobs.NewScanner(repo, sellabilitytest.Resolver(fixedNow), silentLogger(), clock)
+	w := jobs.NewExpiryRescanWorker(scanner)
+	if err := w.Work(t.Context(), &river.Job[jobs.ExpiryRescanJob]{Args: jobs.ExpiryRescanJob{TenantID: a.String()}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.emitted) != 1 || repo.emitted[0].TenantID != a {
+		t.Fatalf("emitted %+v", repo.emitted)
+	}
+	if (jobs.ExpiryRescanJob{}).Kind() != "inventory.expiry_rescan" {
+		t.Fatal("river kind is a stable name")
+	}
+	if err := w.Work(t.Context(), &river.Job[jobs.ExpiryRescanJob]{Args: jobs.ExpiryRescanJob{TenantID: "nope"}}); err == nil {
+		t.Fatal("a malformed tenant id must be refused (cancelled, not retried)")
 	}
 }

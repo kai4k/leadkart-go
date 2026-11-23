@@ -2,6 +2,7 @@ package subscribers_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"testing"
@@ -112,5 +113,43 @@ func TestPolicyChangedSubscriber_AppliesARepublishUnderItsOwnHandler(t *testing.
 	}
 	if store.stored[tenant.ID(tid.String())].Version != 3 {
 		t.Fatalf("stored = %+v", store.stored)
+	}
+}
+
+type recordingEnqueuer struct {
+	calls []uuid.UUID
+	err   error
+}
+
+func (r *recordingEnqueuer) EnqueueExpiryRescan(_ context.Context, id uuid.UUID) error {
+	r.calls = append(r.calls, id)
+	return r.err
+}
+
+// Review S1: a stored newer version ENQUEUES the tenant rescan (the handler never scans);
+// an older or duplicate event enqueues nothing; a failing enqueue never fails the event
+// (the replica is stored; the daily run is the safety net).
+func TestPolicyChangedSubscriber_EnqueuesTheRescanOnlyWhenANewerVersionIsStored(t *testing.T) {
+	t.Parallel()
+	store := &recordingStore{stored: map[tenant.ID]commercepolicy.Versioned{}}
+	enq := &recordingEnqueuer{}
+	sub := subscribers.NewPolicyChangedSubscriber(command.NewApplyPolicyHandler(tenantUoW{}, store), silentLog()).WithExpiryRescan(enq)
+	tid := uuid.New()
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(tid.String()))
+	evt := &companysettingsevents.PolicyChangedV1{TenantIDClaim: tid, Version: 3, Policy: commercepolicy.Default(), OccurredAtUTC: now()}
+
+	if err := sub.Handle(ctx, evt); err != nil || len(enq.calls) != 1 || enq.calls[0] != tid {
+		t.Fatalf("a stored version: err %v calls %v", err, enq.calls)
+	}
+	if err := sub.Handle(ctx, evt); err != nil || len(enq.calls) != 1 {
+		t.Fatalf("a duplicate must enqueue nothing: %v", enq.calls)
+	}
+	enq.err = errors.New("queue down")
+	newer := &companysettingsevents.PolicyChangedV1{TenantIDClaim: tid, Version: 4, Policy: commercepolicy.Default(), OccurredAtUTC: now()}
+	if err := sub.Handle(ctx, newer); err != nil {
+		t.Fatalf("a failing enqueue must not fail the event: %v", err)
+	}
+	if store.stored[tenant.ID(tid.String())].Version != 4 {
+		t.Fatal("the replica must be stored even when the enqueue fails")
 	}
 }

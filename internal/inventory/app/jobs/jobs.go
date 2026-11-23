@@ -188,7 +188,7 @@ func (s *Scanner) scanBatch(ctx context.Context, w sellability.Window, c ExpiryC
 		DaysUntilExpiry: daysLeft, TierDays: tier,
 		FreeQuantity: c.OnHand - c.Reserved - c.Quarantined, OccurredAtUTC: at,
 	}
-	ok, err := s.repo.EmitIfNew(ctx, c.TenantID, AlertKindBatchExpiring, c.BatchID, "tier:"+strconv.Itoa(tier), evt)
+	ok, err := s.repo.EmitIfNew(ctx, c.TenantID, AlertKindBatchExpiring, c.BatchID, "tier:"+strconv.Itoa(tier)+":"+evt.LastSellableDay.Format(time.DateOnly), evt)
 	if err != nil {
 		return emitted, fmt.Errorf("expiry scan: emit %s: %w", c.BatchID, err)
 	}
@@ -256,6 +256,48 @@ func (*ExpiryScanWorker) Timeout(*river.Job[ExpiryScanJob]) time.Duration { retu
 // the job then fails so river retries (the ledger makes the retry cheap).
 func (w *ExpiryScanWorker) Work(ctx context.Context, _ *river.Job[ExpiryScanJob]) error {
 	return sweep(ctx, w.repo, w.log, "expiry", w.scanner.ScanExpiry)
+}
+
+// ----- ExpiryRescanJob --------------------------------------------------------
+
+// ExpiryRescanJob rescans ONE tenant expiry alerts, enqueued when that tenant
+// policy changes (review S1: it used to run inside the event handler).
+//
+// river:idempotent — the dedup ledger makes a re-run a no-op.
+type ExpiryRescanJob struct {
+	TenantID string `json:"tenant_id"`
+}
+
+// Kind returns the river-stable job kind. Never rename.
+func (ExpiryRescanJob) Kind() string { return "inventory.expiry_rescan" }
+
+// ExpiryRescanWorker runs [ExpiryRescanJob].
+type ExpiryRescanWorker struct {
+	river.WorkerDefaults[ExpiryRescanJob]
+	scanner *Scanner
+}
+
+// NewExpiryRescanWorker wires the worker.
+func NewExpiryRescanWorker(scanner *Scanner) *ExpiryRescanWorker {
+	if scanner == nil {
+		panic("jobs: NewExpiryRescanWorker scanner required")
+	}
+	return &ExpiryRescanWorker{scanner: scanner}
+}
+
+// Timeout enforces JobTimeout per river canon.
+func (*ExpiryRescanWorker) Timeout(*river.Job[ExpiryRescanJob]) time.Duration { return JobTimeout }
+
+// Work scans the one tenant.
+func (w *ExpiryRescanWorker) Work(ctx context.Context, job *river.Job[ExpiryRescanJob]) error {
+	tid, err := uuid.Parse(job.Args.TenantID)
+	if err != nil {
+		return river.JobCancel(fmt.Errorf("expiry rescan: tenant id %q: %w", job.Args.TenantID, err))
+	}
+	if _, err := w.scanner.ScanExpiry(ctx, tid); err != nil {
+		return fmt.Errorf("expiry rescan: %w", err)
+	}
+	return nil
 }
 
 // ----- ReorderScanJob ---------------------------------------------------------
