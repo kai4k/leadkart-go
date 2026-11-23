@@ -1117,6 +1117,12 @@ func buildOrdersApp(pool *pgxpool.Pool, now func() time.Time) ordersapp.Applicat
 	payments := ordersadapters.NewPaymentRepository(pool, tx)
 	allocator := ordersadapters.NewInvoiceNumberAllocator(pool)
 	enqueuer := ordersadapters.NewOutboxEnqueuer()
+	// Inventory knows which batches an order holds and when they expire; this module
+	// cannot read its schema, so the composition root binds the pack gate to an
+	// Inventory query judged on the company business day.
+	heldStock := inventoryadapters.NewStockMovementRepository(pool, tx)
+	stockGuard := heldStockExpiryBridge{held: inventoryquery.NewOrderHoldExpiryHandler(
+		heldStock, inventorysellability.NewResolver(inventoryadapters.NewPolicyReplicaRepository(pool, tx), now))}
 	newQuotationID := func() quotation.ID { return quotation.ID(ids.NewV7().String()) }
 	newOrderID := func() order.ID { return order.ID(ids.NewV7().String()) }
 	newInvoiceID := func() invoice.ID { return invoice.ID(ids.NewV7().String()) }
@@ -1131,7 +1137,7 @@ func buildOrdersApp(pool *pgxpool.Pool, now func() time.Time) ordersapp.Applicat
 			RejectQuotation:    orderscommand.NewRejectQuotationHandler(quotations, now),
 			RecordTokenPayment: orderscommand.NewRecordTokenPaymentHandler(tx, orders, payments, now, newPaymentID),
 			ConfirmOrder:       orderscommand.NewConfirmOrderHandler(tx, orders, enqueuer, now),
-			PackOrder:          orderscommand.NewPackOrderHandler(tx, orders, enqueuer, now),
+			PackOrder:          orderscommand.NewPackOrderHandler(tx, orders, enqueuer, stockGuard, now),
 			InvoiceOrder:       orderscommand.NewInvoiceOrderHandler(tx, orders, invoices, allocator, now, newInvoiceID),
 			AttachConsignment:  orderscommand.NewAttachConsignmentHandler(orders, now),
 			MarkOrderDelivered: orderscommand.NewMarkOrderDeliveredHandler(orders, now),
@@ -1170,6 +1176,16 @@ func buildNotificationsApp(pool *pgxpool.Pool, now func() time.Time) notificatio
 			UnreadCount: notificationsquery.NewUnreadCountHandler(repo),
 		},
 	}
+}
+
+// heldStockExpiryBridge binds the Orders pack gate (does this order hold stock past
+// its printed expiry) to the Inventory query.
+type heldStockExpiryBridge struct {
+	held inventoryquery.OrderHoldExpiryHandler
+}
+
+func (b heldStockExpiryBridge) HoldsExpiredStock(ctx context.Context, tenantID tenant.ID, orderID order.ID) (bool, error) {
+	return b.held.Handle(ctx, inventoryquery.OrderHoldExpiryQuery{TenantID: tenantID, OrderID: orderID.String()})
 }
 
 // scheduleUsageBridge binds the company settings port (which drug schedule classes

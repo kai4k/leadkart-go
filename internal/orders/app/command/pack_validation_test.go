@@ -80,7 +80,7 @@ func TestPackOrder_RefusesWhatDispatchWouldRefuse(t *testing.T) {
 			}
 			tc.edit(&cmd)
 
-			err := command.NewPackOrderHandler(fakeUoW{}, orders, enq, now).Handle(t.Context(), cmd)
+			err := command.NewPackOrderHandler(fakeUoW{}, orders, enq, stockFresh(), now).Handle(t.Context(), cmd)
 
 			var pe *parcel.Error
 			require.ErrorAs(t, err, &pe)
@@ -104,7 +104,7 @@ func TestPackOrder_JudgesAndStampsWithOneClockReading(t *testing.T) {
 	clock := func() time.Time { tick = tick.Add(time.Second); return tick } // every reading is later
 	eta := tick.Add(1500 * time.Millisecond)                                // future at the 1st reading, past at the 2nd
 
-	err := command.NewPackOrderHandler(fakeUoW{}, orders, enq, clock).Handle(t.Context(), command.PackOrderCommand{
+	err := command.NewPackOrderHandler(fakeUoW{}, orders, enq, stockFresh(), clock).Handle(t.Context(), command.PackOrderCommand{
 		TenantID: tid, OrderID: orderID, CarrierName: "BlueDart", BoxCount: 2, WeightGrams: 1500,
 		ExpectedDeliveryAt: &eta, PackedByMembership: actor,
 	})

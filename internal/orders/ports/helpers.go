@@ -126,6 +126,8 @@ func mapOrderMutation(w http.ResponseWriter, log *slog.Logger, r *http.Request, 
 		writeError(w, http.StatusNotFound, errCodeOrderNotFound, "")
 	case errors.Is(err, order.ErrTokenAlreadyRecorded):
 		writeError(w, http.StatusConflict, errCodeTokenAlreadyPaid, "the token payment for this order was already recorded")
+	case errors.Is(err, order.ErrStockExpired):
+		writeError(w, http.StatusConflict, errCodeStockExpired, "the order holds stock past its printed expiry; cancel the order, or return the expired batch to the maker, instead of packing it")
 	case errors.Is(err, order.ErrInvalidTransition):
 		writeError(w, http.StatusConflict, errCodeInvalidTransition, err.Error())
 	case errors.Is(err, payment.ErrAlreadyExistsForExternalReference):

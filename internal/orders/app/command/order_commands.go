@@ -176,15 +176,20 @@ type PackOrderHandler struct {
 	uow      pg.UnitOfWork
 	orders   order.Repository
 	enqueuer OutboxEnqueuer
+	stock    StockExpiryChecker
 	now      func() time.Time
 }
 
-// NewPackOrderHandler wires the handler.
-func NewPackOrderHandler(uow pg.UnitOfWork, orders order.Repository, enqueuer OutboxEnqueuer, now func() time.Time) PackOrderHandler {
+// NewPackOrderHandler wires the handler. stock is required: it is how Orders
+// learns, without importing Inventory, that the order holds expired stock.
+func NewPackOrderHandler(uow pg.UnitOfWork, orders order.Repository, enqueuer OutboxEnqueuer, stock StockExpiryChecker, now func() time.Time) PackOrderHandler {
+	if stock == nil {
+		panic("command: NewPackOrderHandler stock guard required")
+	}
 	if now == nil {
 		now = time.Now
 	}
-	return PackOrderHandler{uow: uow, orders: orders, enqueuer: enqueuer, now: now}
+	return PackOrderHandler{uow: uow, orders: orders, enqueuer: enqueuer, stock: stock, now: now}
 }
 
 // Handle advances to packed + enqueues OrderPackedV1 in one tx.
@@ -200,6 +205,19 @@ func (h PackOrderHandler) Handle(ctx context.Context, cmd PackOrderCommand) erro
 		WeightGrams: cmd.WeightGrams, ExpectedDeliveryAt: cmd.ExpectedDeliveryAt,
 	}, now); err != nil {
 		return fmt.Errorf("orders pack_order: %w", err)
+	}
+	// Expired stock is never sold. The pack is what starts the invoice, the
+	// consignment note and the stock consume, so it is refused here, before any
+	// state change, when a batch the order holds is past its printed expiry on the
+	// company's business day. Asked outside the transaction: the answer comes from
+	// another module's read, and a second pooled connection taken inside a
+	// transaction is the pool-deadlock shape.
+	expired, err := h.stock.HoldsExpiredStock(ctx, cmd.TenantID, cmd.OrderID)
+	if err != nil {
+		return fmt.Errorf("orders pack_order: check held stock expiry: %w", err)
+	}
+	if expired {
+		return fmt.Errorf("orders pack_order: %w", order.ErrStockExpired)
 	}
 	return h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
 		if err := h.orders.UpdateByID(ctx, cmd.TenantID, cmd.OrderID, func(o *order.Order) (bool, error) {

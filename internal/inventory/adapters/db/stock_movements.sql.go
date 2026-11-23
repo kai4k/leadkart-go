@@ -11,6 +11,44 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countExpiredBatchesHeldByOrder = `-- name: CountExpiredBatchesHeldByOrder :one
+SELECT count(*)::bigint
+FROM   inventory.batches b
+WHERE  b.tenant_id = $1
+AND    b.expiry_date < $2::date
+AND    b.id IN (
+           SELECT m.batch_id
+           FROM   inventory.stock_movements m
+           WHERE  m.tenant_id = $1
+           AND    m.source_reference = $3
+           GROUP  BY m.batch_id
+           HAVING COALESCE(SUM(
+                      CASE m.type
+                          WHEN 'reservation' THEN m.quantity
+                          WHEN 'release'     THEN -m.quantity
+                          ELSE 0
+                      END), 0) > 0
+       )
+`
+
+type CountExpiredBatchesHeldByOrderParams struct {
+	TenantID        pgtype.UUID
+	Today           pgtype.Date
+	SourceReference *string
+}
+
+// How many batches the order still holds units on whose printed expiry month is
+// over on the business day (expiry_date is the last day of the printed month, so
+// "past" is expiry_date < today). Held = Σ reservation − Σ release > 0, the same
+// rule as ListOutstandingReservationsForSource. Orders asks this before it lets
+// an order be packed: expired stock is never sold.
+func (q *Queries) CountExpiredBatchesHeldByOrder(ctx context.Context, arg CountExpiredBatchesHeldByOrderParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countExpiredBatchesHeldByOrder, arg.TenantID, arg.Today, arg.SourceReference)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countReservationsForSource = `-- name: CountReservationsForSource :one
 SELECT COUNT(*)
 FROM   inventory.stock_movements

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -202,6 +203,38 @@ func (r *StockMovementRepository) ListOutstandingReservationsForOrder(ctx contex
 		return nil
 	})
 	return out, err
+}
+
+// CountExpiredBatchesHeldByOrder counts the batches an order still holds units on
+// whose printed expiry month is over on the business day `today`. Joins the
+// ambient tx when present, else opens its own tenant-scoped read tx. Satisfies
+// query.HeldStockReader.
+func (r *StockMovementRepository) CountExpiredBatchesHeldByOrder(ctx context.Context, tenantID tenant.ID, orderRef string, today time.Time) (int64, error) {
+	tid, err := uuid.Parse(tenantID.String())
+	if err != nil {
+		return 0, fmt.Errorf("movement repo: parse tenant id: %w", err)
+	}
+	ref := orderRef
+	run := func(ctx context.Context, tx pgx.Tx) (int64, error) {
+		return r.q.WithTx(tx).CountExpiredBatchesHeldByOrder(ctx, db.CountExpiredBatchesHeldByOrderParams{
+			TenantID:        pgconv.PgUUID(tid),
+			Today:           pgconv.PgDate(today),
+			SourceReference: &ref,
+		})
+	}
+	if tx, ok := pg.TxFromContext(ctx); ok {
+		return run(ctx, tx)
+	}
+	var n int64
+	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+		got, qerr := run(ctx, tx)
+		if qerr != nil {
+			return fmt.Errorf("movement repo: count expired held batches: %w", qerr)
+		}
+		n = got
+		return nil
+	})
+	return n, err
 }
 
 // ----- Helpers ---------------------------------------------------------------

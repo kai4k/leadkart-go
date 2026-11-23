@@ -418,3 +418,55 @@ func TestGetBatchHandler_CarriesQuantityReserved(t *testing.T) {
 		t.Fatalf("on hand %d reserved %d; want 40 and 15", got.QuantityOnHand, got.QuantityReserved)
 	}
 }
+
+// ----- order hold expiry ----------------------------------------------------
+
+type fakeHeldStock struct {
+	n        int64
+	err      error
+	gotToday time.Time
+	gotRef   string
+}
+
+func (f *fakeHeldStock) CountExpiredBatchesHeldByOrder(_ context.Context, _ tenant.ID, ref string, today time.Time) (int64, error) {
+	f.gotToday, f.gotRef = today, ref
+	return f.n, f.err
+}
+
+// The question is judged on the company business day, not the UTC day: 18:30 UTC is
+// already the next day at the default offset, which is what flips a month-end batch.
+func TestOrderHoldExpiry_JudgesOnTheBusinessDay(t *testing.T) {
+	t.Parallel()
+	reader := &fakeHeldStock{n: 1}
+	h := query.NewOrderHoldExpiryHandler(reader, sellabilitytest.Resolver(time.Date(2027, 2, 28, 18, 30, 0, 0, time.UTC)))
+
+	got, err := h.Handle(t.Context(), query.OrderHoldExpiryQuery{TenantID: "t", OrderID: "order-1"})
+
+	if err != nil || !got {
+		t.Fatalf("got %v, %v; want true, nil", got, err)
+	}
+	if want := time.Date(2027, 3, 1, 0, 0, 0, 0, time.UTC); !reader.gotToday.Equal(want) {
+		t.Fatalf("asked for %v; want the business day %v", reader.gotToday, want)
+	}
+	if reader.gotRef != "order-1" {
+		t.Fatalf("asked about %q", reader.gotRef)
+	}
+}
+
+func TestOrderHoldExpiry_NothingExpiredAndErrors(t *testing.T) {
+	t.Parallel()
+	res := sellabilitytest.Resolver(fixedNow)
+	if got, err := query.NewOrderHoldExpiryHandler(&fakeHeldStock{}, res).Handle(t.Context(), query.OrderHoldExpiryQuery{TenantID: "t", OrderID: "o"}); err != nil || got {
+		t.Fatalf("no expired batch: got %v, %v; want false, nil", got, err)
+	}
+	boom := errors.New("db down")
+	if _, err := query.NewOrderHoldExpiryHandler(&fakeHeldStock{err: boom}, res).Handle(t.Context(), query.OrderHoldExpiryQuery{TenantID: "t", OrderID: "o"}); !errors.Is(err, boom) {
+		t.Fatalf("reader error lost: %v", err)
+	}
+	if _, err := query.NewOrderHoldExpiryHandler(&fakeHeldStock{}, res).Handle(t.Context(), query.OrderHoldExpiryQuery{OrderID: "o"}); err == nil {
+		t.Fatal("tenant required")
+	}
+	if _, err := query.NewOrderHoldExpiryHandler(&fakeHeldStock{}, res).Handle(t.Context(), query.OrderHoldExpiryQuery{TenantID: "t"}); err == nil {
+		t.Fatal("order required")
+	}
+}

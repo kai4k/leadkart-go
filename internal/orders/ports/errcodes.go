@@ -18,6 +18,8 @@ const (
 	errCodeTokenAlreadyPaid = "token_payment_already_recorded"
 	// errCodeTokenRoute: POST /payments cannot take kind=token; use /token-payment (422).
 	errCodeTokenRoute = "token_payment_route_required"
+	// errCodeStockExpired: the order holds stock past its printed expiry, so it cannot be packed (409).
+	errCodeStockExpired = "order_stock_expired"
 	// errCodeCreditNoteExceedsInvoice: the notes would add up to more than the invoice (422).
 	errCodeCreditNoteExceedsInvoice = "credit_note_exceeds_invoice" //nolint:gosec // G101: error code, not a credential
 	errCodeUnauthenticated          = "unauthenticated"

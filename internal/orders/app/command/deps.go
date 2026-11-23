@@ -10,8 +10,20 @@ package command
 import (
 	"context"
 
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+	"github.com/leadkart/leadkart-go/internal/orders/domain/order"
 	"github.com/leadkart/leadkart-go/internal/orders/integrationevents"
 )
+
+// StockExpiryChecker asks Inventory whether an order still holds units on a batch
+// whose printed expiry month is over on the company's business day. Orders owns
+// the question; the composition root binds it to an Inventory read, because
+// modules never import each other.
+type StockExpiryChecker interface {
+	// HoldsExpiredStock is true when any batch the order holds is past its printed
+	// expiry. An order with no hold at all answers false.
+	HoldsExpiredStock(ctx context.Context, tenantID tenant.ID, orderID order.ID) (bool, error)
+}
 
 // OutboxEnqueuer emits integration events the aggregate's own domain event
 // cannot carry: OrderConfirmedV1 (line snapshot for Inventory) + OrderPackedV1

@@ -29,6 +29,11 @@ import (
 	"github.com/leadkart/leadkart-go/internal/orders/domain/quotation"
 )
 
+// ErrStockExpired is returned when an order is packed while it holds stock past
+// its printed expiry: expired stock is never sold. The order stays confirmed and
+// can be cancelled. Map to HTTP 409.
+var ErrStockExpired = errors.New("order: held stock is past its printed expiry")
+
 // ErrInvalid is the sentinel for ctor / input invariant violations. Map to HTTP 422.
 var ErrInvalid = errors.New("order: invalid")
 

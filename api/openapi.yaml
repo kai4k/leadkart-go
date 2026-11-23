@@ -3711,7 +3711,7 @@ paths:
         '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: Invalid state transition
+          description: "`invalid_state_transition` — the order is not `confirmed`. `order_stock_expired` — the order holds units on a batch past its printed expiry month (judged on the company's business day): expired stock is never sold, so the order stays `confirmed`, nothing is published (no invoice, no consignment note) and it can be cancelled, which releases the hold."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

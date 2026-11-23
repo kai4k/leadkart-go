@@ -205,3 +205,40 @@ func TestReservation_OversellGuard(t *testing.T) {
 	require.Equal(t, int64(40), got.QuantityReserved())
 	require.Equal(t, int64(10), got.AvailableQuantity())
 }
+
+// TestReservationLifecycle_HeldStockExpiryIsAskedOnTheBusinessDay pins the pre-pack
+// question Orders asks: an order that holds units on a batch whose printed month
+// is over is flagged; once the hold is released or consumed it is not.
+func TestReservationLifecycle_HeldStockExpiryIsAskedOnTheBusinessDay(t *testing.T) {
+	rig := newReservationRig(t)
+	movements := adapters.NewStockMovementRepository(repoFixture(t), pg.NewTransactor(repoFixture(t)))
+	p, b := rig.seedStockedBatch(t, 20) // expires 31 Jan 2028
+	orderID := uuid.NewString()
+	_, err := rig.reserve.Handle(rig.ctx, command.ReserveOrderStockCommand{
+		TenantID: rig.tid, OrderID: orderID, ActorMembershipID: rig.actor,
+		Lines: []command.ReserveLine{{ProductID: p.ID(), Quantity: 10}},
+	})
+	require.NoError(t, err)
+	lastDay := b.ExpiryDate()
+	firstOfNext := lastDay.AddDate(0, 0, 1)
+
+	n, err := movements.CountExpiredBatchesHeldByOrder(rig.ctx, rig.tid, orderID, lastDay)
+	require.NoError(t, err)
+	require.Zero(t, n, "on the last day of the printed month the batch is not past it")
+
+	n, err = movements.CountExpiredBatchesHeldByOrder(rig.ctx, rig.tid, orderID, firstOfNext)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n, "the day after the printed month the held batch is expired")
+
+	n, err = movements.CountExpiredBatchesHeldByOrder(rig.ctx, rig.tid, uuid.NewString(), firstOfNext)
+	require.NoError(t, err)
+	require.Zero(t, n, "another order holds nothing")
+
+	_, err = rig.release.Handle(rig.ctx, command.ReleaseOrderStockCommand{
+		TenantID: rig.tid, OrderID: orderID, ActorMembershipID: rig.actor, Reason: "order cancelled",
+	})
+	require.NoError(t, err)
+	n, err = movements.CountExpiredBatchesHeldByOrder(rig.ctx, rig.tid, orderID, firstOfNext)
+	require.NoError(t, err)
+	require.Zero(t, n, "a released hold is no longer held")
+}

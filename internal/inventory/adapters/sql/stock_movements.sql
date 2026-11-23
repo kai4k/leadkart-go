@@ -73,3 +73,27 @@ HAVING COALESCE(SUM(
                WHEN 'release'     THEN -quantity
                ELSE 0
            END), 0) > 0;
+
+-- name: CountExpiredBatchesHeldByOrder :one
+-- How many batches the order still holds units on whose printed expiry month is
+-- over on the business day (expiry_date is the last day of the printed month, so
+-- "past" is expiry_date < today). Held = Σ reservation − Σ release > 0, the same
+-- rule as ListOutstandingReservationsForSource. Orders asks this before it lets
+-- an order be packed: expired stock is never sold.
+SELECT count(*)::bigint
+FROM   inventory.batches b
+WHERE  b.tenant_id = $1
+AND    b.expiry_date < sqlc.arg(today)::date
+AND    b.id IN (
+           SELECT m.batch_id
+           FROM   inventory.stock_movements m
+           WHERE  m.tenant_id = $1
+           AND    m.source_reference = sqlc.arg(source_reference)
+           GROUP  BY m.batch_id
+           HAVING COALESCE(SUM(
+                      CASE m.type
+                          WHEN 'reservation' THEN m.quantity
+                          WHEN 'release'     THEN -m.quantity
+                          ELSE 0
+                      END), 0) > 0
+       );

@@ -102,7 +102,7 @@ func TestOrderFulfilmentLifecycle(t *testing.T) {
 	}))
 
 	// Pack → packed + OrderPackedV1.
-	pack := command.NewPackOrderHandler(uow, orders, enq, now)
+	pack := command.NewPackOrderHandler(uow, orders, enq, stockFresh(), now)
 	require.NoError(t, pack.Handle(ctx, command.PackOrderCommand{
 		TenantID: tid, OrderID: orderID, CarrierName: "BlueDart", BoxCount: 2, WeightGrams: 1500, PackedByMembership: actor,
 	}))
