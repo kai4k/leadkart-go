@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/errs"
@@ -96,10 +97,10 @@ func New(id ID, s slug.Slug, legalName, displayName string, adminEmail email.Add
 	if displayName == "" {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, humantext.Required("display_name"))
 	}
-	if len(legalName) > nameMaxLen {
+	if utf8.RuneCountInString(legalName) > nameMaxLen {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, humantext.TooLong("legal_name"))
 	}
-	if len(displayName) > nameMaxLen {
+	if utf8.RuneCountInString(displayName) > nameMaxLen {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, humantext.TooLong("display_name"))
 	}
 	if err := humantext.Check("legal_name", legalName); err != nil {
@@ -251,10 +252,10 @@ func (t *Tenant) UpdateProfile(legalName, displayName string, now time.Time) err
 	if displayName == "" {
 		return fmt.Errorf("%w: %w", ErrInvalid, humantext.Required("display_name"))
 	}
-	if len(legalName) > nameMaxLen && !legalSame {
+	if utf8.RuneCountInString(legalName) > nameMaxLen && !legalSame {
 		return fmt.Errorf("%w: %w", ErrInvalid, humantext.TooLong("legal_name"))
 	}
-	if len(displayName) > nameMaxLen && !displaySame {
+	if utf8.RuneCountInString(displayName) > nameMaxLen && !displaySame {
 		return fmt.Errorf("%w: %w", ErrInvalid, humantext.TooLong("display_name"))
 	}
 	if !legalSame {

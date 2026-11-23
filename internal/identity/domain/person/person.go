@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/humantext"
@@ -106,10 +107,10 @@ func New(id ID, e email.Address, firstName, lastName string, passwordHash Passwo
 	if lastName == "" {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, humantext.Required("last_name"))
 	}
-	if len(firstName) > nameMaxLen {
+	if utf8.RuneCountInString(firstName) > nameMaxLen {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, humantext.TooLong("first_name"))
 	}
-	if len(lastName) > nameMaxLen {
+	if utf8.RuneCountInString(lastName) > nameMaxLen {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, humantext.TooLong("last_name"))
 	}
 	if err := humantext.Check("first_name", firstName); err != nil {
@@ -408,10 +409,10 @@ func (p *Person) UpdateProfile(firstName, lastName string, now time.Time) error 
 	if lastName == "" {
 		return fmt.Errorf("%w: %w", ErrInvalid, humantext.Required("last_name"))
 	}
-	if len(firstName) > nameMaxLen && !firstSame {
+	if utf8.RuneCountInString(firstName) > nameMaxLen && !firstSame {
 		return fmt.Errorf("%w: %w", ErrInvalid, humantext.TooLong("first_name"))
 	}
-	if len(lastName) > nameMaxLen && !lastSame {
+	if utf8.RuneCountInString(lastName) > nameMaxLen && !lastSame {
 		return fmt.Errorf("%w: %w", ErrInvalid, humantext.TooLong("last_name"))
 	}
 	if !firstSame {

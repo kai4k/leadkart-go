@@ -482,3 +482,53 @@ func TestMiddleware_RefusesToBuildWithoutALogger(t *testing.T) {
 	}()
 	idempotency.Middleware(idempotency.NewInMemoryStore(nil), nil, 0, defaultTestKeyer, nil)
 }
+
+// ctxCheckStore behaves like a database driver: a write on a cancelled context
+// fails. It also records the deadline the write was given.
+type ctxCheckStore struct {
+	*idempotency.InMemoryStore
+	deadline atomic.Pointer[time.Time]
+}
+
+func (s *ctxCheckStore) Put(ctx context.Context, r idempotency.Record) error {
+	if d, ok := ctx.Deadline(); ok {
+		s.deadline.Store(&d)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.InMemoryStore.Put(ctx, r)
+}
+
+// The command has committed when its answer is stored. If the caller disconnects
+// in between (the request context is cancelled), the answer must still be stored,
+// or the client's retry runs the command a second time. The write is bounded.
+func TestMiddleware_AStoredAnswerSurvivesAClientThatHasGone(t *testing.T) {
+	t.Parallel()
+	calls := &atomic.Int32{}
+	ctx, cancel := context.WithCancel(t.Context())
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":"abc"}`))
+		cancel() // the caller hangs up right after the commit
+	})
+	store := &ctxCheckStore{InMemoryStore: idempotency.NewInMemoryStore(nil)}
+	mw := idempotency.Middleware(store, nil, 0, defaultTestKeyer, quietLog())(next)
+
+	cmdID := uuid.NewString()
+	first := newPOST(t, `{"x":1}`, cmdID).WithContext(ctx)
+	mw.ServeHTTP(httptest.NewRecorder(), first)
+	if store.Len() != 1 {
+		t.Fatalf("the answer was lost with the client: %d records stored", store.Len())
+	}
+	if d := store.deadline.Load(); d == nil || time.Until(*d) > 10*time.Second || time.Until(*d) <= 0 {
+		t.Errorf("the detached write has no short deadline: %v", d)
+	}
+
+	again := httptest.NewRecorder()
+	mw.ServeHTTP(again, newPOST(t, `{"x":1}`, cmdID))
+	if calls.Load() != 1 || again.Code != http.StatusCreated || again.Header().Get(idempotency.ReplayHeader) != "true" {
+		t.Errorf("retry: ran %d times, status %d replay=%q; want one run and a replayed 201", calls.Load(), again.Code, again.Header().Get(idempotency.ReplayHeader))
+	}
+}

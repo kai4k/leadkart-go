@@ -104,3 +104,23 @@ func TestPublicChain_RouteLimitsAlsoCountPerIPv6Block(t *testing.T) {
 		t.Fatalf("an IPv4 client's own bucket did not limit: %d", rec.Code)
 	}
 }
+
+// The refusal of an unreadable query is part of the public chain, so every
+// route has it (the handler behind the chain answers 401 here; a refused query
+// never reaches it), and a flood of such queries is still counted by the limiter.
+func TestPublicChain_RefusesAnUnreadableQueryAndStillCountsIt(t *testing.T) {
+	t.Parallel()
+	h := publicChainFor(t, "127.0.0.1", nil) // global burst 3
+	for i := range 3 {
+		rec := do(t.Context(), h, "GET", "/x?q=%00", "127.0.0.1:9", "198.51.100.5")
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("request %d with a NUL in the query: %d, want 400 from the chain", i, rec.Code)
+		}
+	}
+	if rec := do(t.Context(), h, "GET", "/x?q=%ff", "127.0.0.1:9", "198.51.100.5"); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("bad queries were not counted by the limiter: %d, want 429", rec.Code)
+	}
+	if rec := do(t.Context(), h, "GET", "/x?q=ram", "127.0.0.1:9", "198.51.100.6"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("a readable query: %d, want the handler's 401", rec.Code)
+	}
+}

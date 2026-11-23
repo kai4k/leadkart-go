@@ -106,6 +106,7 @@ func (c PublicChainConfig) limiterClock() func() time.Time {
 //	BodyLimit         — 1 MiB request-body cap (OWASP API4)
 //	IPRateLimit       — per-client-IP token bucket (trusted-proxy aware)
 //	RouteRateLimit    — tighter per-route, per-client buckets (when configured)
+//	RefuseUnreadableQuery — 400 for a query string holding U+0000 or non-UTF-8 bytes
 //	Idempotency       — X-Command-Id replay protection
 //	(per-route auth + handler — wired by ports.AddRoutes)
 //
@@ -157,6 +158,9 @@ func PublicChain(cfg PublicChainConfig) Middleware {
 		// /64s, each with its own full bucket. IPv4 has no block key and is unaffected.
 		mws = append(mws, routeRateLimit(scaledRouteLimits(cfg.RouteRateLimits, IPv6BlockRateMultiplier), ClientBlockKeyer(cfg.TrustedProxies), cfg.limiterClock()))
 	}
+	// After the rate limiters (a flood of bad queries is still counted), before
+	// anything that reads the query.
+	mws = append(mws, RefuseUnreadableQuery())
 	mws = append(mws, idempotency.Middleware(cfg.IdempotencyStore, cfg.Now, cfg.IdempotencyTTL, idemKeyer, cfg.Logger))
 	return Chain(mws...)
 }

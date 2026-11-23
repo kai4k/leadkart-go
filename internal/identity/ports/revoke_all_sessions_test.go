@@ -65,6 +65,36 @@ func TestRevokeAllSessions_ExceptCurrentKeepsTheTokensOwnSession(t *testing.T) {
 		return r.RevokedCount
 	}
 
+	for name, body := range map[string]string{
+		"a misspelt flag":          `{"exceptCurrent":true}`,
+		"a flag next to a typo":    `{"except_current":true,"reasn":"x"}`,
+		"a second JSON value":      `{"except_current":true}{"except_current":false}`,
+		"a string where a bool is": `{"except_current":"true"}`,
+	} {
+		t.Run("refused and revokes nothing: "+name, func(t *testing.T) {
+			t.Parallel()
+			a, repo := setup(t)
+			c := *claims
+			c.FamilyID = mine
+			rec := azServeApp(t, a, &c, http.MethodDelete, "/api/v1/auth/sessions", body)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status %d body %s, want 400", rec.Code, rec.Body.String())
+			}
+			if len(active(t, repo)) != 3 {
+				t.Errorf("a refused body revoked sessions: %v", active(t, repo))
+			}
+		})
+	}
+	t.Run("an empty body is still the documented revoke-everything", func(t *testing.T) {
+		t.Parallel()
+		a, repo := setup(t)
+		c := *claims
+		c.FamilyID = mine
+		if rec := azServeApp(t, a, &c, http.MethodDelete, "/api/v1/auth/sessions", ""); rec.Code != http.StatusOK || len(active(t, repo)) != 0 {
+			t.Fatalf("empty body: status %d, active %v, want 200 and none left", rec.Code, active(t, repo))
+		}
+	})
+
 	t.Run("except_current keeps the token's own session and counts the others", func(t *testing.T) {
 		t.Parallel()
 		a, repo := setup(t)

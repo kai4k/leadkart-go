@@ -38,6 +38,29 @@ info:
     member no longer exists or is inactive, otherwise the usual `insufficient_rank` /
     `grant_exceeds_authority`).
 
+    **Two windows that follow from short-lived tokens (kept by design):** (1) "Sign out
+    other devices" (`DELETE /api/v1/auth/sessions` with `except_current: true`) revokes the
+    other sessions' refresh tokens at once, but an access token already minted for one of
+    them stays valid until it expires, up to 10 minutes; no security stamp rotates (it would
+    end this device too). (2) The permission-overrides read on `GET /users/{userId}`
+    decides on the access token's own permissions, while the save decides on the stored
+    ones: a caller whose time-bound `identity.users.update_permissions` has just expired
+    can still READ a member's overrides until that token expires (up to 10 minutes), and
+    cannot save anything. Rank and role changes end the old token at once (stale_token).
+
+    **Query strings:** a query-string name or value holding U+0000 or bytes that are not
+    valid UTF-8 is refused on EVERY route with `400 invalid_query` and
+    `errors.<parameter>: [invalid_characters]` (`errors.query` when the parameter NAME is
+    unreadable), before any handler runs. It used to be a 500 on search and filter inputs.
+
+    **Text length units:** a length limit on text a person types counts CHARACTERS
+    (Unicode code points, what PostgreSQL's `length()` counts), after trimming, never
+    UTF-8 bytes: a 100-character Hindi name is accepted. This applies to person
+    first and last name (1 to 100), tenant legal and display name (1 to 200), role name (2
+    to 100), permission-request reason (10 to 1024) and decision reason (up to 1024),
+    role-hierarchy reason and removal reason (10 to 1024 when given), and the membership
+    profile fields (designation 120, department 120, status message 280).
+
     **Forced password change (ADR 0053 / ADR 0068 D8):** a person provisioned with
     a temporary credential (a tenant's first admin, a member created with
     `POST /api/v1/users`) holds `must_change_password`. The API enforces it: the
@@ -529,7 +552,7 @@ paths:
       tags: [sessions]
       summary: Revoke all sessions (optionally excluding current)
       description: |
-        The body is optional; an empty body (or `except_current: false`) revokes every session of the caller, this one included. With `except_current: true` the session the access token was minted for (its `family_id` claim, set at login and kept by every refresh) is kept and only the others are revoked; `revoked_count` counts the sessions this call ended, never the kept one. A token that does not name its session (minted before the claim existed) cannot say which one to keep: 409 `current_session_unknown`, nothing is revoked, refresh the token and retry. A body that is present but not valid JSON is 400 `invalid_body` and nothing is revoked (it is never read as "revoke everything").
+        The body is optional; an empty body (or `except_current: false`) revokes every session of the caller, this one included. With `except_current: true` the session the access token was minted for (its `family_id` claim, set at login and kept by every refresh) is kept and only the others are revoked; `revoked_count` counts the sessions this call ended, never the kept one. A token that does not name its session (minted before the claim existed) cannot say which one to keep: 409 `current_session_unknown`, nothing is revoked, refresh the token and retry. A body that is present but not valid JSON, names a key the request does not have (`exceptCurrent` for `except_current`), has a value of the wrong type or holds a second JSON value is 400 `invalid_body` and nothing is revoked (it is never read as "revoke everything"). Only the access tokens already minted for the other sessions stay valid until they expire (up to 10 minutes).
       requestBody:
         content:
           application/json:
@@ -2138,6 +2161,8 @@ paths:
       tags: [permission-requests]
       summary: Approve a pending request (decided by the authority policy)
       description: |
+        The body is optional (`decision_reason` only). A body that is present is read strictly: a misspelt key, a value of the wrong type or invalid JSON is 400 `invalid_body` and nothing is approved.
+
         Transitions Pending → Approved AND confers exactly the STORED request's permission on the
         requester for the stored duration (single transaction under the tenant authority lock).
         Decided by the authority policy (ADR 0069), never by the body: the requester's manager who

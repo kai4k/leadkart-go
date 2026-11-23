@@ -34,9 +34,12 @@ func TestUpdateProfile_FieldsAreCappedAfterTrimming(t *testing.T) {
 			if !errors.Is(err, membership.ErrInvalid) || !errors.As(err, &he) || he.Field != c.field || he.WireCode() != "too_long" {
 				t.Fatalf("%d characters: err = %v, want ErrInvalid + too_long on %s", c.max+1, err, c.field)
 			}
-			// bytes, not characters: 2-byte letters reach the cap at half the count
-			if err := c.set(m, strings.Repeat("é", c.max/2+1)); !errors.Is(err, membership.ErrInvalid) {
-				t.Errorf("%d two-byte letters (%d bytes) was accepted", c.max/2+1, c.max+2)
+			// characters, not bytes: the cap's worth of 3-byte Devanagari letters is accepted
+			if err := c.set(m, strings.Repeat("अ", c.max)); err != nil {
+				t.Errorf("%d Devanagari characters (%d bytes) was refused: %v", c.max, 3*c.max, err)
+			}
+			if err := c.set(m, strings.Repeat("अ", c.max+1)); !errors.Is(err, membership.ErrInvalid) {
+				t.Errorf("%d Devanagari characters was accepted", c.max+1)
 			}
 		})
 	}

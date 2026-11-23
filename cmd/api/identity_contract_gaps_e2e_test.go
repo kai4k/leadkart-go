@@ -640,3 +640,64 @@ func TestE2E_GSTPANMismatchNamesItsField(t *testing.T) {
 		t.Errorf("PAN without a GSTIN: %d %s, want 204", r.status, r.body)
 	}
 }
+
+// Identity fix round 2 (M1, M2): bytes a database cannot store in a query string are
+// a 400 on every route. This runs behind the REAL public chain (buildPublicChain):
+// the refusal is a chain middleware, not a handler's job.
+func TestE2E_FixRound2_BadBytesInAQueryAre400OnEveryRoute(t *testing.T) {
+	f, _ := newE2EChainFixture(t, nil)
+	own := f.registerAndLogin(t, "badq").AccessToken
+	for _, route := range []string{"/api/v1/users/search?q=", "/api/v1/inventory/products?search=", "/api/v1/users?cursor=", "/api/v1/roles?x="} {
+		for name, v := range map[string]string{"NUL at the start": "%00ab", "NUL at the end": "ab%00", "invalid UTF-8": "%ff%fe", "a truncated sequence": "ex%c3"} {
+			r := f.authedJSON(t, http.MethodGet, route+v, own, nil)
+			if r.status != http.StatusBadRequest || errorCode(t, r.body) != "invalid_query" {
+				t.Errorf("%s%s (%s): %d %s, want 400 invalid_query", route, v, name, r.status, r.body)
+			}
+		}
+	}
+	// readable queries are untouched, Hindi included
+	if r := f.authedJSON(t, http.MethodGet, "/api/v1/users/search?q=%E0%A4%B0%E0%A4%BE%E0%A4%AE", own, nil); r.status != http.StatusOK {
+		t.Errorf("a Hindi search: %d %s, want 200", r.status, r.body)
+	}
+	// an anonymous route is covered too: the refusal comes before authentication
+	if r := f.authedJSON(t, http.MethodGet, "/api/v1/tenants/check-slug?slug=%00", "", nil); r.status != http.StatusBadRequest || errorCode(t, r.body) != "invalid_query" {
+		t.Errorf("an anonymous route with NUL: %d %s, want 400 invalid_query", r.status, r.body)
+	}
+}
+
+// Identity fix round 2 (M3, M5): a character limit counts characters, and a misspelt
+// key in an optional body is refused.
+func TestE2E_FixRound2_CharacterLimitsAndStrictOptionalBodies(t *testing.T) {
+	w := newAttackWorld(t)
+	f := w.f
+	own := w.owner.AccessToken
+
+	// M3: a 7-character Hindi reason (21 bytes, under the 10-character floor) is a
+	// refusal, not a 500 from the column's CHECK; 10 characters (30 bytes) is accepted.
+	p := permission.IdentityPermissions
+	short := f.authedJSON(t, http.MethodPost, "/api/v1/permission-requests", w.tok(t, "exec"), ports.CreatePermissionRequestRequest{Permission: p.Users.View, Reason: strings.Repeat("अ", 7)})
+	if short.status < 400 || short.status >= 500 {
+		t.Errorf("a 7-character Hindi reason: %d %s, want a 4xx refusal", short.status, short.body)
+	}
+	ok := f.authedJSON(t, http.MethodPost, "/api/v1/permission-requests", w.tok(t, "exec"), ports.CreatePermissionRequestRequest{Permission: p.Users.View, Reason: strings.Repeat("अ", 10)})
+	if ok.status != http.StatusCreated {
+		t.Fatalf("a 10-character Hindi reason: %d %s, want 201", ok.status, ok.body)
+	}
+
+	// M5: a misspelt key in an optional body is refused, and nothing happens.
+	var cr ports.CreatePermissionRequestResponse
+	if err := json.Unmarshal(ok.body, &cr); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.authedJSON(t, http.MethodPost, "/api/v1/permission-requests/"+cr.RequestID+"/approve", own, rawBody(`{"decisionReason":"fine"}`)); r.status != http.StatusBadRequest || errorCode(t, r.body) != "invalid_body" {
+		t.Errorf("approve with a misspelt key: %d %s, want 400 invalid_body", r.status, r.body)
+	}
+	g := f.authedJSON(t, http.MethodGet, "/api/v1/permission-requests/"+cr.RequestID, own, nil)
+	var d ports.PermissionRequestDto
+	if err := json.Unmarshal(g.body, &d); err != nil || d.State != "pending" {
+		t.Errorf("after the refused approve the request is %q (%v), want pending", d.State, err)
+	}
+	if r := f.authedJSON(t, http.MethodPost, "/api/v1/permission-requests/"+cr.RequestID+"/approve", own, nil); r.status != http.StatusNoContent && r.status != http.StatusOK {
+		t.Errorf("approve with no body: %d %s, want it to succeed", r.status, r.body)
+	}
+}

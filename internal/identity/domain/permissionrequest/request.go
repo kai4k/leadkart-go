@@ -36,6 +36,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -205,13 +206,13 @@ func New(
 			ErrInvalidDuration, durationDays, MinDurationDays, MaxDurationDays)
 	}
 	trimmed := strings.TrimSpace(reason)
-	if len(trimmed) < MinReasonLength {
+	if utf8.RuneCountInString(trimmed) < MinReasonLength {
 		return nil, fmt.Errorf("%w: reason length %d below floor %d",
-			ErrInvalidRequest, len(trimmed), MinReasonLength)
+			ErrInvalidRequest, utf8.RuneCountInString(trimmed), MinReasonLength)
 	}
-	if len(trimmed) > MaxReasonLength {
+	if utf8.RuneCountInString(trimmed) > MaxReasonLength {
 		return nil, fmt.Errorf("%w: reason length %d above ceiling %d",
-			ErrInvalidRequest, len(trimmed), MaxReasonLength)
+			ErrInvalidRequest, utf8.RuneCountInString(trimmed), MaxReasonLength)
 	}
 	if err := humantext.Check("reason", trimmed); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
@@ -324,9 +325,9 @@ func (r *Request) Approve(
 		return fmt.Errorf("%w: requester %s", ErrSelfApproval, r.requesterMembershipID)
 	}
 	trimmed := strings.TrimSpace(decisionReason)
-	if len(trimmed) > MaxDecisionReasonLength {
+	if utf8.RuneCountInString(trimmed) > MaxDecisionReasonLength {
 		return fmt.Errorf("%w: decision_reason length %d above ceiling %d",
-			ErrInvalidRequest, len(trimmed), MaxDecisionReasonLength)
+			ErrInvalidRequest, utf8.RuneCountInString(trimmed), MaxDecisionReasonLength)
 	}
 	if err := humantext.Check("decision_reason", trimmed); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
@@ -372,9 +373,9 @@ func (r *Request) Deny(
 	if trimmed == "" {
 		return fmt.Errorf("%w: decision_reason required on Deny", ErrInvalidRequest)
 	}
-	if len(trimmed) > MaxDecisionReasonLength {
+	if utf8.RuneCountInString(trimmed) > MaxDecisionReasonLength {
 		return fmt.Errorf("%w: decision_reason length %d above ceiling %d",
-			ErrInvalidRequest, len(trimmed), MaxDecisionReasonLength)
+			ErrInvalidRequest, utf8.RuneCountInString(trimmed), MaxDecisionReasonLength)
 	}
 	if err := humantext.Check("decision_reason", trimmed); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)

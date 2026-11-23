@@ -265,10 +265,10 @@ func handleApprovePermissionRequest(log *slog.Logger, a app.Application) http.Ha
 			return
 		}
 		var req ApprovePermissionRequestRequest
-		// Body is OPTIONAL on Approve. Decode best-effort; EOF on empty
-		// body is fine.
-		if r.Body != nil {
-			_ = json.NewDecoder(r.Body).Decode(&req)
+		// Body is OPTIONAL on Approve: empty is fine, a present one is read
+		// strictly so a misspelt decision_reason is not an approval without its reason.
+		if !decodeOptionalBody(w, r, &req) {
+			return
 		}
 		err := a.Commands.ApprovePermissionRequest.Handle(r.Context(),
 			command.ApprovePermissionRequestCommand{

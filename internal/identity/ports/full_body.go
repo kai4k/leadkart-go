@@ -157,3 +157,29 @@ func missingRequiredKeys(t reflect.Type, keys map[string]json.RawMessage, prefix
 	slices.Sort(missing)
 	return missing
 }
+
+// decodeOptionalBody decodes a body that may be absent (an empty body leaves dst
+// untouched) but is read strictly when present: a key dst does not have, a value of
+// the wrong type, invalid JSON, or a second JSON value after the first is a 400
+// invalid_body. These bodies carry flags whose absence has a meaning ("revoke every
+// session", "approve with no reason"); a misspelt key must never read as absent.
+// Writes the response and returns false on error.
+func decodeOptionalBody[T any](w http.ResponseWriter, r *http.Request, dst *T) bool {
+	if r.Body == nil {
+		return true
+	}
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		if errors.Is(err, io.EOF) { // an empty body
+			return true
+		}
+		writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON, or names a field this request does not take")
+		return false
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body must be a single JSON object")
+		return false
+	}
+	return true
+}

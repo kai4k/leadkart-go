@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/common/humantext"
@@ -561,9 +562,9 @@ func validateName(raw string) (string, error) {
 	if trimmed == "" {
 		return "", fmt.Errorf("%w: name required", ErrInvalid)
 	}
-	if len(trimmed) < NameMinLength || len(trimmed) > NameMaxLength {
+	if n := utf8.RuneCountInString(trimmed); n < NameMinLength || n > NameMaxLength {
 		return "", fmt.Errorf("%w: name length %d not in [%d,%d]",
-			ErrInvalid, len(trimmed), NameMinLength, NameMaxLength)
+			ErrInvalid, utf8.RuneCountInString(trimmed), NameMinLength, NameMaxLength)
 	}
 	return trimmed, nil
 }

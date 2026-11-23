@@ -3,7 +3,6 @@ package ports
 import (
 	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"math"
 	"net/http"
@@ -794,18 +793,13 @@ func handleRevokeAllSessions(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 
-		// Body is OPTIONAL — empty body == default behaviour (revoke
-		// every active family). Decoding an empty body via stdlib's
-		// json.Decoder returns io.EOF; treat that as "no overrides".
+		// Body is OPTIONAL — empty body == default behaviour (revoke every active
+		// family). A body that is present is read strictly: a misspelt flag
+		// ({"exceptCurrent":true}) must not quietly become "revoke everything,
+		// this device included".
 		var req RevokeAllSessionsRequest
-		if r.Body != nil {
-			// Only an EMPTY body is "no overrides". A body that does not parse
-			// ({"except_current":"true"}) must not quietly become "revoke everything,
-			// this device included".
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
-				writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
-				return
-			}
+		if !decodeOptionalBody(w, r, &req) {
+			return
 		}
 
 		var except refreshtoken.FamilyID

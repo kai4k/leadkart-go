@@ -28,6 +28,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/common/humantext"
@@ -623,9 +624,9 @@ func (m *Membership) UpdateProfile(designation, department, statusMessage string
 		{"department", m.department, dep, DepartmentMaxLen},
 		{"status_message", m.statusMessage, sm, StatusMessageMaxLen},
 	} {
-		// The cap is measured on the trimmed value, in UTF-8 bytes like every other
-		// identity name rule; a value that is not being changed is never re-measured.
-		if f.next != f.stored && len(f.next) > f.max {
+		// The cap is measured on the trimmed value, in characters (the unit the web counts),
+		// like every other identity name rule; a value that is not being changed is never re-measured.
+		if f.next != f.stored && utf8.RuneCountInString(f.next) > f.max {
 			return fmt.Errorf("%w: %w", ErrInvalid, humantext.TooLong(f.field))
 		}
 		if err := humantext.CheckChanged(f.field, f.stored, f.next); err != nil {

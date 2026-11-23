@@ -213,6 +213,10 @@ func Middleware(store Store, now func() time.Time, ttl time.Duration, keyer Call
 	}
 }
 
+// storeTimeout bounds the write of a stored answer, which no longer follows the
+// request's context.
+const storeTimeout = 5 * time.Second
+
 // storeAnswer stores a first execution's answer for replay. Only 2xx answers
 // are stored: a failure is transient by default and must stay retryable. A
 // failed write does not change the answer the caller already has, but it is
@@ -235,7 +239,12 @@ func storeAnswer(ctx context.Context, store Store, log *slog.Logger, answer *rec
 	rec.ResponseStatus = answer.status
 	rec.CreatedAt = now
 	rec.ExpiresAt = now.Add(ttl)
-	if err := store.Put(ctx, rec); err != nil {
+	// The command has committed: the answer must be stored even if the caller has gone
+	// (a disconnect cancels the request context), or the retry would run the command
+	// again. So the write is detached from the request's cancellation, and bounded.
+	putCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), storeTimeout)
+	defer cancel()
+	if err := store.Put(putCtx, rec); err != nil {
 		log.ErrorContext(ctx, "idempotency: the answer could not be stored; a retry of this command will not be replayed",
 			"command_id", rec.Key.String(), "status", answer.status, "err", err)
 	}

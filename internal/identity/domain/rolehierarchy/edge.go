@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/common/humantext"
@@ -323,9 +324,9 @@ func validateReason(raw string) (string, error) {
 	if trimmed == "" {
 		return "", nil
 	}
-	if len(trimmed) < MinReasonLength || len(trimmed) > MaxReasonLength {
+	if n := utf8.RuneCountInString(trimmed); n < MinReasonLength || n > MaxReasonLength {
 		return "", fmt.Errorf("%w: length %d not in [%d, %d]",
-			ErrInvalidReason, len(trimmed), MinReasonLength, MaxReasonLength)
+			ErrInvalidReason, utf8.RuneCountInString(trimmed), MinReasonLength, MaxReasonLength)
 	}
 	if err := humantext.Check("reason", trimmed); err != nil {
 		return "", fmt.Errorf("%w: %w", ErrInvalidReason, err)

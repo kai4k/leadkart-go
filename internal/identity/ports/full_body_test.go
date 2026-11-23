@@ -178,3 +178,46 @@ func TestDecodeFullBody_AnonymiseRequiresAReason(t *testing.T) {
 		t.Errorf("valid body rejected: %+v", got)
 	}
 }
+
+func decodeOptional[T any](t *testing.T, body string) (T, *httptest.ResponseRecorder, bool) {
+	t.Helper()
+	var dst T
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/x", strings.NewReader(body))
+	ok := decodeOptionalBody(rec, req, &dst)
+	return dst, rec, ok
+}
+
+// An optional body may be absent, but a present one is read strictly: a misspelt
+// key must never read as "not sent".
+func TestDecodeOptionalBody_AbsentIsFineAPresentBodyIsStrict(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		body   string
+		wantOK bool
+	}{
+		{"empty body", ``, true},
+		{"a known key", `{"decision_reason":"ok"}`, true},
+		{"an empty object", `{}`, true},
+		{"a misspelt key", `{"decisionReason":"ok"}`, false},
+		{"a known key beside an unknown one", `{"decision_reason":"ok","x":1}`, false},
+		{"not JSON", `nope`, false},
+		{"the wrong type", `{"decision_reason":5}`, false},
+		{"a second JSON value", `{}{}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, rec, ok := decodeOptional[ApprovePermissionRequestRequest](t, tc.body)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v (status %d %s)", ok, tc.wantOK, rec.Code, rec.Body)
+			}
+			if !tc.wantOK {
+				var resp ErrorResponse
+				if rec.Code != http.StatusBadRequest || json.Unmarshal(rec.Body.Bytes(), &resp) != nil || resp.Error != ErrCodeInvalidBody {
+					t.Errorf("answer = %d %s, want 400 invalid_body", rec.Code, rec.Body)
+				}
+			}
+		})
+	}
+}
