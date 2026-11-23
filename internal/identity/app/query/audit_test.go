@@ -343,13 +343,15 @@ func TestListAuditByUser_PageBoundary_EmitsNextCursor(t *testing.T) {
 
 // Review B5: under an impersonation session the stored user is the OPERATOR; the tenant
 // feed shows that support acted but never which operator. The person own feed keeps it.
+var auditAt = time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+
 func TestListAuditEventsByTenant_HidesTheOperatorPersonIdOfImpersonatedRows(t *testing.T) {
 	t.Parallel()
 	operator := uuid.New()
 	member := uuid.New()
 	reader := &fakeAuditReader{tenantEntries: []audit.Entry{
-		{ID: uuid.New(), Action: "identity.membership_deactivated.v1", UserID: operator, ActOperatorID: operator, OccurredAtUTC: time.Now()},
-		{ID: uuid.New(), Action: "identity.person_created.v1", UserID: member, OccurredAtUTC: time.Now()},
+		{ID: uuid.New(), Action: "identity.membership_deactivated.v1", UserID: operator, ActOperatorID: operator, OccurredAtUTC: auditAt},
+		{ID: uuid.New(), Action: "identity.person_created.v1", UserID: member, OccurredAtUTC: auditAt},
 	}}
 	page, err := query.NewListAuditEventsByTenantHandler(reader).Handle(t.Context(), query.ListAuditEventsByTenantQuery{TenantID: tenant.ID(auditTenantUUID)})
 	if err != nil {
