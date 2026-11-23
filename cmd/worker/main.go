@@ -42,7 +42,6 @@ import (
 
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/components/forwarder"
-	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"github.com/redis/go-redis/v9/maintnotifications"
@@ -273,7 +272,7 @@ func run(ctx context.Context, stdout *os.File) error {
 
 	subWiring := buildSubscriberWiring(pool, hybridCache)
 
-	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(logger))
+	pubsub := messaging.NewPubSub(watermill.NewSlogLogger(logger))
 	defer func() { _ = pubsub.Close() }()
 
 	tx := pg.NewTransactor(pool)
@@ -585,6 +584,14 @@ func runWorkerServices(
 	g, gctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
+		// Start draining only once the router is subscribed: a message published to
+		// a topic with no subscriber is dropped by the in-process bus after the
+		// forwarder has already deleted its outbox row.
+		select {
+		case <-router.Running():
+		case <-gctx.Done():
+			return nil
+		}
 		logger.Info("outbox forwarder starting")
 		if err := outboxForwarder.Run(gctx); err != nil && !errors.Is(err, context.Canceled) {
 			return fmt.Errorf("outbox forwarder: %w", err)
