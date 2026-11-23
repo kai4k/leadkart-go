@@ -561,7 +561,7 @@ func TestE2E_C7_I6_InvalidEmailNamesItsField(t *testing.T) {
 }
 
 // M1: the profile fields have a server cap (designation and department 120, status
-// message 280, UTF-8 bytes after trimming): too_long, named, nothing written.
+// message 280, characters after trimming): too_long, named, nothing written.
 func TestE2E_M1_ProfileFieldsAreCapped(t *testing.T) {
 	f := newE2EFixture(t)
 	owner := f.registerAndLogin(t, "m1")
@@ -570,14 +570,15 @@ func TestE2E_M1_ProfileFieldsAreCapped(t *testing.T) {
 	save := func(d, dep, sm string) httpResp {
 		return f.authedJSON(t, http.MethodPatch, path, owner.AccessToken, ports.UpdateUserProfileRequest{Designation: d, Department: dep, StatusMessage: sm})
 	}
-	if r := save("  "+strings.Repeat("d", 120)+"  ", strings.Repeat("p", 120), strings.Repeat("s", 280)); r.status != http.StatusNoContent {
+	// the department is 120 two-byte characters: the cap counts characters, not bytes
+	if r := save("  "+strings.Repeat("d", 120)+"  ", strings.Repeat("é", 120), strings.Repeat("s", 280)); r.status != http.StatusNoContent {
 		t.Fatalf("every field at its cap (one padded with spaces): %d %s, want 204", r.status, r.body)
 	}
 	for _, c := range []struct{ field, d, dep, sm string }{
 		{"designation", strings.Repeat("d", 121), "", ""},
 		{"department", "", strings.Repeat("p", 121), ""},
 		{"status_message", "", "", strings.Repeat("s", 281)},
-		{"designation", strings.Repeat("é", 61), "", ""}, // 122 bytes
+		{"designation", strings.Repeat("é", 121), "", ""}, // 121 characters
 	} {
 		r := save(c.d, c.dep, c.sm)
 		var er ports.ErrorResponse
