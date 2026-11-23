@@ -61,7 +61,7 @@ var permissionFactories = map[string]bool{
 // authnHandlerFactories are every authn wrapper a route may use, and what each is.
 var authnHandlerFactories = map[string]bool{
 	"RequireFreshStamp": true, "RequireAuth": true, "RequirePlatform": true,
-	"RejectTenantScope": true, "TenantScopeLifecycle": true, "TenantScopePathOnly": true,
+	"RejectTenantScope": true, "TenantScopeLifecycle": true,
 	"TenantScopeMatchesPath": true, "TenantScopeWritable": true, "HonourTenantScope": true,
 	"DenySelfPerson": true, "DenySelfTarget": true,
 }
@@ -288,7 +288,7 @@ func renderGates(gates []gateUse) (authz, scope string) {
 			scope = "not supported (403 `tenant_scope_not_supported`)"
 		case "TenantScopeWritable":
 			scope = "honoured; writes allowed"
-		case "TenantScopeLifecycle", "TenantScopePathOnly", "TenantScopeMatchesPath":
+		case "TenantScopeLifecycle", "TenantScopeMatchesPath":
 			scope = scopePathTenant
 		case "HonourTenantScope":
 			scope = "honoured"

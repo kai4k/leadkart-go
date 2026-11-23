@@ -211,7 +211,6 @@ func TestTenantScopePolicy_MultipleHeaderValues(t *testing.T) {
 func TestTenantScopePolicy_PathConflict(t *testing.T) {
 	t.Parallel()
 	lifecycle := authn.TenantScopeLifecycle("tenantId")
-	pathOnly := authn.TenantScopePathOnly("tenantId")
 	cases := []struct {
 		name   string
 		wrap   func(http.Handler) http.Handler
@@ -225,9 +224,6 @@ func TestTenantScopePolicy_PathConflict(t *testing.T) {
 		// A header equal to the path tenant selects nothing (F4): the home tenant stays bound.
 		{"lifecycle same tenant", lifecycle, "POST", "/api/v1/tenants/" + tenantB + "/suspend", tenantB, 200, tenantA},
 		{"lifecycle no header", lifecycle, "POST", "/api/v1/tenants/" + tenantB + "/suspend", "", 200, tenantA},
-		{"path only conflict", pathOnly, "DELETE", "/api/v1/platform/tenants/" + tenantB, tenantA, 400, ""},
-		{"path only same tenant", pathOnly, "DELETE", "/api/v1/platform/tenants/" + tenantB, tenantB, 200, tenantA},
-		{"path only no header", pathOnly, "DELETE", "/api/v1/platform/tenants/" + tenantB, "", 200, tenantA},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -476,7 +472,6 @@ func TestTenantScopePolicy_PathTenantHeaderEqualToPathNeedsNoScopeAuthority(t *t
 	}{
 		{"match", authn.TenantScopeMatchesPath("tenantId"), "PATCH", "/api/v1/tenants/" + tenantB + "/profile"},
 		{"lifecycle", authn.TenantScopeLifecycle("tenantId"), "POST", "/api/v1/tenants/" + tenantB + "/suspend"},
-		{"path only", authn.TenantScopePathOnly("tenantId"), "DELETE", "/api/v1/platform/tenants/" + tenantB},
 	}
 	for _, rt := range routes {
 		for _, who := range []struct {

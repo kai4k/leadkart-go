@@ -129,14 +129,13 @@ const (
 	scopeReject                              // a scope away from the home tenant is 403
 	scopePathMatch                           // header must equal the path tenant (path wins)
 	scopePathLifecycle                       // as scopePathMatch; tenant lifecycle routes also act on inactive tenants
-	scopePathOnly                            // header is only conflict-checked, never applied
 )
 
 // pathTenant reports whether the route names its tenant in the URL. The URL
 // decides there: a header equal to it selects nothing (no scope authority, no
 // lookup), and the route's own permission gate authorises and attributes.
 func (k scopeRouteKind) pathTenant() bool {
-	return k == scopePathMatch || k == scopePathLifecycle || k == scopePathOnly
+	return k == scopePathMatch || k == scopePathLifecycle
 }
 
 type scopeRoute struct {
@@ -206,15 +205,6 @@ func TenantScopeMatchesPath(pathVar string) func(http.Handler) http.Handler {
 func TenantScopeLifecycle(pathVar string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return markRoute(func(r *scopeRoute) { r.kind, r.pathVar = scopePathLifecycle, pathVar }, next)
-	}
-}
-
-// TenantScopePathOnly marks a route that acts on the path tenant and never on
-// the header (hard delete): a header naming a different tenant is still 400
-// tenant_scope_conflict, but no scope is applied, looked up or audited.
-func TenantScopePathOnly(pathVar string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return markRoute(func(r *scopeRoute) { r.kind, r.pathVar = scopePathOnly, pathVar }, next)
 	}
 }
 
@@ -311,7 +301,7 @@ func preLookupRefusal(r *http.Request, c *jwt.Claims, route scopeRoute, id strin
 		if !own {
 			return &scopeRefusal{http.StatusForbidden, errCodeTenantScopeNotSupported, "X-Tenant-Id is not supported on this route"}
 		}
-	case scopePathMatch, scopePathLifecycle, scopePathOnly:
+	case scopePathMatch, scopePathLifecycle:
 		if pathTenant, ok := CanonicalID(r.PathValue(route.pathVar)); ok && pathTenant != id {
 			return &scopeRefusal{http.StatusBadRequest, errCodeTenantScopeConflict, "X-Tenant-Id conflicts with the tenant in the URL"}
 		}

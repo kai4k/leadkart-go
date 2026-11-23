@@ -10,7 +10,7 @@ import (
 // A route's scope policy is declared in exactly one of two places:
 //
 //   - a registration MARKER on the route ([RejectTenantScope],
-//     [TenantScopeMatchesPath], [TenantScopeLifecycle], [TenantScopePathOnly],
+//     [TenantScopeMatchesPath], [TenantScopeLifecycle],
 //     [TenantScopeWritable], [HonourTenantScope]); or
 //   - this table, for whole route GROUPS where the header cannot apply and is
 //     therefore IGNORED: no validation, no tenant lookup, no audit line,

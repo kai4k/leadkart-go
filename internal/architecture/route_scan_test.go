@@ -104,7 +104,6 @@ var authnFactoryTags = map[string][]string{
 	"RejectTenantScope":       {tagReject},
 	"TenantScopeMatchesPath":  {tagPath},
 	"TenantScopeLifecycle":    {tagPath},
-	"TenantScopePathOnly":     {tagPath},
 	"TenantScopeWritable":     {tagWritable},
 	"HonourTenantScope":       {tagHonour},
 	"DenySelfTarget":          {tagInner},
