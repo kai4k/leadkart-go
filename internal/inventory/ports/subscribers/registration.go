@@ -36,7 +36,9 @@ func Handlers(
 		handlers = append(handlers, cqrs.NewEventHandler(HandlerReleaseStock, release.Handle))
 	}
 	if policyChanged != nil {
-		handlers = append(handlers, cqrs.NewEventHandler(HandlerPolicyChanged, policyChanged.Handle))
+		handlers = append(handlers,
+			cqrs.NewEventHandler(HandlerPolicyChanged, policyChanged.Handle),
+			cqrs.NewEventHandler(HandlerPolicyRepublished, policyChanged.HandleRepublished))
 	}
 	return handlers
 }

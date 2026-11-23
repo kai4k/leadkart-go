@@ -22,6 +22,9 @@ SELECT id, action, user_id, tenant_id, correlation_id,
        act_operator_id, act_session_id, act_reason
 FROM   common.audit_log_entry
 WHERE  tenant_id = $1
+-- A re-announcement of an unchanged stored state (the daily anti-entropy job) is
+-- not an event in the tenant timeline.
+AND    action NOT LIKE '%.policy\_republished.v1'
 AND    (occurred_at_utc, id) < (sqlc.arg(before_occurred)::timestamptz, sqlc.arg(before_id)::uuid)
 ORDER  BY occurred_at_utc DESC, id DESC
 LIMIT  sqlc.arg('limit');

@@ -178,7 +178,7 @@ func TestE2E_CompanySettings_RefusalsNameTheSettingWithStableCodes(t *testing.T)
 		{"too many warning days", map[string]map[string]any{"expiry": {"warning_days": []int{1, 2, 3, 4, 5}}}, "expiry.warning_days", "too_many"},
 		{"unknown setting", map[string]map[string]any{"expiry": {"grace_days": 5}}, "expiry.grace_days", "unknown_setting"},
 		{"gst rates are not patched", map[string]map[string]any{"tax": {"gst_rates": []any{}}}, "tax.gst_rates", "managed_elsewhere"},
-		{"percent advance needs a value", map[string]map[string]any{"payment": {"advance_mode": "percent"}}, "payment.advance_value", "out_of_range"},
+		{"percent advance needs a value", map[string]map[string]any{"payment": {"advance_mode": "percent"}}, "payment.advance_value", "value_required"},
 		{"default outside the allowed set", map[string]map[string]any{"fulfilment": {"shortage_allowed": []string{"refuse"}}}, "fulfilment.shortage_default", "not_in_allowed"},
 	}
 	for _, tc := range cases {

@@ -33,9 +33,8 @@ func FromDomainEvent(d any) (Event, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%w: tenant_id=%q: %w", ErrInvalidUUID, e.TenantID, err)
 		}
-		return PolicyChangedV1{
-			TenantIDClaim: tid, Version: e.Version, Policy: e.Policy,
-			Republish: true, OccurredAtUTC: e.At.UTC(),
+		return PolicyRepublishedV1{
+			TenantIDClaim: tid, Version: e.Version, Policy: e.Policy, OccurredAtUTC: e.At.UTC(),
 		}, nil
 	default:
 		panic(fmt.Sprintf("companysettings integrationevents: unmapped domain event %T", d))

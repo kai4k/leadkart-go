@@ -42,7 +42,7 @@ func TestFromDomainEvent_PolicyChangedCarriesTheWholePolicy(t *testing.T) {
 	}
 }
 
-func TestFromDomainEvent_RepublishIsTheSameAliasFlagged(t *testing.T) {
+func TestFromDomainEvent_RepublishHasItsOwnAliasSoItIsNotMistakenForAChange(t *testing.T) {
 	t.Parallel()
 	tid := uuid.New()
 	got, err := integrationevents.FromDomainEvent(commercesettings.PolicyRepublishedEvent{
@@ -51,8 +51,8 @@ func TestFromDomainEvent_RepublishIsTheSameAliasFlagged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ev := got.(integrationevents.PolicyChangedV1)
-	if !ev.Republish || ev.Version != 2 || ev.Topic() != "companysettings.policy_changed.v1" {
+	ev, ok := got.(integrationevents.PolicyRepublishedV1)
+	if !ok || ev.Version != 2 || ev.Topic() != "companysettings.policy_republished.v1" {
 		t.Fatalf("event = %+v", ev)
 	}
 }

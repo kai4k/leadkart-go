@@ -17,8 +17,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -276,5 +278,32 @@ func TestE2E_CompanySettings_AChangeReachesBothReplicasAndReplayIsHarmless(t *te
 	after := csDecode[csports.ListHistoryResponse](t, f.authedJSON(t, http.MethodGet, csHistory, tok, nil), http.StatusOK)
 	if len(after.Items) != len(before.Items) || after.Items[0].Version != 4 {
 		t.Fatalf("a republish wrote history: %d -> %d rows", len(before.Items), len(after.Items))
+	}
+
+	// 7. A re-announcement is not a change: it has its own alias and the tenant
+	//    audit timeline does not list it (review M2). Real changes are listed.
+	timeline := f.authedJSON(t, http.MethodGet, "/api/v1/tenants/"+reg.TenantID+"/audit/events?page_size=200", tok, nil)
+	if timeline.status != http.StatusOK {
+		t.Fatalf("tenant audit timeline: %d %s", timeline.status, timeline.body)
+	}
+	var events struct {
+		Events []struct {
+			Action string `json:"action"`
+		} `json:"events"`
+	}
+	if err := json.Unmarshal(timeline.body, &events); err != nil {
+		t.Fatal(err)
+	}
+	changed := 0
+	for _, e := range events.Events {
+		if strings.Contains(e.Action, "republished") {
+			t.Fatalf("the timeline lists a republish: %s", e.Action)
+		}
+		if e.Action == "companysettings.policy_changed.v1" {
+			changed++
+		}
+	}
+	if changed == 0 {
+		t.Fatalf("real changes must still be listed: %s", timeline.body)
 	}
 }
