@@ -84,6 +84,11 @@ type scopeRequest struct {
 
 type scopeRequestKey struct{}
 
+// tenantLookupKey carries the tenant-status lookup to the auth gate on a request that
+// has no X-Tenant-Id header, for the gate's own use: an impersonation token's writes
+// ask whether the company it acts in is still active.
+type tenantLookupKey struct{}
+
 // TenantScope implements ADR 0039 clauses 1-2 (ADR 0068 D7). It is the ONE
 // place the header is read, and it only stashes the raw value together with
 // what the central table says about the route (see scope_policy.go); a route's
@@ -100,10 +105,11 @@ func TenantScope(lookup TenantLookupFunc, log *slog.Logger) func(http.Handler) h
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			values := r.Header.Values(TenantScopeHeader)
 			if !anyNonBlank(values) {
-				next.ServeHTTP(w, r)
+				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), tenantLookupKey{}, lookup)))
 				return
 			}
-			ctx := context.WithValue(r.Context(), scopeRequestKey{}, &scopeRequest{
+			ctx := context.WithValue(r.Context(), tenantLookupKey{}, lookup)
+			ctx = context.WithValue(ctx, scopeRequestKey{}, &scopeRequest{
 				values: values, lookup: lookup, log: log, tableIgnored: scopeIgnoredOn(r),
 			})
 			next.ServeHTTP(w, r.WithContext(ctx))
@@ -346,6 +352,32 @@ func CanActAcrossTenants(c *jwt.Claims) bool {
 }
 
 func isReadMethod(m string) bool { return m == http.MethodGet || m == http.MethodHead }
+
+// impersonatedTenantActive answers whether the company an impersonation token writes
+// into is still active, and writes the refusal itself when it is not (review G2c N1).
+// A session opened before the company was suspended writes with tenant-admin authority,
+// so its writes are refused like an operator's X-Tenant-Id write to that company (409
+// tenant_not_active); its reads stay open so the operator can see what happened. It
+// asks the same lookup the header scope uses, and only on a non-read request carrying
+// an act claim, so every other request pays nothing. It fails closed: no lookup on the
+// request (TenantScope not wrapped around the mux) or an unreadable status is a refusal.
+func impersonatedTenantActive(w http.ResponseWriter, r *http.Request, c *jwt.Claims) bool {
+	lookup, ok := r.Context().Value(tenantLookupKey{}).(TenantLookupFunc)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, errCodeInternal, "tenant status unavailable")
+		return false
+	}
+	state, err := lookup(r.Context(), strings.TrimSpace(c.TenantID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, errCodeInternal, "tenant status unavailable")
+		return false
+	}
+	if state != TenantScopeActive {
+		writeError(w, http.StatusConflict, errCodeTenantNotActive, "the company is not active (suspended or pending)")
+		return false
+	}
+	return true
+}
 
 // EffectiveTenantID returns the tenant the request acts in: the one bound on
 // ctx by the auth gate (the caller's own tenant, or the validated operator

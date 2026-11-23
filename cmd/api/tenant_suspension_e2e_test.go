@@ -15,12 +15,14 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 )
 
@@ -291,5 +293,42 @@ func TestE2E_Impersonation_RefusesASuspendedCompany(t *testing.T) {
 	f.activateTenantHTTP(t, owner.TenantID)
 	if r := open(); r.status != http.StatusCreated {
 		t.Fatalf("session into the reactivated company: %d %s, want 201", r.status, r.body)
+	}
+}
+
+// Review G2c N1: a session opened BEFORE the company was suspended cannot write once it is
+// suspended (409 tenant_not_active on every non-read method); reads still work, so the
+// operator can see what happened, and reactivating the company opens the writes again.
+func TestE2E_Impersonation_ASessionOpenedBeforeTheSuspensionCannotWrite(t *testing.T) {
+	f := newE2EFixture(t)
+	owner := f.registerAndLogin(t, "impprior")
+	p := permission.IdentityPermissions
+	opTok := mintOperatorJWTExact(t, f.Issuer, f.persons, "", []string{p.Platform.ImpersonationManage, p.Platform.TenantsView}, false)
+	sess := f.authedJSON(t, http.MethodPost, "/api/v1/platform/impersonation/sessions", opTok,
+		ports.CreateImpersonationSessionRequest{TargetTenantID: owner.TenantID, Reason: "ticket 4713 before the suspension", DurationMinutes: 30})
+	if sess.status != http.StatusCreated {
+		t.Fatalf("create session: %d %s", sess.status, sess.body)
+	}
+	var out ports.CreateImpersonationSessionResponse
+	if err := json.Unmarshal(sess.body, &out); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+	member := f.createMember(t, owner, "impprior")
+	salesExec := f.roleIDByName(t, owner.AccessToken, role.SystemRoles.Tenant.SalesExecutive)
+	assign := func() httpResp {
+		return f.authedJSON(t, http.MethodPost, "/api/v1/users/"+member.membershipID+"/roles", out.AccessToken, ports.AssignUserRoleRequest{RoleID: salesExec})
+	}
+
+	f.suspendTenantHTTP(t, owner.TenantID)
+	if r := assign(); r.status != http.StatusConflict || errCodeOf(r) != "tenant_not_active" {
+		t.Fatalf("write on a session opened before the suspension: %d %s, want 409 tenant_not_active", r.status, r.body)
+	}
+	if r := f.authedJSON(t, http.MethodGet, "/api/v1/roles", out.AccessToken, nil); r.status != http.StatusOK {
+		t.Fatalf("read on the same session: %d %s, want 200", r.status, r.body)
+	}
+
+	f.activateTenantHTTP(t, owner.TenantID)
+	if r := assign(); r.status != http.StatusNoContent {
+		t.Fatalf("write after the company is reactivated: %d %s, want 204", r.status, r.body)
 	}
 }

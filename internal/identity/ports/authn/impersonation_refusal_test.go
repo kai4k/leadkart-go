@@ -1,10 +1,12 @@
 package authn_test
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
 
@@ -140,4 +142,60 @@ func slicesEqual(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// ----- a company that is no longer active (review G2c N1) --------------------
+
+func suspendedTenant(context.Context, string) (authn.TenantScopeState, error) {
+	return authn.TenantScopeInactive, nil
+}
+
+// A session opened before the company was suspended writes nothing: every non-read
+// method answers 409 tenant_not_active. Reads stay open.
+func TestRequireFreshStamp_ImpersonationToken_WritesRefusedOnASuspendedCompany(t *testing.T) {
+	t.Parallel()
+	claims := func() *jwt.Claims { return impersonationClaims(stampPersonID, stampPersonID, "sess-1") }
+	for _, pattern := range []string{"POST /api/v1/users", "PUT /api/v1/users", "PATCH /api/v1/users", "DELETE /api/v1/users"} {
+		v := &sessionStampValidator{fakeStampValidator: fakeStampValidator{fresh: true}, live: true}
+		rec, s := serveOnMuxWith(t, pattern, claims(), v, suspendedTenant)
+		if body := errCodeOf(rec); rec.Code != http.StatusConflict || !strings.Contains(body, `"tenant_not_active"`) || s.called {
+			t.Errorf("%s: status %d called %v body %s; want 409 tenant_not_active", pattern, rec.Code, s.called, body)
+		}
+	}
+	for _, pattern := range []string{"GET /api/v1/users", "HEAD /api/v1/users"} {
+		v := &sessionStampValidator{fakeStampValidator: fakeStampValidator{fresh: true}, live: true}
+		if rec, s := serveOnMuxWith(t, pattern, claims(), v, suspendedTenant); rec.Code != http.StatusOK || !s.called {
+			t.Errorf("%s: status %d called %v; want 200 (a read is open)", pattern, rec.Code, s.called)
+		}
+	}
+}
+
+// An ordinary token is not asked: its company is judged at login and refresh.
+func TestRequireFreshStamp_OrdinaryTokenWritesAreNotAskedAboutTheCompany(t *testing.T) {
+	t.Parallel()
+	asked := false
+	lookup := func(context.Context, string) (authn.TenantScopeState, error) {
+		asked = true
+		return authn.TenantScopeInactive, nil
+	}
+	rec, s := serveOnMuxWith(t, "POST /api/v1/users", freshClaims(stampFresh), &fakeStampValidator{fresh: true}, lookup)
+	if rec.Code != http.StatusOK || !s.called || asked {
+		t.Fatalf("ordinary write: status %d called %v asked %v; want 200 and no lookup", rec.Code, s.called, asked)
+	}
+}
+
+// With no way to tell (no lookup on the request, or the status unreadable) a session's
+// write is refused, not waved through.
+func TestRequireFreshStamp_ImpersonationToken_WriteFailsClosedWhenTheCompanyCannotBeRead(t *testing.T) {
+	t.Parallel()
+	broken := func(context.Context, string) (authn.TenantScopeState, error) {
+		return authn.TenantScopeUnknown, context.DeadlineExceeded
+	}
+	for name, lookup := range map[string]authn.TenantLookupFunc{"no lookup": nil, "unreadable": broken} {
+		v := &sessionStampValidator{fakeStampValidator: fakeStampValidator{fresh: true}, live: true}
+		rec, s := serveOnMuxWith(t, "POST /api/v1/users", impersonationClaims(stampPersonID, stampPersonID, "sess-1"), v, lookup)
+		if rec.Code != http.StatusInternalServerError || s.called {
+			t.Errorf("%s: status %d called %v; want 500 and no write", name, rec.Code, s.called)
+		}
+	}
 }

@@ -1,7 +1,9 @@
 package authn_test
 
 import (
+	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,14 +17,30 @@ import (
 // the matched route pattern exactly as in production (r.Pattern).
 func serveOnMux(t *testing.T, pattern string, claims *jwt.Claims, validator authn.StampValidator) (*httptest.ResponseRecorder, *sentinel) {
 	t.Helper()
+	return serveOnMuxWith(t, pattern, claims, validator, activeTenant)
+}
+
+// activeTenant is the tenant-status lookup of a company that is active.
+func activeTenant(context.Context, string) (authn.TenantScopeState, error) {
+	return authn.TenantScopeActive, nil
+}
+
+// serveOnMuxWith serves the route behind the same wrapper production puts around the
+// mux (TenantScope, which carries the tenant-status lookup); a nil lookup serves it bare.
+func serveOnMuxWith(t *testing.T, pattern string, claims *jwt.Claims, validator authn.StampValidator, lookup authn.TenantLookupFunc) (*httptest.ResponseRecorder, *sentinel) {
+	t.Helper()
 	s := &sentinel{}
 	mux := http.NewServeMux()
 	mux.Handle(pattern, authn.RequireFreshStamp(&fakeVerifier{wantToken: "tok", claims: claims}, validator)(s.handler()))
+	var h http.Handler = mux
+	if lookup != nil {
+		h = authn.TenantScope(lookup, slog.New(slog.NewTextHandler(io.Discard, nil)))(mux)
+	}
 	method, path, _ := strings.Cut(pattern, " ")
 	req := httptest.NewRequestWithContext(t.Context(), method, path, nil)
 	req.Header.Set("Authorization", "Bearer tok")
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
+	h.ServeHTTP(rec, req)
 	return rec, s
 }
 

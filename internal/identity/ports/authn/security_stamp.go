@@ -157,6 +157,11 @@ func RequireFreshStamp(verifier Verifier, validator StampValidator) func(http.Ha
 				writeForbidden(w, errCodeImpersonationNotAllowed, "not available during an impersonation session")
 				return
 			}
+			// A session opened before the company was suspended must not keep writing
+			// into it (review G2c N1). Reads stay open; the lookup is the header scope's.
+			if c.Act != nil && !isReadMethod(r.Method) && !impersonatedTenantActive(w, r, c) {
+				return
+			}
 			// Forced password change (plan D8): a token minted for a person who still
 			// holds a temporary credential reaches the pinned allowlist and nothing
 			// else. Checked here, once, for every authenticated route: a route that
