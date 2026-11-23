@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -178,12 +179,8 @@ func New(id ID, tenantID tenant.ID, actorID membership.ID, spec Spec, now time.T
 			ErrInvalid, spec.GSTRateBps, GSTRateBpsMin, GSTRateBpsMax)
 	}
 	manufacturer := strings.TrimSpace(spec.Manufacturer)
-	if err := textlimit.NoNUL("manufacturer", manufacturer); err != nil {
+	if err := textlimit.Chars("manufacturer", manufacturer, ManufacturerMaxLen); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
-	}
-	if len(manufacturer) > ManufacturerMaxLen {
-		return nil, fmt.Errorf("%w: manufacturer too long (max %d, got %d)",
-			ErrInvalid, ManufacturerMaxLen, len(manufacturer))
 	}
 	if spec.ReorderLevel < ReorderLevelMin {
 		return nil, fmt.Errorf("%w: reorder_level must be >= %d (got %d)",
@@ -197,9 +194,8 @@ func New(id ID, tenantID tenant.ID, actorID membership.ID, spec Spec, now time.T
 	if category == "" {
 		category = ProductCategoryDefault
 	}
-	if len(category) < ProductCategoryMinLength || len(category) > ProductCategoryMaxLength {
-		return nil, fmt.Errorf("%w: product_category length %d not in [%d,%d]",
-			ErrInvalid, len(category), ProductCategoryMinLength, ProductCategoryMaxLength)
+	if err := textlimit.Chars("product_category", category, ProductCategoryMaxLength); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	now = now.UTC()
 	p := &Product{
@@ -338,12 +334,8 @@ func (p *Product) Update(actorID membership.ID, spec UpdateSpec, now time.Time) 
 	}
 	if spec.Manufacturer != nil {
 		m := strings.TrimSpace(*spec.Manufacturer)
-		if err := textlimit.NoNUL("manufacturer", m); err != nil {
+		if err := textlimit.Chars("manufacturer", m, ManufacturerMaxLen); err != nil {
 			return fmt.Errorf("%w: %w", ErrInvalid, err)
-		}
-		if len(m) > ManufacturerMaxLen {
-			return fmt.Errorf("%w: manufacturer too long (max %d, got %d)",
-				ErrInvalid, ManufacturerMaxLen, len(m))
 		}
 		if m != p.manufacturer {
 			p.manufacturer = m
@@ -403,9 +395,8 @@ func (p *Product) applyExtendedUpdates(spec UpdateSpec) ([]string, error) {
 		if c == "" {
 			c = ProductCategoryDefault
 		}
-		if len(c) < ProductCategoryMinLength || len(c) > ProductCategoryMaxLength {
-			return nil, fmt.Errorf("%w: product_category length %d not in [%d,%d]",
-				ErrInvalid, len(c), ProductCategoryMinLength, ProductCategoryMaxLength)
+		if err := textlimit.Chars("product_category", c, ProductCategoryMaxLength); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 		}
 		if c != p.productCategory {
 			p.productCategory = c
@@ -538,12 +529,10 @@ func validateSKU(raw string) (string, error) {
 	if trimmed == "" {
 		return "", fmt.Errorf("%w: sku required", ErrInvalid)
 	}
-	if err := textlimit.NoNUL("sku", trimmed); err != nil { // a text column cannot hold U+0000
+	// The column CHECK counts characters (length()), so the limit does too; the
+	// same check refuses U+0000, which a text column cannot hold.
+	if err := textlimit.Chars("sku", trimmed, SKUMaxLength); err != nil {
 		return "", fmt.Errorf("%w: %w", ErrInvalid, err)
-	}
-	if len(trimmed) < SKUMinLength || len(trimmed) > SKUMaxLength {
-		return "", fmt.Errorf("%w: sku length %d not in [%d,%d]",
-			ErrInvalid, len(trimmed), SKUMinLength, SKUMaxLength)
 	}
 	return trimmed, nil
 }
@@ -553,12 +542,13 @@ func validateBoundedTrim(raw, field string, min, max int) (string, error) {
 	if t == "" {
 		return "", fmt.Errorf("%w: %s required", ErrInvalid, field)
 	}
-	if err := textlimit.NoNUL(field, t); err != nil { // a text column cannot hold U+0000
+	// Limits are in CHARACTERS, the unit of the column CHECK (length()); the
+	// same check refuses U+0000, which a text column cannot hold.
+	if err := textlimit.Chars(field, t, max); err != nil {
 		return "", fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-	if len(t) < min || len(t) > max {
-		return "", fmt.Errorf("%w: %s length %d not in [%d,%d]",
-			ErrInvalid, field, len(t), min, max)
+	if n := utf8.RuneCountInString(t); n < min {
+		return "", fmt.Errorf("%w: %s length %d below the minimum %d", ErrInvalid, field, n, min)
 	}
 	return t, nil
 }

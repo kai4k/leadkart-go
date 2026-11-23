@@ -286,6 +286,12 @@ func (s *PostgresStore) Put(ctx context.Context, r Record) error {
 	if err != nil {
 		return fmt.Errorf("idempotency: pg put headers encode: %w", err)
 	}
+	// response_body is NOT NULL, and pgx sends a nil []byte as NULL: a body-less
+	// answer (204) is stored as an empty value.
+	body := r.ResponseBody
+	if body == nil {
+		body = []byte{}
+	}
 	if _, err := s.pool.Exec(ctx, pgPutIdempotencyRecord,
 		r.CallerID,
 		r.Key.String(),
@@ -293,7 +299,7 @@ func (s *PostgresStore) Put(ctx context.Context, r Record) error {
 		// validateRecord bounds ResponseStatus to [100, 599] per RFC 9110,
 		// so the int→int32 cast cannot overflow.
 		int32(r.ResponseStatus), //nolint:gosec // G115: bounded by validateRecord
-		r.ResponseBody,
+		body,
 		headersJSON,
 		r.CreatedAt,
 		r.ExpiresAt,

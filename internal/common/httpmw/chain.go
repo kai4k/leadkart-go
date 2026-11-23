@@ -157,7 +157,7 @@ func PublicChain(cfg PublicChainConfig) Middleware {
 		// /64s, each with its own full bucket. IPv4 has no block key and is unaffected.
 		mws = append(mws, routeRateLimit(scaledRouteLimits(cfg.RouteRateLimits, IPv6BlockRateMultiplier), ClientBlockKeyer(cfg.TrustedProxies), cfg.limiterClock()))
 	}
-	mws = append(mws, idempotency.Middleware(cfg.IdempotencyStore, cfg.Now, cfg.IdempotencyTTL, idemKeyer))
+	mws = append(mws, idempotency.Middleware(cfg.IdempotencyStore, cfg.Now, cfg.IdempotencyTTL, idemKeyer, cfg.Logger))
 	return Chain(mws...)
 }
 

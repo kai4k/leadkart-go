@@ -26,6 +26,19 @@
 // (47k+ entries; would couple LeadKart to a reference-data update
 // cadence). Operators are trusted to enter the correct code per their
 // CA's advice; we enforce structural validity only.
+//
+// WHY THIS LIVES IN internal/common (ADR 0051, reviewed for the commerce
+// integrity round): today its one production consumer is the Inventory product.
+// ADR 0051 moves module-specific POLICY out of the shared kernel (the breach
+// check, impersonation sessions) and keeps value-object primitives in it: its
+// own list names the email and slug value objects, each with one consumer. An
+// HSN code is such a primitive: the format is fixed by Indian GST law, not by an
+// Inventory decision, exactly like the GSTIN, PAN and drug-licence value objects
+// that sit beside it. Its second consumer is already designed: the invoice tax
+// lines Orders must print per HSN (BRD §6.4, GSTR-1), and Orders may not import
+// Inventory's domain (architecture rule 1), so a copy inside Inventory would have
+// to move back here, or the rule would be written twice and drift (the defect
+// the previous round fixed). It stays stdlib-only, with no Inventory type.
 package hsncode
 
 import (

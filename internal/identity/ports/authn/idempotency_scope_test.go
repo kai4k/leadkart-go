@@ -2,6 +2,7 @@ package authn_test
 
 import (
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -252,7 +253,7 @@ func TestIdempotencyMiddleware_DoesNotReplayAcrossTenantsOrRoutes(t *testing.T) 
 		"a": scopeClaims(scopeTenantA, scopePerson1),
 		"b": scopeClaims(scopeTenantB, scopePerson2),
 	})
-	h := idempotency.Middleware(idempotency.NewInMemoryStore(nil), nil, 0, keyer)(next)
+	h := idempotency.Middleware(idempotency.NewInMemoryStore(nil), nil, 0, keyer, slog.New(slog.DiscardHandler))(next)
 	key := uuid.NewString()
 	post := func(path, bearer string) *httptest.ResponseRecorder {
 		r := httptest.NewRequestWithContext(t.Context(), "POST", path, strings.NewReader(`{"n":1}`))

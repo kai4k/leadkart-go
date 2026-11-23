@@ -229,7 +229,7 @@ func newReminder(
 	if dueAt.IsZero() {
 		return nil, fmt.Errorf("%w: due_at required", ErrInvalid)
 	}
-	if err := textlimit.Bytes("notes", notes, notesMaxLen); err != nil {
+	if err := textlimit.Chars("notes", notes, notesMaxLen); err != nil { // DB CHECK length() <= 2000 counts characters
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if now.IsZero() {
@@ -411,7 +411,7 @@ func (r *Reminder) Cancel(cancelledBy, reason string, now time.Time) error {
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("%w: cancel reason required for audit", ErrInvalid)
 	}
-	if err := textlimit.Bytes("reason", reason, cancelReasonMaxLen); err != nil {
+	if err := textlimit.Chars("reason", reason, cancelReasonMaxLen); err != nil { // DB CHECK length() <= 1000 counts characters
 		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if now.IsZero() {

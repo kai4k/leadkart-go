@@ -158,22 +158,16 @@ func New(id ID, spec Spec, now time.Time) (*Movement, error) {
 	if reason == "" {
 		return nil, fmt.Errorf("%w: reason required", ErrInvalid)
 	}
-	if err := textlimit.NoNUL("reason", reason); err != nil { // a text column cannot hold U+0000
+	// Limits are in CHARACTERS, the unit of the column CHECKs (length()); the
+	// same check refuses U+0000, which a text column cannot hold.
+	if err := textlimit.Chars("reason", reason, ReasonMaxLength); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
-	}
-	if len(reason) < ReasonMinLength || len(reason) > ReasonMaxLength {
-		return nil, fmt.Errorf("%w: reason length %d not in [%d,%d]",
-			ErrInvalid, len(reason), ReasonMinLength, ReasonMaxLength)
 	}
 	var sr *string
 	if spec.SourceReference != nil {
 		ref := strings.TrimSpace(*spec.SourceReference)
-		if err := textlimit.NoNUL("source_reference", ref); err != nil {
+		if err := textlimit.Chars("source_reference", ref, SourceReferenceMax); err != nil {
 			return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
-		}
-		if len(ref) > SourceReferenceMax {
-			return nil, fmt.Errorf("%w: source_reference too long (max %d, got %d)",
-				ErrInvalid, SourceReferenceMax, len(ref))
 		}
 		if ref != "" {
 			sr = &ref

@@ -580,7 +580,7 @@ func TestArch_DomainHasNoInfraImports(t *testing.T) {
 		"druglicence":   true,
 		"pagination":    true,
 		"tenancy":       true,
-		"hsncode":       true, // the one HSN code rule (trimmed, 4/6/8 digits); stdlib only
+		"hsncode":       true, // the one HSN code rule (trimmed, 4/6/8 digits); stdlib only. One consumer today (Inventory); why it stays in common is recorded in its package doc (ADR 0051)
 		"textlimit":     true, // the one length check + wire code for free text; stdlib only
 		"humantext":     true, // the one rule for text people type that others read; pure rune checks
 		"parcel":        true, // the pack rules Orders and Dispatch must agree on; stdlib only

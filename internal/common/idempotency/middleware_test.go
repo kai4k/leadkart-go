@@ -2,7 +2,10 @@ package idempotency_test
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -43,6 +46,9 @@ func (d *downstream) handler() http.Handler {
 	})
 }
 
+// quietLog discards everything: most tests do not assert on the log.
+func quietLog() *slog.Logger { return slog.New(slog.DiscardHandler) }
+
 // defaultTestKeyer is the scope the middleware used to default to: the tenant
 // from the context, else the socket address. Production has no default (the
 // composition root passes authn.IdempotencyCallerKeyer); these tests exercise
@@ -75,7 +81,7 @@ func TestMiddleware_NoCommandIDHeader_PassesThrough(t *testing.T) {
 	calls := &atomic.Int32{}
 	d := &downstream{calls: calls, status: 200, body: `{"ok":true}`}
 	store := idempotency.NewInMemoryStore(nil)
-	mw := idempotency.Middleware(store, nil, 0, defaultTestKeyer)(d.handler())
+	mw := idempotency.Middleware(store, nil, 0, defaultTestKeyer, quietLog())(d.handler())
 
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, newPOST(t, `{"x":1}`, ""))
@@ -96,7 +102,7 @@ func TestMiddleware_FirstCall_CachesAndReturns2xx(t *testing.T) {
 	calls := &atomic.Int32{}
 	d := &downstream{calls: calls, status: 201, body: `{"id":"abc"}`}
 	store := idempotency.NewInMemoryStore(nil)
-	mw := idempotency.Middleware(store, nil, 0, defaultTestKeyer)(d.handler())
+	mw := idempotency.Middleware(store, nil, 0, defaultTestKeyer, quietLog())(d.handler())
 
 	cmdID := uuid.NewString()
 	rec := httptest.NewRecorder()
@@ -124,7 +130,7 @@ func TestMiddleware_ReplaySameKeyAndBody_ReturnsCached(t *testing.T) {
 	calls := &atomic.Int32{}
 	d := &downstream{calls: calls, status: 201, body: `{"id":"abc"}`}
 	store := idempotency.NewInMemoryStore(nil)
-	mw := idempotency.Middleware(store, nil, 0, defaultTestKeyer)(d.handler())
+	mw := idempotency.Middleware(store, nil, 0, defaultTestKeyer, quietLog())(d.handler())
 
 	cmdID := uuid.NewString()
 	body := `{"x":1}`
@@ -159,7 +165,7 @@ func TestMiddleware_ReplayDifferentBody_Returns422(t *testing.T) {
 	calls := &atomic.Int32{}
 	d := &downstream{calls: calls, status: 201, body: `{"id":"abc"}`}
 	store := idempotency.NewInMemoryStore(nil)
-	mw := idempotency.Middleware(store, nil, 0, defaultTestKeyer)(d.handler())
+	mw := idempotency.Middleware(store, nil, 0, defaultTestKeyer, quietLog())(d.handler())
 
 	cmdID := uuid.NewString()
 	rec1 := httptest.NewRecorder()
@@ -184,7 +190,7 @@ func TestMiddleware_MalformedCommandID_Returns400(t *testing.T) {
 	calls := &atomic.Int32{}
 	d := &downstream{calls: calls, status: 200}
 	store := idempotency.NewInMemoryStore(nil)
-	mw := idempotency.Middleware(store, nil, 0, defaultTestKeyer)(d.handler())
+	mw := idempotency.Middleware(store, nil, 0, defaultTestKeyer, quietLog())(d.handler())
 
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, newPOST(t, `{}`, "not-a-uuid"))
@@ -207,7 +213,7 @@ func TestMiddleware_NonSuccess_NotCached(t *testing.T) {
 	calls := &atomic.Int32{}
 	d := &downstream{calls: calls, status: 500, body: `{"error":"internal"}`}
 	store := idempotency.NewInMemoryStore(nil)
-	mw := idempotency.Middleware(store, nil, 0, defaultTestKeyer)(d.handler())
+	mw := idempotency.Middleware(store, nil, 0, defaultTestKeyer, quietLog())(d.handler())
 
 	cmdID := uuid.NewString()
 	rec1 := httptest.NewRecorder()
@@ -243,7 +249,7 @@ func TestMiddleware_PerCallerScoping_DoesNotLeakAcrossCallers(t *testing.T) {
 	keyer := func(r *http.Request) string {
 		return "test:" + r.Header.Get("X-Test-Caller")
 	}
-	mw := idempotency.Middleware(store, nil, 0, keyer)(d.handler())
+	mw := idempotency.Middleware(store, nil, 0, keyer, quietLog())(d.handler())
 
 	cmdID := uuid.NewString()
 	body := `{"x":1}`
@@ -278,7 +284,7 @@ func TestMiddleware_OverSizedBody_Returns413(t *testing.T) {
 	calls := &atomic.Int32{}
 	d := &downstream{calls: calls, status: 200, body: `ok`}
 	store := idempotency.NewInMemoryStore(nil)
-	mw := idempotency.Middleware(store, nil, 0, defaultTestKeyer)(d.handler())
+	mw := idempotency.Middleware(store, nil, 0, defaultTestKeyer, quietLog())(d.handler())
 
 	// 2 MiB > MaxBodyBytes (1 MiB)
 	huge := strings.Repeat("a", 2<<20)
@@ -300,7 +306,7 @@ func TestMiddleware_TTLExpiry_RetriesDownstream(t *testing.T) {
 	store := idempotency.NewInMemoryStore(func() time.Time { return clock })
 	calls := &atomic.Int32{}
 	d := &downstream{calls: calls, status: 201, body: `{"id":"abc"}`}
-	mw := idempotency.Middleware(store, func() time.Time { return clock }, time.Hour, defaultTestKeyer)(d.handler())
+	mw := idempotency.Middleware(store, func() time.Time { return clock }, time.Hour, defaultTestKeyer, quietLog())(d.handler())
 
 	cmdID := uuid.NewString()
 	body := `{}`
@@ -328,7 +334,7 @@ func TestMiddleware_SafeMethodsIgnoreTheHeaderAndStoreNothing(t *testing.T) {
 			calls := &atomic.Int32{}
 			d := &downstream{calls: calls, status: 200, body: `{"ok":true}`}
 			store := idempotency.NewInMemoryStore(nil)
-			mw := idempotency.Middleware(store, nil, 0, defaultTestKeyer)(d.handler())
+			mw := idempotency.Middleware(store, nil, 0, defaultTestKeyer, quietLog())(d.handler())
 			key := uuid.NewString()
 			for i := range 2 {
 				req := httptest.NewRequestWithContext(t.Context(), method, "/api/v1/things", nil)
@@ -362,7 +368,7 @@ func TestMiddleware_IneligibleRequestsPassThroughAndStoreNothing(t *testing.T) {
 	calls := &atomic.Int32{}
 	d := &downstream{calls: calls, status: 200, body: `{"refresh_token":"secret"}`}
 	store := idempotency.NewInMemoryStore(nil)
-	mw := idempotency.Middleware(store, nil, 0, func(*http.Request) string { return idempotency.Ineligible })(d.handler())
+	mw := idempotency.Middleware(store, nil, 0, func(*http.Request) string { return idempotency.Ineligible }, quietLog())(d.handler())
 	key := uuid.NewString()
 	for range 2 {
 		rec := httptest.NewRecorder()
@@ -391,5 +397,88 @@ func TestMiddleware_RefusesToBuildWithoutAKeyer(t *testing.T) {
 			t.Fatal("want a panic: there is no default scope")
 		}
 	}()
-	idempotency.Middleware(idempotency.NewInMemoryStore(nil), nil, 0, nil)
+	idempotency.Middleware(idempotency.NewInMemoryStore(nil), nil, 0, nil, quietLog())
+}
+
+// notNullBodyStore behaves like the Postgres store, whose response_body column is
+// NOT NULL: a record with a nil body is refused.
+type notNullBodyStore struct{ *idempotency.InMemoryStore }
+
+func (s notNullBodyStore) Put(ctx context.Context, r idempotency.Record) error {
+	if r.ResponseBody == nil {
+		return errors.New(`null value in column "response_body" violates not-null constraint`)
+	}
+	return s.InMemoryStore.Put(ctx, r)
+}
+
+// A 204 answer has no body. It must still be stored (with an empty, non-nil
+// body) so a retry of the same command replays the 204 instead of running the
+// command a second time: before this, NO 204 command was ever stored.
+func TestMiddleware_NoContentAnswerIsStoredAndReplayed(t *testing.T) {
+	t.Parallel()
+	calls := &atomic.Int32{}
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	store := notNullBodyStore{idempotency.NewInMemoryStore(nil)}
+	mw := idempotency.Middleware(store, nil, 0, defaultTestKeyer, quietLog())(next)
+
+	cmdID := uuid.NewString()
+	first := httptest.NewRecorder()
+	mw.ServeHTTP(first, newPOST(t, `{"x":1}`, cmdID))
+	if first.Code != http.StatusNoContent || first.Header().Get(idempotency.ReplayHeader) != "" {
+		t.Fatalf("first call: status %d replay=%q, want a fresh 204", first.Code, first.Header().Get(idempotency.ReplayHeader))
+	}
+	if store.Len() != 1 {
+		t.Fatalf("a 204 answer was not stored: %d records", store.Len())
+	}
+
+	again := httptest.NewRecorder()
+	mw.ServeHTTP(again, newPOST(t, `{"x":1}`, cmdID))
+	if calls.Load() != 1 {
+		t.Errorf("the command ran %d times, want 1 (the retry must replay)", calls.Load())
+	}
+	if again.Code != http.StatusNoContent || again.Header().Get(idempotency.ReplayHeader) != "true" || again.Body.Len() != 0 {
+		t.Errorf("retry: status %d replay=%q body %q, want 204 with X-Idempotent-Replay: true and no body",
+			again.Code, again.Header().Get(idempotency.ReplayHeader), again.Body.String())
+	}
+}
+
+// failingStore refuses every write.
+type failingStore struct{ *idempotency.InMemoryStore }
+
+func (failingStore) Put(context.Context, idempotency.Record) error {
+	return errors.New("store is down")
+}
+
+// A failed store write must not change the answer the caller gets, and must not
+// be silent: it means the command cannot be replayed, so it is logged.
+func TestMiddleware_AFailedStoreWriteIsLoggedNotSwallowed(t *testing.T) {
+	t.Parallel()
+	var logged bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := &downstream{calls: &atomic.Int32{}, status: 201, body: `{"id":"abc"}`}
+	mw := idempotency.Middleware(failingStore{idempotency.NewInMemoryStore(nil)}, nil, 0, defaultTestKeyer, log)(d.handler())
+
+	cmdID := uuid.NewString()
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, newPOST(t, `{"x":1}`, cmdID))
+	if rec.Code != 201 || rec.Body.String() != `{"id":"abc"}` {
+		t.Fatalf("the answer changed because the store failed: %d %q", rec.Code, rec.Body.String())
+	}
+	out := logged.String()
+	if !strings.Contains(out, "level=ERROR") || !strings.Contains(out, "store is down") || !strings.Contains(out, cmdID) {
+		t.Fatalf("a failed store write must be logged at ERROR with its cause and the command id, got: %q", out)
+	}
+}
+
+func TestMiddleware_RefusesToBuildWithoutALogger(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		if recover() == nil {
+			t.Fatal("Middleware built without a logger: a failed store write would be silent")
+		}
+	}()
+	idempotency.Middleware(idempotency.NewInMemoryStore(nil), nil, 0, defaultTestKeyer, nil)
 }

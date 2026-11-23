@@ -2,10 +2,12 @@ package idempotency
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -99,7 +101,10 @@ func replayableMethod(m string) bool {
 // tests inject a fixed-instant closure for deterministic assertions.
 // `ttl` is the per-record retention; 0 means [DefaultTTL].
 // `keyer` extracts the per-caller scope; nil → [DefaultCallerKeyer].
-func Middleware(store Store, now func() time.Time, ttl time.Duration, keyer CallerKeyer) func(http.Handler) http.Handler {
+//
+// `log` is required: a failed store write does not change the answer the caller
+// gets, but it means the command cannot be replayed, so it is logged at ERROR.
+func Middleware(store Store, now func() time.Time, ttl time.Duration, keyer CallerKeyer, log *slog.Logger) func(http.Handler) http.Handler {
 	if store == nil {
 		panic("idempotency: Middleware store required")
 	}
@@ -111,6 +116,9 @@ func Middleware(store Store, now func() time.Time, ttl time.Duration, keyer Call
 	}
 	if keyer == nil {
 		panic("idempotency: Middleware keyer required")
+	}
+	if log == nil {
+		panic("idempotency: Middleware logger required")
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -196,28 +204,40 @@ func Middleware(store Store, now func() time.Time, ttl time.Duration, keyer Call
 			}
 			next.ServeHTTP(rec2, r)
 
-			// Cache only 2xx responses — transient failures should
-			// be retryable.
-			if rec2.status < 200 || rec2.status >= 300 {
-				return
-			}
-			contentType := rec2.header.Get("Content-Type")
-			recHeaders := map[string]string{}
-			if contentType != "" {
-				recHeaders["Content-Type"] = contentType
-			}
-			n := now()
-			_ = store.Put(r.Context(), Record{
-				CallerID:        callerID,
-				Key:             key,
-				BodyHash:        bodyHash,
-				ResponseStatus:  rec2.status,
-				ResponseBody:    rec2.body.Bytes(),
-				ResponseHeaders: recHeaders,
-				CreatedAt:       n,
-				ExpiresAt:       n.Add(ttl),
-			})
+			storeAnswer(r.Context(), store, log, rec2, Record{
+				CallerID: callerID,
+				Key:      key,
+				BodyHash: bodyHash,
+			}, now(), ttl)
 		})
+	}
+}
+
+// storeAnswer stores a first execution's answer for replay. Only 2xx answers
+// are stored: a failure is transient by default and must stay retryable. A
+// failed write does not change the answer the caller already has, but it is
+// logged: a retry of that command will run it again instead of replaying.
+func storeAnswer(ctx context.Context, store Store, log *slog.Logger, answer *recorder, rec Record, now time.Time, ttl time.Duration) {
+	if answer.status < 200 || answer.status >= 300 {
+		return
+	}
+	rec.ResponseHeaders = map[string]string{}
+	if contentType := answer.header.Get("Content-Type"); contentType != "" {
+		rec.ResponseHeaders["Content-Type"] = contentType
+	}
+	// A 204 (or any body-less 2xx) leaves the buffer nil. The stored body must be
+	// EMPTY, not NULL: the column is NOT NULL, so a nil body failed the write and
+	// no body-less command was ever replayable.
+	rec.ResponseBody = answer.body.Bytes()
+	if rec.ResponseBody == nil {
+		rec.ResponseBody = []byte{}
+	}
+	rec.ResponseStatus = answer.status
+	rec.CreatedAt = now
+	rec.ExpiresAt = now.Add(ttl)
+	if err := store.Put(ctx, rec); err != nil {
+		log.ErrorContext(ctx, "idempotency: the answer could not be stored; a retry of this command will not be replayed",
+			"command_id", rec.Key.String(), "status", answer.status, "err", err)
 	}
 }
 

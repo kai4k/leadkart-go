@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -671,9 +672,13 @@ func (l *CrmLead) recordEvent(e Event) {
 // ----- Validation helpers ---------------------------------------------------
 
 func validateProfile(p Profile) error {
-	if n := strings.TrimSpace(p.ContactName); len(n) < contactNameMin || len(n) > contactNameMax {
-		return fmt.Errorf("%w: contact_name length %d not in [%d,%d]",
-			ErrInvalid, len(n), contactNameMin, contactNameMax)
+	// contact_name is limited in CHARACTERS, the unit of the column CHECK (length()).
+	name := strings.TrimSpace(p.ContactName)
+	if err := textlimit.Chars("contact_name", name, contactNameMax); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	if n := utf8.RuneCountInString(name); n < contactNameMin {
+		return fmt.Errorf("%w: contact_name length %d below the minimum %d", ErrInvalid, n, contactNameMin)
 	}
 	if !isValidIndianMobile(p.PhoneE164) {
 		return fmt.Errorf("%w: phone_e164 must match %s, got %q", ErrInvalid, mobileE164Regex, p.PhoneE164)

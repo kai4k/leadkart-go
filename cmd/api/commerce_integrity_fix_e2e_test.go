@@ -161,3 +161,120 @@ func TestE2E_Commerce_NULInTextIs422NeverA500(t *testing.T) {
 		t.Errorf("multi-line payment notes: status %d body %s; want 201", r.status, r.body)
 	}
 }
+
+// TestE2E_Idempotency_A204CommandIsReplayed is I4, through the real public chain
+// and the Postgres store. A 204 has no body; the store's response_body column is
+// NOT NULL and the failed write was discarded, so NO 204 command was ever stored:
+// a token payment that committed but whose answer was lost, retried with the same
+// X-Command-Id, answered 409 token_payment_already_recorded (a false failure).
+// The retry must answer what the first call answered: 204, marked as a replay,
+// with one payment row. The same holds for every other 204 command.
+func TestE2E_Idempotency_A204CommandIsReplayed(t *testing.T) {
+	f, _ := newE2EChainFixture(t, nil)
+	tok := f.registerAndLogin(t, "idem204").AccessToken
+	orderPath := ordersApprovedOrder(t, f, tok)
+
+	send := func(path string, body any, commandID string) httpResp {
+		t.Helper()
+		return f.doWithHeaders(t, http.MethodPost, path, tok, body,
+			map[string]string{"X-Forwarded-For": "198.51.100.77", "X-Command-Id": commandID})
+	}
+	retried := func(stage, path string, body any) {
+		t.Helper()
+		id := uuid.NewString()
+		first := send(path, body, id)
+		if first.status != http.StatusNoContent || first.header.Get("X-Idempotent-Replay") != "" {
+			t.Fatalf("%s: first call status %d replay=%q body %s; want a fresh 204", stage, first.status, first.header.Get("X-Idempotent-Replay"), first.body)
+		}
+		again := send(path, body, id)
+		if again.status != http.StatusNoContent || again.header.Get("X-Idempotent-Replay") != "true" || len(again.body) != 0 {
+			t.Fatalf("%s: retry with the same X-Command-Id: status %d replay=%q body %s; want 204 with X-Idempotent-Replay: true",
+				stage, again.status, again.header.Get("X-Idempotent-Replay"), again.body)
+		}
+	}
+
+	token := ordersports.RecordTokenPaymentRequest{Method: "upi", AmountPaise: 25000, ExternalReference: "UTR-" + uuid.NewString()}
+	retried("token payment", orderPath+"/token-payment", token)
+	if n := ordersPaymentCount(t, f, tok, orderPath); n != 1 {
+		t.Fatalf("payments after a retried token payment: %d, want 1", n)
+	}
+	if got := ordersState(t, f, tok, orderPath); got != "token_paid" {
+		t.Fatalf("order state %s, want token_paid", got)
+	}
+	// A DIFFERENT command id is a new command: the guard still refuses it.
+	if r := send(orderPath+"/token-payment", token, uuid.NewString()); r.status != http.StatusConflict {
+		t.Fatalf("second token payment under a new command id: status %d body %s; want 409", r.status, r.body)
+	}
+
+	// Every other 204 command is replayed the same way.
+	retried("confirm", orderPath+"/confirm", nil)
+	retried("pack", orderPath+"/pack", ordersports.PackOrderRequest{CarrierName: "BlueDart", BoxCount: 1, WeightGrams: 100})
+	retried("cancel", orderPath+"/cancel", ordersports.CancelOrderRequest{Reason: "customer withdrew"})
+}
+
+// TestE2E_Inventory_LimitsCountCharactersNotBytes is M2 over the wire and
+// against the real column CHECKs (length() counts characters): a Devanagari
+// value AT each limit is accepted and stored (it used to be refused: the domain
+// counted bytes, 3 per letter), and one character more is a 422, not a 500.
+func TestE2E_Inventory_LimitsCountCharactersNotBytes(t *testing.T) {
+	f := newE2EFixture(t)
+	tok := f.registerAndLogin(t, "hindilimits").AccessToken
+	dev := func(n int) string { return strings.Repeat("क", n) }
+	products := "/api/v1/inventory/products"
+	refused := func(stage string, r httpResp) {
+		t.Helper()
+		if r.status != http.StatusUnprocessableEntity || errorCode(t, r.body) != "validation_failed" {
+			t.Errorf("%s: status %d body %s; want 422 validation_failed", stage, r.status, r.body)
+		}
+	}
+
+	// Product: every text field at its limit, in Devanagari.
+	atLimit := invports.CreateProductRequest{
+		SKU: dev(64), Name: dev(200), DosageForm: dev(50), PackSize: dev(100), HSNCode: "30049099",
+		GSTRateBps: new(1200), Manufacturer: dev(200),
+	}
+	resp := f.authedJSON(t, http.MethodPost, products, tok, atLimit)
+	var p invports.CreateProductResponse
+	if err := json.Unmarshal(resp.body, &p); err != nil || resp.status != http.StatusCreated {
+		t.Fatalf("product with every field at its limit in Devanagari: status %d body %s; want 201", resp.status, resp.body)
+	}
+	for field, edit := range map[string]func(*invports.CreateProductRequest){
+		"sku":          func(r *invports.CreateProductRequest) { r.SKU = dev(65) },
+		"name":         func(r *invports.CreateProductRequest) { r.Name = dev(201) },
+		"dosage_form":  func(r *invports.CreateProductRequest) { r.DosageForm = dev(51) },
+		"pack_size":    func(r *invports.CreateProductRequest) { r.PackSize = dev(101) },
+		"manufacturer": func(r *invports.CreateProductRequest) { r.Manufacturer = dev(201) },
+	} {
+		over := atLimit
+		over.SKU = "OVER-" + uuid.NewString()[:8]
+		edit(&over)
+		refused("product "+field+" one over", f.authedJSON(t, http.MethodPost, products, tok, over))
+	}
+
+	// Batch: number, manufacturer and licence at their limits.
+	batches := products + "/" + p.ProductID + "/batches"
+	batch := invports.AddBatchRequest{
+		BatchNumber: dev(100), ManufactureDate: time.Now().AddDate(0, -3, 0), ExpiryDate: time.Now().AddDate(2, 0, 0),
+		ManufacturerName: dev(200), ManufacturingLicenceNumber: dev(100), MRPPaise: 25000, PurchasePricePaise: 18000,
+	}
+	resp = f.authedJSON(t, http.MethodPost, batches, tok, batch)
+	var b invports.AddBatchResponse
+	if err := json.Unmarshal(resp.body, &b); err != nil || resp.status != http.StatusCreated {
+		t.Fatalf("batch with every field at its limit in Devanagari: status %d body %s; want 201", resp.status, resp.body)
+	}
+	over := batch
+	over.BatchNumber = dev(101)
+	refused("batch number one over", f.authedJSON(t, http.MethodPost, batches, tok, over))
+
+	// Movement: reason 500 and source reference 200.
+	moves := "/api/v1/inventory/batches/" + b.BatchID + "/movements"
+	ref := dev(200)
+	resp = f.authedJSON(t, http.MethodPost, moves, tok, invports.LogMovementRequest{Type: "inbound", Quantity: 5, Reason: dev(500), SourceReference: &ref})
+	if resp.status != http.StatusCreated {
+		t.Fatalf("movement with a 500-character Devanagari reason: status %d body %s; want 201", resp.status, resp.body)
+	}
+	refused("movement reason one over", f.authedJSON(t, http.MethodPost, moves, tok, invports.LogMovementRequest{Type: "inbound", Quantity: 5, Reason: dev(501)}))
+	longRef := dev(201)
+	refused("movement source reference one over", f.authedJSON(t, http.MethodPost, moves, tok,
+		invports.LogMovementRequest{Type: "inbound", Quantity: 5, Reason: "ok", SourceReference: &longRef}))
+}
