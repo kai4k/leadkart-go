@@ -11,6 +11,7 @@ package product
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -43,9 +44,14 @@ const (
 	// ReorderLevelMin floors the reorder_level field. 0 disables the
 	// per-product reorder alert (the ReorderScanJob skips zero rows).
 	ReorderLevelMin = 0
+	// ReorderLevelMax is the largest value the int column holds.
+	ReorderLevelMax = math.MaxInt32
 	// ExpiryAlertThresholdDaysMin / Default — per BRD §6.5.
 	ExpiryAlertThresholdDaysMin     = 0
 	ExpiryAlertThresholdDaysDefault = 90
+	// ExpiryAlertThresholdDaysMax is 100 years: the expiry scan adds the
+	// threshold to a date, so it must stay inside the date range.
+	ExpiryAlertThresholdDaysMax = 36500
 	// ProductCategory bounds — mirror the migration's CHECK + DEFAULT.
 	ProductCategoryMinLength = 1
 	ProductCategoryMaxLength = 64
@@ -182,13 +188,8 @@ func New(id ID, tenantID tenant.ID, actorID membership.ID, spec Spec, now time.T
 	if err := textlimit.Chars("manufacturer", manufacturer, ManufacturerMaxLen); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-	if spec.ReorderLevel < ReorderLevelMin {
-		return nil, fmt.Errorf("%w: reorder_level must be >= %d (got %d)",
-			ErrInvalid, ReorderLevelMin, spec.ReorderLevel)
-	}
-	if spec.ExpiryAlertThresholdDays < ExpiryAlertThresholdDaysMin {
-		return nil, fmt.Errorf("%w: expiry_alert_threshold_days must be >= %d (got %d)",
-			ErrInvalid, ExpiryAlertThresholdDaysMin, spec.ExpiryAlertThresholdDays)
+	if err := validateAlertLevels(spec.ReorderLevel, spec.ExpiryAlertThresholdDays); err != nil {
+		return nil, err
 	}
 	category := strings.TrimSpace(spec.ProductCategory)
 	if category == "" {
@@ -368,12 +369,20 @@ func (p *Product) Update(actorID membership.ID, spec UpdateSpec, now time.Time) 
 // Split out of [Update] to keep that method under the cyclomatic-complexity gate.
 func (p *Product) applyExtendedUpdates(spec UpdateSpec) ([]string, error) {
 	changed := []string{}
+	// Both levels are checked before either is applied, so a refused update
+	// leaves the aggregate as it was.
+	reorder, threshold := p.reorderLevel, p.expiryAlertThresholdDays
+	if spec.ReorderLevel != nil {
+		reorder = *spec.ReorderLevel
+	}
+	if spec.ExpiryAlertThresholdDays != nil {
+		threshold = *spec.ExpiryAlertThresholdDays
+	}
+	if err := validateAlertLevels(reorder, threshold); err != nil {
+		return nil, err
+	}
 	if spec.ReorderLevel != nil {
 		v := *spec.ReorderLevel
-		if v < ReorderLevelMin {
-			return nil, fmt.Errorf("%w: reorder_level must be >= %d (got %d)",
-				ErrInvalid, ReorderLevelMin, v)
-		}
 		if v != p.reorderLevel {
 			p.reorderLevel = v
 			changed = append(changed, "reorder_level")
@@ -381,10 +390,6 @@ func (p *Product) applyExtendedUpdates(spec UpdateSpec) ([]string, error) {
 	}
 	if spec.ExpiryAlertThresholdDays != nil {
 		v := *spec.ExpiryAlertThresholdDays
-		if v < ExpiryAlertThresholdDaysMin {
-			return nil, fmt.Errorf("%w: expiry_alert_threshold_days must be >= %d (got %d)",
-				ErrInvalid, ExpiryAlertThresholdDaysMin, v)
-		}
 		if v != p.expiryAlertThresholdDays {
 			p.expiryAlertThresholdDays = v
 			changed = append(changed, "expiry_alert_threshold_days")
@@ -522,6 +527,19 @@ func (p *Product) PullEvents() []Event {
 
 func (p *Product) recordEvent(e Event) {
 	p.events = append(p.events, e)
+}
+
+// validateAlertLevels bounds the reorder level and the expiry-alert threshold.
+func validateAlertLevels(reorderLevel, thresholdDays int) error {
+	if reorderLevel < ReorderLevelMin || reorderLevel > ReorderLevelMax {
+		return fmt.Errorf("%w: reorder_level %d not in [%d,%d]",
+			ErrInvalid, reorderLevel, ReorderLevelMin, ReorderLevelMax)
+	}
+	if thresholdDays < ExpiryAlertThresholdDaysMin || thresholdDays > ExpiryAlertThresholdDaysMax {
+		return fmt.Errorf("%w: expiry_alert_threshold_days %d not in [%d,%d]",
+			ErrInvalid, thresholdDays, ExpiryAlertThresholdDaysMin, ExpiryAlertThresholdDaysMax)
+	}
+	return nil
 }
 
 func validateSKU(raw string) (string, error) {

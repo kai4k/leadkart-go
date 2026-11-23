@@ -397,7 +397,7 @@ func TestNew_HSNRule(t *testing.T) {
 	}{
 		{"3004", "3004"}, {"300410", "300410"}, {"30041020", "30041020"},
 		{"0402", "0402"}, {"04021010", "04021010"}, // chapters 01-09 are real
-		{" 3004 ", "3004"}, // trimmed
+		{" 3004 ", "3004"},                                                    // trimmed
 		{"30041", ""}, {"3004102", ""}, {"300410200", ""}, {"3004102000", ""}, // 5, 7, 9, 10 digits passed before
 		{"300", ""}, {"30", ""}, {"3004XYZX", ""}, {"30 04", ""},
 	}
@@ -419,6 +419,47 @@ func TestNew_HSNRule(t *testing.T) {
 			}
 			if p.HSNCode() != tc.want {
 				t.Fatalf("HSN %q stored as %q, want %q", tc.hsn, p.HSNCode(), tc.want)
+			}
+		})
+	}
+}
+
+// The reorder level and the expiry-alert threshold have a ceiling: both are
+// int columns, and the threshold is added to a date by the expiry scan. A
+// value above the ceiling used to pass the aggregate and fail (or wrap) at the
+// column.
+func TestNewAndUpdate_ReorderLevelAndThresholdCeilings(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		reorder   int
+		threshold int
+		wantErr   bool
+	}{
+		{"at the ceilings", 2147483647, 36500, false},
+		{"reorder level over the column", 2147483648, 90, true},
+		{"threshold over 100 years", 0, 36501, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			pid, tid, actor := freshIDs(t)
+			spec := validSpec()
+			spec.ReorderLevel, spec.ExpiryAlertThresholdDays = c.reorder, c.threshold
+			_, err := product.New(pid, tid, actor, spec, fixedNow)
+			if got := errors.Is(err, product.ErrInvalid); got != c.wantErr {
+				t.Fatalf("New: err %v, want ErrInvalid=%v", err, c.wantErr)
+			}
+
+			p := freshProduct(t)
+			err = p.Update(actor, product.UpdateSpec{
+				ReorderLevel: intPtr(c.reorder), ExpiryAlertThresholdDays: intPtr(c.threshold),
+			}, fixedNow)
+			if got := errors.Is(err, product.ErrInvalid); got != c.wantErr {
+				t.Fatalf("Update: err %v, want ErrInvalid=%v", err, c.wantErr)
+			}
+			if c.wantErr && (p.ReorderLevel() != 0 || p.ExpiryAlertThresholdDays() != 0) {
+				t.Fatalf("a refused update changed the product: reorder %d threshold %d", p.ReorderLevel(), p.ExpiryAlertThresholdDays())
 			}
 		})
 	}

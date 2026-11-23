@@ -25,6 +25,12 @@ type UpdateProductCommand struct {
 	GSTRateBps        *int
 	IsActive          *bool
 	Manufacturer      *string
+	// ReorderLevel, ExpiryAlertThresholdDays and ProductCategory are the
+	// product form's alert and catalogue fields. A blank ProductCategory is
+	// stored as the default category ([product.ProductCategoryDefault]).
+	ReorderLevel             *int
+	ExpiryAlertThresholdDays *int
+	ProductCategory          *string
 }
 
 // UpdateProductHandler runs load → updateFn → persist plus event drain under
@@ -52,10 +58,13 @@ func (h UpdateProductHandler) Handle(ctx context.Context, cmd UpdateProductComma
 	now := h.now()
 	err := h.products.UpdateByID(ctx, cmd.TenantID, cmd.ProductID, func(p *product.Product) (bool, error) {
 		if err := p.Update(cmd.ActorMembershipID, product.UpdateSpec{
-			Name:         cmd.Name,
-			GSTRateBps:   cmd.GSTRateBps,
-			IsActive:     cmd.IsActive,
-			Manufacturer: cmd.Manufacturer,
+			Name:                     cmd.Name,
+			GSTRateBps:               cmd.GSTRateBps,
+			IsActive:                 cmd.IsActive,
+			Manufacturer:             cmd.Manufacturer,
+			ReorderLevel:             cmd.ReorderLevel,
+			ExpiryAlertThresholdDays: cmd.ExpiryAlertThresholdDays,
+			ProductCategory:          cmd.ProductCategory,
 		}, now); err != nil {
 			return false, err
 		}

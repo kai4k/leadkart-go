@@ -948,6 +948,7 @@ func buildInventoryApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache) inven
 			ListBatchesByProduct:   inventoryquery.NewListBatchesByProductHandler(batches),
 			ListBatchMovementsPage: inventoryquery.NewListBatchMovementsPageHandler(movements),
 			FefoBatches:            inventoryquery.NewFefoBatchesHandler(batches, time.Now),
+			ListProductCategories:  inventoryquery.NewListProductCategoriesHandler(inventoryadapters.NewProductCategoryReader(gstDefaults)),
 		},
 	}
 }

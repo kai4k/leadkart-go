@@ -70,6 +70,8 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		catalogManage(handleUpdateProduct(log, a)))
 	mux.Handle("DELETE /api/v1/inventory/products/{productId}",
 		catalogManage(handleDeleteProduct(log, a)))
+	mux.Handle("GET /api/v1/inventory/product-categories",
+		catalogRead(handleListProductCategories(log, a)))
 
 	// ----- Batches ------------------------------------------------------------
 	mux.Handle("POST /api/v1/inventory/products/{productId}/batches",
@@ -107,16 +109,23 @@ func handleCreateProduct(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
 			return
 		}
+		if errs := productFieldErrors(req.ProductCategory, req.ReorderLevel, req.ExpiryAlertThresholdDays); errs != nil {
+			writeFieldErrors(w, http.StatusUnprocessableEntity, ErrCodeValidationFailed, errs)
+			return
+		}
 		out, err := a.Commands.CreateProduct.Handle(r.Context(), command.CreateProductCommand{
-			TenantID:          tenant.ID(effTenant),
-			ActorMembershipID: membership.ID(c.MembershipID),
-			SKU:               req.SKU,
-			Name:              req.Name,
-			DosageForm:        req.DosageForm,
-			PackSize:          req.PackSize,
-			HSNCode:           req.HSNCode,
-			GSTRateBps:        req.GSTRateBps,
-			Manufacturer:      req.Manufacturer,
+			TenantID:                 tenant.ID(effTenant),
+			ActorMembershipID:        membership.ID(c.MembershipID),
+			SKU:                      req.SKU,
+			Name:                     req.Name,
+			DosageForm:               req.DosageForm,
+			PackSize:                 req.PackSize,
+			HSNCode:                  req.HSNCode,
+			GSTRateBps:               req.GSTRateBps,
+			Manufacturer:             req.Manufacturer,
+			ProductCategory:          derefOr(req.ProductCategory, ""),
+			ReorderLevel:             derefOr(req.ReorderLevel, 0),
+			ExpiryAlertThresholdDays: req.ExpiryAlertThresholdDays,
 		})
 		switch {
 		case errors.Is(err, product.ErrSKUTaken):
@@ -241,14 +250,21 @@ func handleUpdateProduct(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
 			return
 		}
+		if errs := productFieldErrors(req.ProductCategory, req.ReorderLevel, req.ExpiryAlertThresholdDays); errs != nil {
+			writeFieldErrors(w, http.StatusUnprocessableEntity, ErrCodeValidationFailed, errs)
+			return
+		}
 		err := a.Commands.UpdateProduct.Handle(r.Context(), command.UpdateProductCommand{
-			TenantID:          tenant.ID(effTenant),
-			ProductID:         product.ID(id.String()),
-			ActorMembershipID: membership.ID(c.MembershipID),
-			Name:              req.Name,
-			GSTRateBps:        req.GSTRateBps,
-			IsActive:          req.IsActive,
-			Manufacturer:      req.Manufacturer,
+			TenantID:                 tenant.ID(effTenant),
+			ProductID:                product.ID(id.String()),
+			ActorMembershipID:        membership.ID(c.MembershipID),
+			Name:                     req.Name,
+			GSTRateBps:               req.GSTRateBps,
+			IsActive:                 req.IsActive,
+			Manufacturer:             req.Manufacturer,
+			ReorderLevel:             req.ReorderLevel,
+			ExpiryAlertThresholdDays: req.ExpiryAlertThresholdDays,
+			ProductCategory:          req.ProductCategory,
 		})
 		switch {
 		case errors.Is(err, product.ErrNotFound):
@@ -309,6 +325,28 @@ func handleDeleteProduct(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+// handleListProductCategories serves the product form's category list: every
+// category of the shared reference table with its default GST rate.
+func handleListProductCategories(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := authn.EffectiveTenantID(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, ErrCodeUnauthenticated, "")
+			return
+		}
+		views, err := a.Queries.ListProductCategories.Handle(r.Context(), query.ListProductCategoriesQuery{})
+		if err != nil {
+			log.ErrorContext(r.Context(), "list product categories failed", "err", err)
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+			return
+		}
+		items := make([]ProductCategoryDto, 0, len(views))
+		for _, v := range views {
+			items = append(items, ProductCategoryDto{Category: v.Category, DefaultGSTRateBps: v.DefaultGSTRateBps})
+		}
+		writeJSON(w, http.StatusOK, ListProductCategoriesResponse{Items: items})
 	})
 }
 
@@ -631,6 +669,14 @@ func parsePageSize(raw string) int {
 	return n
 }
 
+// derefOr returns *p, or fallback when the request did not send the field.
+func derefOr[T comparable](p *T, fallback T) T {
+	if p == nil {
+		return fallback
+	}
+	return *p
+}
+
 // writeJSON encodes body to w with status code.
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -678,6 +724,10 @@ func productViewToDto(v query.ProductView) ProductDto {
 		IsActive:     v.IsActive,
 		CreatedAt:    v.CreatedAt,
 		UpdatedAt:    v.UpdatedAt,
+
+		ProductCategory:          v.ProductCategory,
+		ReorderLevel:             v.ReorderLevel,
+		ExpiryAlertThresholdDays: v.ExpiryAlertThresholdDays,
 	}
 }
 

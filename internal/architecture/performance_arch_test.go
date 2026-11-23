@@ -366,6 +366,10 @@ func TestArch_ListHandlersBoundedByPaginationShape(t *testing.T) {
 		// Bounded by domain: payments per order are a tiny set (token +
 		// balance/full + optional refund — typically 1-3) per BRD §6.4.
 		"handleListPayments": "payments per order bounded by domain invariant (token + balance + optional refund)",
+		// Bounded by the reference table: one row per product category
+		// (nine seeded, BRD Appendix C.5), written only by migrations: there
+		// is no write endpoint, and no tenant can add a row.
+		"handleListProductCategories": "platform reference table shared.product_category_gst_defaults: one row per product category, written only by migrations",
 	}
 
 	type violation struct {

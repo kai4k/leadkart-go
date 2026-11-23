@@ -31,6 +31,12 @@ type ProductDto struct {
 	IsActive     bool      `json:"is_active"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
+	// ProductCategory is never empty: a product stored without one reads "General".
+	ProductCategory string `json:"product_category"`
+	// ReorderLevel 0 means the low-stock alert is off for this product.
+	ReorderLevel int `json:"reorder_level"`
+	// ExpiryAlertThresholdDays 0 means the expiry alert is off for this product.
+	ExpiryAlertThresholdDays int `json:"expiry_alert_threshold_days"`
 }
 
 // CreateProductRequest — POST /api/v1/inventory/products.
@@ -44,6 +50,13 @@ type CreateProductRequest struct {
 	// 0 is stored as 0 (nil-rated medicines exist).
 	GSTRateBps   *int   `json:"gst_rate_bps,omitzero"`
 	Manufacturer string `json:"manufacturer,omitzero"`
+	// ProductCategory is optional: absent or blank is stored as "General".
+	ProductCategory *string `json:"product_category,omitzero"`
+	// ReorderLevel is optional: absent is 0 (no low-stock alert).
+	ReorderLevel *int `json:"reorder_level,omitzero"`
+	// ExpiryAlertThresholdDays is optional: absent is 90 (BRD §6.5); an
+	// explicit 0 switches the expiry alert off and is stored as 0.
+	ExpiryAlertThresholdDays *int `json:"expiry_alert_threshold_days,omitzero"`
 }
 
 // CreateProductResponse — 201 body.
@@ -68,6 +81,23 @@ type UpdateProductRequest struct {
 	GSTRateBps   *int    `json:"gst_rate_bps,omitzero"`
 	IsActive     *bool   `json:"is_active,omitzero"`
 	Manufacturer *string `json:"manufacturer,omitzero"`
+	// ProductCategory: a blank value stores the default category "General".
+	ProductCategory          *string `json:"product_category,omitzero"`
+	ReorderLevel             *int    `json:"reorder_level,omitzero"`
+	ExpiryAlertThresholdDays *int    `json:"expiry_alert_threshold_days,omitzero"`
+}
+
+// ProductCategoryDto is one allowed product category with the GST rate a new
+// product in it takes when the request sends no rate.
+type ProductCategoryDto struct {
+	Category          string `json:"category"`
+	DefaultGSTRateBps int    `json:"default_gst_rate_bps"`
+}
+
+// ListProductCategoriesResponse — GET /api/v1/inventory/product-categories.
+// The whole list, in category-name order; it is reference data, not paginated.
+type ListProductCategoriesResponse struct {
+	Items []ProductCategoryDto `json:"items"`
 }
 
 // ListProductsResponse — GET /api/v1/inventory/products page.

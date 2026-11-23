@@ -143,3 +143,44 @@ func TestCreateProductHandler_GSTRate_AbsentVersusExplicitZero(t *testing.T) {
 		})
 	}
 }
+
+// The form's three fields reach the aggregate. An absent expiry-alert threshold
+// takes the BRD default (90 days); an explicit 0 switches the alert off and is
+// kept (it used to be the silent result of every HTTP create).
+func TestCreateProductHandler_FormFields(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name          string
+		threshold     *int
+		wantThreshold int
+	}{
+		{"absent threshold takes the default", nil, product.ExpiryAlertThresholdDaysDefault},
+		{"explicit zero stays zero", new(0), 0},
+		{"explicit threshold is kept", new(30), 30},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			repo := newFakeProductRepo()
+			h := command.NewCreateProductHandler(repo, nil, func() time.Time { return fixedNow }, testNewProductID)
+			tid := newTenantID(t)
+
+			out, err := h.Handle(t.Context(), command.CreateProductCommand{
+				TenantID: tid, ActorMembershipID: newMembershipID(t),
+				SKU: "FORM-1", Name: "Form", DosageForm: "Tablet", PackSize: "10", HSNCode: "3004", GSTRateBps: new(500),
+				ProductCategory: "Cardiac", ReorderLevel: 40, ExpiryAlertThresholdDays: tc.threshold,
+			})
+			if err != nil {
+				t.Fatalf("Handle: %v", err)
+			}
+			p, err := repo.GetByID(t.Context(), tid, out.ProductID)
+			if err != nil {
+				t.Fatalf("GetByID: %v", err)
+			}
+			if p.ProductCategory() != "Cardiac" || p.ReorderLevel() != 40 || p.ExpiryAlertThresholdDays() != tc.wantThreshold {
+				t.Fatalf("stored category %q reorder %d threshold %d; want Cardiac, 40, %d",
+					p.ProductCategory(), p.ReorderLevel(), p.ExpiryAlertThresholdDays(), tc.wantThreshold)
+			}
+		})
+	}
+}

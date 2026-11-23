@@ -30,8 +30,10 @@ import (
 // A non-nil value, including an explicit 0 (a nil-rated product), is used
 // as given and bypasses the lookup.
 //
-// ReorderLevel / ExpiryAlertThresholdDays / ProductCategory carry their
-// canonical defaults (0 / 90 / "General") when omitted.
+// ReorderLevel and ProductCategory carry their canonical defaults (0 and
+// "General") when omitted. ExpiryAlertThresholdDays: nil means "not given" and
+// takes [product.ExpiryAlertThresholdDaysDefault] (90, BRD §6.5); a non-nil
+// value, including an explicit 0 (the alert switched off), is used as given.
 type CreateProductCommand struct {
 	TenantID                 tenant.ID
 	ActorMembershipID        membership.ID
@@ -43,7 +45,7 @@ type CreateProductCommand struct {
 	GSTRateBps               *int
 	Manufacturer             string
 	ReorderLevel             int
-	ExpiryAlertThresholdDays int
+	ExpiryAlertThresholdDays *int
 	ProductCategory          string
 }
 
@@ -121,6 +123,10 @@ func (h CreateProductHandler) Handle(ctx context.Context, cmd CreateProductComma
 			gst = def
 		}
 	}
+	threshold := product.ExpiryAlertThresholdDaysDefault
+	if cmd.ExpiryAlertThresholdDays != nil {
+		threshold = *cmd.ExpiryAlertThresholdDays
+	}
 	p, err := product.New(
 		h.newProductID(),
 		cmd.TenantID,
@@ -134,7 +140,7 @@ func (h CreateProductHandler) Handle(ctx context.Context, cmd CreateProductComma
 			GSTRateBps:               gst,
 			Manufacturer:             cmd.Manufacturer,
 			ReorderLevel:             cmd.ReorderLevel,
-			ExpiryAlertThresholdDays: cmd.ExpiryAlertThresholdDays,
+			ExpiryAlertThresholdDays: threshold,
 			ProductCategory:          cmd.ProductCategory,
 		},
 		h.now(),

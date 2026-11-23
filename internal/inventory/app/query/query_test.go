@@ -3,6 +3,7 @@ package query_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -342,5 +343,37 @@ func TestFefoBatchesHandler_RepoError_Propagates(t *testing.T) {
 	})
 	if !errors.Is(err, errSentinel) {
 		t.Fatalf("err: got %v want errSentinel", err)
+	}
+}
+
+// ----- ListProductCategories -------------------------------------------------
+
+type fakeCategoryReader struct {
+	out []query.ProductCategoryView
+	err error
+}
+
+func (f fakeCategoryReader) ListProductCategories(context.Context) ([]query.ProductCategoryView, error) {
+	return f.out, f.err
+}
+
+func TestListProductCategoriesHandler_ReturnsTheReferenceList(t *testing.T) {
+	t.Parallel()
+	want := []query.ProductCategoryView{{Category: "General", DefaultGSTRateBps: 1200}, {Category: "Nutraceuticals", DefaultGSTRateBps: 1800}}
+	got, err := query.NewListProductCategoriesHandler(fakeCategoryReader{out: want}).Handle(t.Context(), query.ListProductCategoriesQuery{})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestListProductCategoriesHandler_ReaderError_Propagates(t *testing.T) {
+	t.Parallel()
+	boom := errors.New("boom")
+	_, err := query.NewListProductCategoriesHandler(fakeCategoryReader{err: boom}).Handle(t.Context(), query.ListProductCategoriesQuery{})
+	if !errors.Is(err, boom) {
+		t.Fatalf("err %v, want it to wrap the reader's error", err)
 	}
 }

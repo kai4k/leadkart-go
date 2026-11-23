@@ -79,6 +79,34 @@ func (r *GstDefaultReaderPG) Default(ctx context.Context, category string) (int,
 	return res.Rate, res.Found, nil
 }
 
+// CategoryGstDefault is one row of the reference table: a product category
+// and the GST rate (basis points) a new product in it takes by default.
+type CategoryGstDefault struct {
+	Category string
+	RateBps  int
+}
+
+// List returns every category with its default rate, in category order. Not
+// cached: it backs a form's option list, which is read rarely and must show
+// exactly what the table holds.
+func (r *GstDefaultReaderPG) List(ctx context.Context) ([]CategoryGstDefault, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT category, default_gst_rate_bps
+		 FROM   shared.product_category_gst_defaults
+		 ORDER  BY category`)
+	if err != nil {
+		return nil, fmt.Errorf("refdata: list gst defaults: %w", err)
+	}
+	out, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (CategoryGstDefault, error) {
+		var c CategoryGstDefault
+		return c, row.Scan(&c.Category, &c.RateBps)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("refdata: list gst defaults: %w", err)
+	}
+	return out, nil
+}
+
 // loadDefault hits the DB. Runs as platform-scope (no GUC binding) —
 // shared.* has no RLS by design.
 func (r *GstDefaultReaderPG) loadDefault(ctx context.Context, category string) (int, bool, error) {

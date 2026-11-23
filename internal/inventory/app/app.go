@@ -35,4 +35,5 @@ type Queries struct {
 	ListBatchesByProduct   query.ListBatchesByProductHandler
 	ListBatchMovementsPage query.ListBatchMovementsPageHandler
 	FefoBatches            query.FefoBatchesHandler
+	ListProductCategories  query.ListProductCategoriesHandler
 }

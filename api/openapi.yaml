@@ -2502,7 +2502,11 @@ paths:
       description: |
         Requires `inventory.catalog.manage`. SKU is canonicalised
         upper-case + trimmed before per-tenant uniqueness check. 409 on
-        SKU collision. 422 on field-validation failure.
+        SKU collision. 422 on field-validation failure. A refusal of
+        `product_category`, `reorder_level` or `expiry_alert_threshold_days`
+        names the field: `422 validation_failed` with
+        `errors{<field>: [<rule>]}` (rules on `CreateProductRequest`); the
+        other fields still answer `validation_failed` with a message only.
       requestBody:
         required: true
         content:
@@ -2597,7 +2601,11 @@ paths:
         retain their prior value). JSON `null` is NOT distinguishable from
         omission on the wire, so clearing a field is not supported; this
         deliberately differs from RFC 7396 merge-patch semantics. 422 on
-        invariant failure (out-of-range GST bps, oversized name, etc).
+        invariant failure (out-of-range GST bps, oversized name, etc). A
+        refusal of `product_category`, `reorder_level` or
+        `expiry_alert_threshold_days` names the field: `422 validation_failed`
+        with `errors{<field>: [<rule>]}` (rules on `UpdateProductRequest`),
+        and nothing is changed.
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/ProductId' }
@@ -2642,6 +2650,30 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/inventory/product-categories:
+    get:
+      tags: [inventory]
+      summary: List the product categories and their default GST rates
+      description: |
+        Requires `inventory.catalog.read` OR `inventory.catalog.manage`.
+        The option list of the product form: every product category of the
+        platform reference table with the GST rate a new product in it takes
+        when `POST /inventory/products` sends no `gst_rate_bps`. The same
+        list for every company, in category-name order, not paginated.
+        Read-only: no rate or category is changed by this API.
+      parameters:
+        - $ref: '#/components/parameters/XTenantId'
+      responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '200':
+          description: Categories
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListProductCategoriesResponse' }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
 
   /api/v1/inventory/products/{productId}/batches:
     post:
@@ -5822,7 +5854,7 @@ components:
         balance:   { type: integer, format: int64 }
     ProductDto:
       type: object
-      required: [id, tenant_id, sku, name, dosage_form, pack_size, hsn_code, gst_rate_bps, is_active, created_at, updated_at]
+      required: [id, tenant_id, sku, name, dosage_form, pack_size, hsn_code, gst_rate_bps, is_active, created_at, updated_at, product_category, reorder_level, expiry_alert_threshold_days]
       properties:
         id:            { type: string, format: uuid }
         tenant_id:     { type: string, format: uuid }
@@ -5836,6 +5868,9 @@ components:
         is_active:     { type: boolean }
         created_at:    { type: string, format: date-time }
         updated_at:    { type: string, format: date-time }
+        product_category:            { type: string, minLength: 1, maxLength: 64, description: 'Never empty: a product stored without a category reads `General`. Free text; the values the form offers come from `GET /inventory/product-categories`.' }
+        reorder_level:               { type: integer, minimum: 0, maximum: 2147483647, description: 'Units. 0: the low-stock alert is off for this product.' }
+        expiry_alert_threshold_days: { type: integer, minimum: 0, maximum: 36500, description: 'Days before expiry at which a batch is reported as expiring soon. 0: the expiry alert is off for this product.' }
 
     CreateProductRequest:
       type: object
@@ -5848,6 +5883,9 @@ components:
         hsn_code:      { type: string, minLength: 4, maxLength: 8, pattern: '^([0-9]{4}|[0-9]{6}|[0-9]{8})$', description: 'ASCII digits only, exactly 4, 6 or 8 of them; a leading zero is allowed (0402 is a real code). Send it trimmed (the server also trims surrounding whitespace before it checks). Anything else is 422 validation_failed. The READ shape (`ProductDto.hsn_code`) still allows 4..10 digits for rows stored before this rule.' }
         gst_rate_bps:  { type: integer, minimum: 0, maximum: 10000, description: 'Optional. Absent: the category default is used (as before). An explicit 0 is stored as 0 (a nil-rated product); it is NOT replaced by the default.' }
         manufacturer:  { type: string, maxLength: 200 }
+        product_category:            { type: string, maxLength: 64, description: 'Optional. Absent or blank: `General`. Trimmed; at most 64 characters. It selects the default GST rate when `gst_rate_bps` is absent (a category that is not in `GET /inventory/product-categories` has no default, so the rate is then 0: send a category from that list, or send the rate). 422 `validation_failed`, `errors.product_category`: `too_long` (over 64 characters), `invalid_characters` (holds the NUL character).' }
+        reorder_level:               { type: integer, minimum: 0, maximum: 2147483647, default: 0, description: 'Optional. Units below which the product is low on stock; 0 (the default) switches the low-stock alert off. 422 `validation_failed`, `errors.reorder_level`: `too_small` (below 0), `too_large` (above 2147483647).' }
+        expiry_alert_threshold_days: { type: integer, minimum: 0, maximum: 36500, default: 90, description: 'Optional. Absent: 90. An explicit 0 switches the expiry alert off and is stored as 0. 422 `validation_failed`, `errors.expiry_alert_threshold_days`: `too_small` (below 0), `too_large` (above 36500).' }
 
     CreateProductResponse:
       type: object
@@ -5863,6 +5901,24 @@ components:
         gst_rate_bps:  { type: integer, minimum: 0, maximum: 10000 }
         is_active:     { type: boolean }
         manufacturer:  { type: string, maxLength: 200 }
+        product_category:            { type: string, maxLength: 64, description: 'A blank value stores `General`. Changing the category never changes `gst_rate_bps`. 422 `validation_failed`, `errors.product_category`: `too_long` (over 64 characters), `invalid_characters` (holds the NUL character).' }
+        reorder_level:               { type: integer, minimum: 0, maximum: 2147483647, description: '0 switches the low-stock alert off. 422 `validation_failed`, `errors.reorder_level`: `too_small`, `too_large`.' }
+        expiry_alert_threshold_days: { type: integer, minimum: 0, maximum: 36500, description: '0 switches the expiry alert off. 422 `validation_failed`, `errors.expiry_alert_threshold_days`: `too_small`, `too_large`.' }
+
+    ProductCategoryDto:
+      type: object
+      required: [category, default_gst_rate_bps]
+      properties:
+        category:             { type: string, minLength: 1, maxLength: 64 }
+        default_gst_rate_bps: { type: integer, minimum: 0, maximum: 10000, description: 'GST rate in basis points (1200 = 12%) a new product in this category takes when the create request sends no `gst_rate_bps`.' }
+
+    ListProductCategoriesResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ProductCategoryDto' }
 
     ListProductsResponse:
       type: object

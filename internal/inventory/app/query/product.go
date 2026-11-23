@@ -30,6 +30,10 @@ type ProductView struct {
 	IsActive     bool
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
+
+	ProductCategory          string
+	ReorderLevel             int
+	ExpiryAlertThresholdDays int
 }
 
 // projectProduct maps the write aggregate to the flat read View — the
@@ -48,6 +52,10 @@ func projectProduct(p *product.Product) ProductView {
 		IsActive:     p.IsActive(),
 		CreatedAt:    p.CreatedAt(),
 		UpdatedAt:    p.UpdatedAt(),
+
+		ProductCategory:          p.ProductCategory(),
+		ReorderLevel:             p.ReorderLevel(),
+		ExpiryAlertThresholdDays: p.ExpiryAlertThresholdDays(),
 	}
 }
 

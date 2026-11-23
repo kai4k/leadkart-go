@@ -118,3 +118,39 @@ func TestUpdateProductHandler_ExplicitZeroGST_IsApplied(t *testing.T) {
 		t.Fatalf("gst_rate_bps = %d after explicit 0, want 0", got.GSTRateBps())
 	}
 }
+
+// Category, reorder level and expiry-alert threshold are part of the update.
+func TestUpdateProductHandler_AppliesFormFields(t *testing.T) {
+	t.Parallel()
+	repo := newFakeProductRepo()
+	tid := newTenantID(t)
+	actor := newMembershipID(t)
+	p := seedProduct(t, repo, tid, actor, "UPD-FORM")
+	h := command.NewUpdateProductHandler(repo, func() time.Time { return fixedNow })
+
+	category := "Diabetic"
+	err := h.Handle(t.Context(), command.UpdateProductCommand{
+		TenantID: tid, ProductID: p.ID(), ActorMembershipID: actor,
+		ProductCategory: &category, ReorderLevel: new(7), ExpiryAlertThresholdDays: new(45),
+	})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	got, _ := repo.GetByID(t.Context(), tid, p.ID())
+	if got.ProductCategory() != "Diabetic" || got.ReorderLevel() != 7 || got.ExpiryAlertThresholdDays() != 45 {
+		t.Fatalf("stored category %q reorder %d threshold %d; want Diabetic, 7, 45",
+			got.ProductCategory(), got.ReorderLevel(), got.ExpiryAlertThresholdDays())
+	}
+
+	// A value the aggregate refuses changes nothing.
+	err = h.Handle(t.Context(), command.UpdateProductCommand{
+		TenantID: tid, ProductID: p.ID(), ActorMembershipID: actor, ReorderLevel: new(-1),
+	})
+	if !errors.Is(err, product.ErrInvalid) {
+		t.Fatalf("negative reorder level: err %v, want ErrInvalid", err)
+	}
+	got, _ = repo.GetByID(t.Context(), tid, p.ID())
+	if got.ReorderLevel() != 7 {
+		t.Fatalf("reorder level after a refused update = %d, want 7", got.ReorderLevel())
+	}
+}
