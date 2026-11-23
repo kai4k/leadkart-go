@@ -236,7 +236,7 @@ func TestRecordPayment_TokenKindIsRefused(t *testing.T) {
 	t.Parallel()
 	tid := tenant.ID(uuid.NewString())
 	payments := paymenttest.NewFakeRepository()
-	h := command.NewRecordPaymentHandler(payments, now, payID)
+	h := command.NewRecordPaymentHandler(ordertest.NewFakeRepository(), payments, now, payID)
 
 	_, err := h.Handle(t.Context(), command.RecordPaymentCommand{
 		TenantID: tid, OrderID: oID(), Kind: string(payment.KindToken), Method: "upi", AmountPaise: 100,
@@ -244,5 +244,25 @@ func TestRecordPayment_TokenKindIsRefused(t *testing.T) {
 	})
 
 	require.ErrorIs(t, err, command.ErrTokenPaymentRoute)
+	require.Empty(t, payments.Store)
+}
+
+// A payment needs an order: orders.payments has no foreign key, so an unknown
+// order id (or another tenant's order) used to be stored as an orphan row.
+func TestRecordPayment_UnknownOrderIsRefusedAndWritesNothing(t *testing.T) {
+	t.Parallel()
+	tid := tenant.ID(uuid.NewString())
+	orders := ordertest.NewFakeRepository()
+	payments := paymenttest.NewFakeRepository()
+	otherTenantsOrder := seedOrderRow(t, orders, tenant.ID(uuid.NewString()))
+	h := command.NewRecordPaymentHandler(orders, payments, now, payID)
+
+	for name, orderID := range map[string]order.ID{"unknown id": oID(), "another tenant's order": otherTenantsOrder} {
+		_, err := h.Handle(t.Context(), command.RecordPaymentCommand{
+			TenantID: tid, OrderID: orderID, Kind: "full", Method: "upi", AmountPaise: 100,
+			RecordedByMembership: membership.ID(uuid.NewString()),
+		})
+		require.ErrorIs(t, err, order.ErrNotFound, name)
+	}
 	require.Empty(t, payments.Store)
 }

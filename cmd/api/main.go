@@ -1090,7 +1090,7 @@ func buildOrdersApp(pool *pgxpool.Pool, now func() time.Time) ordersapp.Applicat
 			MarkOrderDelivered: orderscommand.NewMarkOrderDeliveredHandler(orders, now),
 			CompleteOrder:      orderscommand.NewCompleteOrderHandler(orders, now),
 			CancelOrder:        orderscommand.NewCancelOrderHandler(orders, now),
-			RecordPayment:      orderscommand.NewRecordPaymentHandler(payments, now, newPaymentID),
+			RecordPayment:      orderscommand.NewRecordPaymentHandler(orders, payments, now, newPaymentID),
 			MintCreditNote:     orderscommand.NewMintCreditNoteHandler(tx, creditNotes, invoices, orders, allocator, now, newCreditNoteID),
 		},
 		Queries: ordersapp.Queries{

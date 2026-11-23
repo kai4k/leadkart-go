@@ -258,10 +258,12 @@ func TestRecordPayment(t *testing.T) {
 	tid := tenant.ID(uuid.NewString())
 	ctx := t.Context()
 	payments := paymenttest.NewFakeRepository()
-	h := command.NewRecordPaymentHandler(payments, now, payID)
+	orders := ordertest.NewFakeRepository()
+	orderID := seedOrderRow(t, orders, tid)
+	h := command.NewRecordPaymentHandler(orders, payments, now, payID)
 
 	res, err := h.Handle(ctx, command.RecordPaymentCommand{
-		TenantID: tid, OrderID: order.ID(uuid.NewString()),
+		TenantID: tid, OrderID: orderID,
 		Kind: "full", Method: "neft", AmountPaise: 75000,
 		ExternalReference: "UTR-1", RecordedByMembership: membership.ID(uuid.NewString()),
 	})
@@ -269,7 +271,7 @@ func TestRecordPayment(t *testing.T) {
 	require.NotEmpty(t, res.PaymentID.String())
 
 	_, dupErr := h.Handle(ctx, command.RecordPaymentCommand{
-		TenantID: tid, OrderID: order.ID(uuid.NewString()),
+		TenantID: tid, OrderID: orderID,
 		Kind: "full", Method: "neft", AmountPaise: 1,
 		ExternalReference: "UTR-1", RecordedByMembership: membership.ID(uuid.NewString()),
 	})

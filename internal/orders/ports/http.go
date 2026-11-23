@@ -460,6 +460,8 @@ func handleRecordPayment(log *slog.Logger, a app.Application) http.Handler {
 		switch {
 		case err == nil:
 			writeJSON(w, http.StatusCreated, RecordPaymentResponse{PaymentID: res.PaymentID.String()})
+		case errors.Is(err, order.ErrNotFound):
+			writeError(w, http.StatusNotFound, errCodeOrderNotFound, "")
 		case errors.Is(err, payment.ErrAlreadyExistsForExternalReference):
 			writeError(w, http.StatusConflict, errCodePaymentConflict, "")
 		case errors.Is(err, textlimit.ErrInvalid):

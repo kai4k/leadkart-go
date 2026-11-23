@@ -3884,6 +3884,9 @@ paths:
         Kinds `full` and `refund` only. `kind: token` is refused with
         `422 token_payment_route_required`: a token receipt must advance the
         order, so it goes through `POST /orders/orders/{orderId}/token-payment`.
+        The order must exist in the caller's company: an unknown id, or another
+        company's order, is `404 order_not_found` and nothing is written (it
+        used to answer 201 and store a payment that belonged to no order).
         Other payment rules (part payments, an amount over the balance, a state
         check) are not enforced yet: they wait for an owner decision.
       parameters:
@@ -3905,7 +3908,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
-        '404': { $ref: '#/components/responses/NotFound' }
+        '404': { description: "`order_not_found` — no such order in the caller's company (an unknown id or another company's order); nothing is written", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '409':
           description: Duplicate external reference
           content:

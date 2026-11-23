@@ -39,27 +39,36 @@ type RecordPaymentResult struct {
 
 // RecordPaymentHandler records a payment receipt.
 type RecordPaymentHandler struct {
+	orders       order.Repository
 	payments     payment.Repository
 	now          func() time.Time
 	newPaymentID func() payment.ID
 }
 
-// NewRecordPaymentHandler wires the handler.
-func NewRecordPaymentHandler(payments payment.Repository, now func() time.Time, newPaymentID func() payment.ID) RecordPaymentHandler {
+// NewRecordPaymentHandler wires the handler. orders answers one question only:
+// does the order exist in the caller's tenant.
+func NewRecordPaymentHandler(orders order.Repository, payments payment.Repository, now func() time.Time, newPaymentID func() payment.ID) RecordPaymentHandler {
 	if now == nil {
 		now = time.Now
 	}
-	return RecordPaymentHandler{payments: payments, now: now, newPaymentID: newPaymentID}
+	return RecordPaymentHandler{orders: orders, payments: payments, now: now, newPaymentID: newPaymentID}
 }
 
 // Handle records the payment, returning [payment.ErrAlreadyExistsForExternalReference]
-// on a duplicate external reference (webhook idempotency).
+// on a duplicate external reference (webhook idempotency) and [order.ErrNotFound]
+// when the order does not exist in the tenant: orders.payments has no foreign
+// key to orders.orders, so without this read a payment for an unknown id was
+// stored and belonged to no order. An order is never deleted, so the read
+// needs no lock and no shared transaction with the insert.
 func (h RecordPaymentHandler) Handle(ctx context.Context, cmd RecordPaymentCommand) (RecordPaymentResult, error) {
 	if cmd.TenantID == "" {
 		return RecordPaymentResult{}, errors.New("orders record_payment: tenant id required")
 	}
 	if payment.Kind(cmd.Kind) == payment.KindToken {
 		return RecordPaymentResult{}, ErrTokenPaymentRoute
+	}
+	if _, err := h.orders.GetByID(ctx, cmd.TenantID, cmd.OrderID); err != nil {
+		return RecordPaymentResult{}, fmt.Errorf("orders record_payment: %w", err)
 	}
 	received := cmd.ReceivedAt
 	if received.IsZero() {
