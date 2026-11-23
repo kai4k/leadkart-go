@@ -655,6 +655,26 @@ func TestAppRoleCanReadEveryApplicationTableUnderRLS(t *testing.T) {
 	}
 }
 
+// Every table with row level security enabled also forces it. The static
+// architecture gate reads migration text; this reads the catalog, so a spelling
+// the regexp does not see cannot hide an owner-bypassable table.
+func TestEveryRLSTableForcesRLSInTheCatalog(t *testing.T) {
+	dsn := startPostgres(t)
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	applyMigrations(t, dsn)
+
+	unforced := queryStrings(t, db, `
+		SELECT quote_ident(n.nspname) || '.' || quote_ident(c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE c.relkind IN ('r', 'p') AND n.nspname = ANY($1) AND c.relrowsecurity AND NOT c.relforcerowsecurity ORDER BY 1`, pgArray(appSchemas(t, db)))
+	if len(unforced) != 0 {
+		t.Fatalf("tables with RLS enabled but not FORCEd (the owner bypasses them): %v", unforced)
+	}
+}
+
 // appRoleGrantsMigration is the version of 20260606000001_application_role_grants.sql.
 const appRoleGrantsMigration = 20260606000001
 

@@ -71,8 +71,8 @@ func TestArch_EveryTenantTableHasRLSAndForce(t *testing.T) {
 	// in the same migration as ENABLE; this test now guards regression.
 
 	tableRE := regexp.MustCompile(`(?im)^\s*CREATE TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)\s*\(`)
-	enableRE := regexp.MustCompile(`(?im)\bALTER TABLE\s+([a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*)\s+ENABLE ROW LEVEL SECURITY`)
-	forceRE := regexp.MustCompile(`(?im)\bALTER TABLE\s+([a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*)\s+FORCE ROW LEVEL SECURITY`)
+	enableRE := regexp.MustCompile(`(?im)\bALTER TABLE\s+([a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*)\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY`)
+	forceRE := regexp.MustCompile(`(?im)\bALTER TABLE\s+([a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*)\s+FORCE\s+ROW\s+LEVEL\s+SECURITY`)
 	optOutRE := regexp.MustCompile(`(?im)^\s*--\s*arch-test:opt-out-rls`)
 
 	type violation struct {
@@ -184,7 +184,7 @@ func TestArch_EveryTenantTableHasRLSAndForce(t *testing.T) {
 func TestArch_EveryTenantTableHasRLSPolicies(t *testing.T) {
 	t.Parallel()
 
-	enableRE := regexp.MustCompile(`(?im)\bALTER TABLE\s+([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)\s+ENABLE ROW LEVEL SECURITY`)
+	enableRE := regexp.MustCompile(`(?im)\bALTER TABLE\s+([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY`)
 	// Matches both:
 	//   CREATE POLICY <name> ON <schema>.<table> FOR SELECT ...
 	//   CREATE POLICY <name> ON <schema>.<table>     -- no FOR clause = ALL
