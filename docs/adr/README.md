@@ -59,6 +59,7 @@ One decision per file, Michael Nygard format (Context / Decision / Consequences 
 | 0068 | Authorization hardening — tenant.admin implication, X-Tenant-Id, must-change enforcement, refresh grace | Accepted |
 | 0069 | Rank hierarchy and grant authority — tiers, act-downward, grant ceiling, role edits act on holders, approver rule, owner invariants | Accepted |
 | 0070 | Company commerce settings — one owner module, a versioned policy with full history, event-fed replicas in Orders and Inventory | Accepted |
+| 0071 | Data is retained: people active or inactive, companies pending, active or suspended; privacy erasure deferred | Accepted |
 
 Companion to 0068 and 0069 (not an ADR): [every API change the web BFF must handle](../BFF_API_CHANGES.md).
 

@@ -29,7 +29,7 @@ LeadKart is a multi-tenant SaaS for the Indian PCD (propaganda cum distribution)
 
 - Multi-tenant isolation enforced at Postgres RLS layer (`SET LOCAL app.tenant_id`).
 - Audit log: outbox table doubles as audit (Brandur "events table" pattern).
-- DPDP Act 2023 + GDPR compliance — anonymisation, right-to-erasure.
+- Data is retained: nothing is deleted. People are active or inactive; companies are active or suspended (pending until activated). Privacy erasure (DPDP Act 2023, GDPR) is deferred and must be decided before India's DPDP erasure duty starts (about May 2027) or the first customer outside India (ADR 0071).
 - HIBP password screening + Argon2id + JWT + refresh-token families.
 - Indian-specific value objects: GST, PAN, drug licence, FY-aware invoice numbers.
 - Operator/SuperAdmin cross-tenant impersonation (Stripe Connect / AWS AssumeRole pattern).

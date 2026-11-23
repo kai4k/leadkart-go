@@ -136,10 +136,8 @@ directory is in the repository at the release tag, the `migrate` image has no sh
     `invalid_credentials`), a refresh of an older session answers 401 `refresh_rejected`
     with reason `tenant_suspended`; reactivate (`POST /api/v1/tenants/{id}/activate`) and
     the login works again. Access tokens already issued live up to 600 s.
-    Then mark the throwaway tenant for deletion (`POST /api/v1/tenants/{id}/mark-for-deletion`): the
-    right password now answers 403 `tenant_not_active` and an older session's refresh answers 401
-    `refresh_rejected` with reason `tenant_not_active`; restore it (`POST /api/v1/tenants/{id}/restore`)
-    and the login works again (owner ruling 2026-11-21: only an active company's members sign in).
+    (Only an active company's members sign in, owner ruling 2026-11-21. A company is never
+    deleted: it is pending, active or suspended, ADR 0071.)
     Registering a tenant creates it ACTIVE, so its first admin signs in at once.
 14. **Verify a suspended person cannot sign in.** With a throwaway account: global-suspend
     it (`POST /api/v1/platform/persons/{id}/global-suspend`), then log in with the right
