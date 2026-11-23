@@ -77,3 +77,12 @@ Integrity and legal invariants stay in code: nothing is allocated, packed or dis
 ## Verification
 
 Unit: `internal/common/commercepolicy`, `internal/companysettings/...`, `internal/orders/app/command`, `internal/orders/ports/subscribers`, the Inventory twins. Integration (`-tags=integration`): the repository, history reader, tenant lister, both replicas (guard, RLS, one-connection read), the migrations and privileges tests. End to end (`cmd/api`): the routes (`company_settings_e2e_test.go`) and the proof (`company_settings_replicas_e2e_test.go`). Architecture: `task test:arch` (route and spec drift, RLS+FORCE for the new schema, the append-only history grant).
+
+## Fitness function
+
+* `TestArch_RouteHasSpecOperation` (`internal/companysettings/ports/route_spec_test.go`): every `/api/v1/company/*` route is a spec operation and the reverse.
+* `TestArch_EveryTenantTableHasRLSAndForce` (`internal/architecture/multi_tenancy_arch_test.go`): the `companysettings` schema is in the tenant-schema set, so each of its tables enables and FORCEs RLS in its migration.
+* `TestArch_AllRegisteredEventsSatisfyMarker` and `TestArch_AllRegisteredEventsHaveCanonicalAlias` (`internal/companysettings/integrationevents/arch_test.go`): every event is tenant-scoped and named `companysettings.<event>.v<N>`.
+* `TestArch_DomainHasNoInfraImports` (`internal/architecture/persistence_arch_test.go`): the aggregate imports only the shared pure packages (`commercepolicy` is on its allow-list).
+* `TestAppRoleHasPrivilegesOnEveryApplicationTable` (`internal/common/pg/migrations_test.go`, integration): the application role holds SELECT and INSERT only on `companysettings.policy_history`.
+* `TestAdminTierOnly_TheSetIsExactlyUsersCreateAndTheCompanySettingsWrites` and `TestSatisfies_CompanySettingsWritesAreAdminTierOnly` pin the Owner / Admin tier rule.
