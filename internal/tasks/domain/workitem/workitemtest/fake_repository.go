@@ -204,20 +204,6 @@ func (r *FakeRepository) ListOverdueCandidates(_ context.Context, tenantID tenan
 	return out, nil
 }
 
-// DeleteByID flips the soft-delete tombstone. Idempotent — already-
-// deleted returns nil.
-func (r *FakeRepository) DeleteByID(_ context.Context, tenantID tenant.ID, id workitem.ID) error {
-	w, ok := r.ByID[id]
-	if !ok {
-		return workitem.ErrNotFound
-	}
-	if w.TenantID() != tenantID {
-		return workitem.ErrNotFound
-	}
-	r.Deleted[id] = struct{}{}
-	return nil
-}
-
 // CountDashboard mirrors the SQL CTE in the adapter. Filters by
 // visibleMembershipIDs (set semantics) — empty/nil means count
 // everything in the tenant.

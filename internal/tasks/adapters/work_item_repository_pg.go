@@ -259,33 +259,6 @@ func (r *WorkItemRepository) ListOverdueCandidates(ctx context.Context, tenantID
 	return out, nil
 }
 
-// DeleteByID satisfies [workitem.Repository]. Tenant-scoped soft-delete
-// (sets is_deleted = true + deleted_at = now()). Joins a surrounding
-// UnitOfWork tx when ctx carries one (per ADR 0047); otherwise opens its
-// own tx under tenant scope.
-func (r *WorkItemRepository) DeleteByID(ctx context.Context, tenantID tenant.ID, id workitem.ID) error {
-	if tx, ok := pg.TxFromContext(ctx); ok {
-		return r.deleteOnTx(ctx, tx, id)
-	}
-	return r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
-		return r.deleteOnTx(ctx, tx, id)
-	})
-}
-
-func (r *WorkItemRepository) deleteOnTx(ctx context.Context, tx pgx.Tx, id workitem.ID) error {
-	lid, err := uuid.Parse(id.String())
-	if err != nil {
-		return fmt.Errorf("tasks repo: parse id %q: %w", id, err)
-	}
-	q := r.q.WithTx(tx)
-	// Verify row exists in tenant before soft-deleting (so a missing
-	// row returns ErrNotFound, not a silent no-op).
-	if _, err := loadWorkItem(ctx, q, id); err != nil {
-		return err
-	}
-	return q.SoftDeleteWorkItem(ctx, pgconv.PgUUID(lid))
-}
-
 // CountDashboard satisfies [workitem.Repository].
 func (r *WorkItemRepository) CountDashboard(ctx context.Context, tenantID tenant.ID, visibleMembershipIDs []string, asOf time.Time) (workitem.DashboardCounts, error) {
 	tid, err := uuid.Parse(tenantID.String())

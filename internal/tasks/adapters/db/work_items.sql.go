@@ -263,8 +263,6 @@ type InsertWorkItemParams struct {
 //	UpdateWorkItem            → repo UpdateByID persist path
 //	ListWorkItemsPage         → cursor-paginated list per ADR 0038
 //	ListOverdueCandidates     → periodic overdue-scan job
-//	ListPurgeCandidates       → daily purge job
-//	SoftDeleteWorkItem        → purge job's tombstone flip
 //	DashboardCounts           → per-membership / per-team tallies
 func (q *Queries) InsertWorkItem(ctx context.Context, arg InsertWorkItemParams) error {
 	_, err := q.db.Exec(ctx, insertWorkItem,
@@ -492,18 +490,6 @@ func (q *Queries) ListWorkItemsPage(ctx context.Context, arg ListWorkItemsPagePa
 		return nil, err
 	}
 	return items, nil
-}
-
-const softDeleteWorkItem = `-- name: SoftDeleteWorkItem :exec
-UPDATE tasks.work_items
-SET    is_deleted = true
-WHERE  id = $1
-  AND  NOT is_deleted
-`
-
-func (q *Queries) SoftDeleteWorkItem(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, softDeleteWorkItem, id)
-	return err
 }
 
 const updateWorkItem = `-- name: UpdateWorkItem :exec

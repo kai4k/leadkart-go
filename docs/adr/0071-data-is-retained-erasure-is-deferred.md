@@ -30,7 +30,7 @@ Erasure is not decided; it is not built, and nothing here is a design for it. It
 * Purely technical expiry stays (idempotency keys, expired tokens, login phantom rows, processed outbox rows).
 * **The audit trail has no age limit.** The `audit.purge` job (7-year purge of `common.audit_log_entry`) is removed from the code, the worker and the docs, and migration `20261125000003` takes DELETE on `common.audit_log_entry` away from the application role, so the table is append-only for the application (SELECT, INSERT). `TestArch_NothingDeletesTheAuditTrail` fails if any production Go or SQL source deletes from or truncates it, and `TestAppRoleHasPrivilegesOnEveryApplicationTable` (the pinned privilege set in `internal/common/pg`) fails if the grant returns. Proof that no scheduled job deletes it: the worker registers no job whose SQL names the table, and the role could not run one.
 * **Finished work items are kept.** The `tasks.purge` job (soft delete of completed and cancelled work items after 90 days) is removed, with its repository query. Completed and cancelled work items stay and stay readable.
-* Soft deletes that keep their row (roles, products, drug schedule classes) are untouched; the row, its history and its audit entries stay. `workitem.Repository.DeleteByID` has no caller left and is kept only as the tenant-scoped soft delete of the aggregate.
+* Soft deletes that keep their row (roles, products, drug schedule classes) are untouched; the row, its history and its audit entries stay. `workitem.Repository.DeleteByID`, its adapter and its `SoftDeleteWorkItem` query are removed (review G2b L6): it had no caller left and was the last path that could hide a finished work item.
 
 ## Fitness function
 

@@ -9,8 +9,6 @@
 --   UpdateWorkItem            → repo UpdateByID persist path
 --   ListWorkItemsPage         → cursor-paginated list per ADR 0038
 --   ListOverdueCandidates     → periodic overdue-scan job
---   ListPurgeCandidates       → daily purge job
---   SoftDeleteWorkItem        → purge job's tombstone flip
 --   DashboardCounts           → per-membership / per-team tallies
 
 -- name: InsertWorkItem :exec
@@ -68,12 +66,6 @@ SET    priority                  = $2,
        completed_at              = $8,
        cancelled_at              = $9,
        cancellation_reason       = $10
-WHERE  id = $1
-  AND  NOT is_deleted;
-
--- name: SoftDeleteWorkItem :exec
-UPDATE tasks.work_items
-SET    is_deleted = true
 WHERE  id = $1
   AND  NOT is_deleted;
 

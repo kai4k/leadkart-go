@@ -83,12 +83,6 @@ type Repository interface {
 	// optional and zero means "all tenants".
 	ListOverdueCandidates(ctx context.Context, tenantID tenant.ID, asOf time.Time, limit int) ([]*WorkItem, error)
 
-	// DeleteByID flips is_deleted = true for the supplied work item
-	// in the supplied tenant (soft delete). Idempotent — already-
-	// deleted returns nil. Returns [ErrNotFound] if no matching live
-	// row exists.
-	DeleteByID(ctx context.Context, tenantID tenant.ID, id ID) error
-
 	// CountDashboard returns the BRD §6.8 dashboard tallies for a
 	// membership scope. When visibleMembershipIDs is non-empty, the
 	// counts span those memberships (team view); otherwise the counts
