@@ -29,9 +29,14 @@ import (
 // scoped tables. Pure platform schemas (`common`, `app`) are
 // not in this list — they store cross-tenant rows by definition.
 var tenantOwningSchemas = map[string]bool{
-	"identity":  true,
-	"inventory": true,
-	"platform":  true,
+	"identity":      true,
+	"inventory":     true,
+	"platform":      true,
+	"orders":        true,
+	"crm":           true,
+	"dispatch":      true,
+	"tasks":         true,
+	"notifications": true,
 	// companysettings (ADR 0070): every table is tenant-scoped, RLS + FORCE.
 	"companysettings": true,
 }
