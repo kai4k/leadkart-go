@@ -21,7 +21,6 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-	"go.opentelemetry.io/otel/log/global"
 	"go.opentelemetry.io/otel/propagation"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -30,7 +29,7 @@ import (
 	// Must match the semconv version that go.opentelemetry.io/otel/sdk's
 	// resource.Default() imports internally — otherwise resource.Merge
 	// returns "conflicting Schema URL" and Setup fails (containers
-	// crash-loop). OTel-Go SDK v1.46.x imports semconv/v1.43.0 (see
+	// crash-loop). OTel-Go SDK v1.47.x imports semconv/v1.43.0 (checked on the v1.47.0 upgrade; see
 	// go.opentelemetry.io/otel/sdk/resource/builtin.go). Bump in lockstep
 	// with go.mod's go.opentelemetry.io/otel/sdk version on each refresh.
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
@@ -78,7 +77,7 @@ func Setup(ctx context.Context, cfg config.OTelConfig) (Shutdown, error) {
 		lp := sdklog.NewLoggerProvider(sdklog.WithResource(res))
 		otel.SetTracerProvider(tp)
 		otel.SetMeterProvider(mp)
-		global.SetLoggerProvider(lp)
+		otel.SetLoggerProvider(lp)
 		otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 			propagation.TraceContext{}, propagation.Baggage{},
 		))
@@ -136,7 +135,7 @@ func Setup(ctx context.Context, cfg config.OTelConfig) (Shutdown, error) {
 
 	otel.SetTracerProvider(tp)
 	otel.SetMeterProvider(mp)
-	global.SetLoggerProvider(lp)
+	otel.SetLoggerProvider(lp)
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{}, propagation.Baggage{},
 	))
