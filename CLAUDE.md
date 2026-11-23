@@ -10,7 +10,7 @@ Go rebuild of LeadKart (.NET 10 modular monolith). Multi-tenant SaaS, Indian PCD
 - Tenants (pharma cos) manage leads via CRM, orders, inventory, dispatch.
 - **lead** = potential buyer (medical store, chemist, distributor), NOT a franchise partner.
 
-8 bounded contexts: Identity, Platform, CRM, Orders, Inventory, Dispatch, Tasks, Notifications.
+9 bounded contexts: Identity, Platform, CRM, Orders, Inventory, Dispatch, Tasks, Notifications, Company settings (versioned commerce policy; Orders and Inventory read event-fed replicas, ADR 0070).
 .NET reference at `d:\Development\LeadKart\` (spec, not 1:1 — Go canon drives shape).
 
 ## Architecture — three unbreakable rules
