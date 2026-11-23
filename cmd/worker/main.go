@@ -348,6 +348,11 @@ func run(ctx context.Context, stdout *os.File) error {
 	ordersConsignmentCreatedSub := orderssubscribers.NewConsignmentCreatedSubscriber(ordersInvoiceOrder, ordersAttach, logger)
 	ordersConsignmentDeliveredSub := orderssubscribers.NewConsignmentDeliveredSubscriber(ordersInvoiceOrder, ordersAttach, ordersDeliver, logger)
 	ordersCancelCompensationSub := orderssubscribers.NewCancelCompensationSubscriber(ordersCompensate, logger)
+	// companysettings.policy_changed.v1 -> Orders' replica of the company commerce
+	// policy (ADR 0070): stored only when the version is newer, so replay is harmless.
+	ordersPolicyReplica := ordersadapters.NewPolicyReplicaRepository(pool, tx)
+	ordersPolicyChangedSub := orderssubscribers.NewPolicyChangedSubscriber(
+		orderscommand.NewApplyPolicyHandler(tx, ordersPolicyReplica), logger)
 
 	// Inventory true-hold reservation subscribers (ADR 0063 §4 — BRD §6.5).
 	// Cross-module consumers of the Orders lifecycle keeping stock holds
@@ -417,7 +422,7 @@ func run(ctx context.Context, stdout *os.File) error {
 	cqrsHandlers = append(cqrsHandlers, platformsubscribers.Handlers(platformTenantRegistered)...)
 	cqrsHandlers = append(cqrsHandlers, taskssubscribers.Handlers(tasksCallLoggedSub, tasksLeadConvertedSub)...)
 	cqrsHandlers = append(cqrsHandlers, dispatchsubscribers.Handlers(dispatchOrderPacked, dispatchOrderCancelled)...)
-	cqrsHandlers = append(cqrsHandlers, orderssubscribers.Handlers(ordersAutoInvoiceSub, ordersConsignmentCreatedSub, ordersConsignmentDeliveredSub, ordersCancelCompensationSub)...)
+	cqrsHandlers = append(cqrsHandlers, orderssubscribers.Handlers(ordersAutoInvoiceSub, ordersConsignmentCreatedSub, ordersConsignmentDeliveredSub, ordersCancelCompensationSub, ordersPolicyChangedSub)...)
 	cqrsHandlers = append(cqrsHandlers, inventorysubscribers.Handlers(inventoryReserveSub, inventoryConsumeSub, inventoryReleaseSub)...)
 	cqrsHandlers = append(cqrsHandlers, notificationssubscribers.Handlers(notificationsLeadAssignedSub, notificationsWorkItemCreatedSub, notificationsWorkItemOverdueSub, notificationsOrderConfirmedSub)...)
 	for _, h := range cqrsHandlers {

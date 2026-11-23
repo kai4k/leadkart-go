@@ -597,6 +597,14 @@ type OrdersPayment struct {
 	RecordedByMembershipID pgtype.UUID
 }
 
+// Event-fed replica of the company commerce policy (ADR 0070). Upserted only when the event version is newer. No row = defaults at version 0. Tenant-scoped, FORCE RLS.
+type OrdersPolicyReplica struct {
+	TenantID  pgtype.UUID
+	Version   int64
+	Policy    []byte
+	UpdatedAt pgtype.Timestamptz
+}
+
 // Quotation aggregate per BRD §6.4. Revisions stored as JSONB; state machine draft → approved | rejected, superseded on revise-after-approve.
 type OrdersQuotation struct {
 	ID                     pgtype.UUID

@@ -16,12 +16,15 @@ import (
 // topic from the event alias (orders.order_packed.v1 → orders.events;
 // dispatch.consignment_note_created.v1 → dispatch.events; etc.), so this takes
 // no topic strings. autoInvoice consumes the module's own OrderPackedV1; the
-// two consignment subscribers are cross-module consumers of dispatch.events.
+// two consignment subscribers are cross-module consumers of dispatch.events;
+// policyChanged is the cross-module consumer of companysettings.events that
+// keeps the replica of the company commerce policy current (ADR 0070).
 func Handlers(
 	autoInvoice *AutoInvoiceSubscriber,
 	consignmentCreated *ConsignmentCreatedSubscriber,
 	consignmentDelivered *ConsignmentDeliveredSubscriber,
 	cancelCompensation *CancelCompensationSubscriber,
+	policyChanged *PolicyChangedSubscriber,
 ) []cqrs.EventHandler {
 	var handlers []cqrs.EventHandler
 	if autoInvoice != nil {
@@ -35,6 +38,9 @@ func Handlers(
 	}
 	if cancelCompensation != nil {
 		handlers = append(handlers, cqrs.NewEventHandler(HandlerCancelCompensation, cancelCompensation.Handle))
+	}
+	if policyChanged != nil {
+		handlers = append(handlers, cqrs.NewEventHandler(HandlerPolicyChanged, policyChanged.Handle))
 	}
 	return handlers
 }

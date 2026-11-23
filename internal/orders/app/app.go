@@ -42,4 +42,6 @@ type Queries struct {
 	GetQuotation        query.GetQuotationHandler
 	GetInvoiceByOrder   query.GetInvoiceByOrderHandler
 	ListPaymentsByOrder query.ListPaymentsByOrderHandler
+	// GetPolicy reads the replica of the company commerce policy (ADR 0070).
+	GetPolicy query.GetPolicyHandler
 }

@@ -611,6 +611,7 @@ func TestArch_AuditChainColumnsOnTenantTables(t *testing.T) {
 		// system at tenant registration and then by an actor; the actor of EVERY
 		// version is recorded in the append-only history. gst_rates carries
 		// created_by_membership_id directly and is NOT exempt.
+		"orders.policy_replica":           "event-fed projection of the company policy (ADR 0070); no human author, the actor is in companysettings.policy_history",
 		"companysettings.commerce_policy": "versioned singleton per tenant (carries updated_by_membership_id; every version's actor is in policy_history)",
 		"companysettings.policy_history":  "append-only version ledger (carries actor_membership_id) per ADR 0070",
 		"orders.invoice_number_sequences": "gapless counter infra — no human author; (tenant, fy, kind) PK (ADR 0063 §3)",

@@ -1133,6 +1133,7 @@ func buildOrdersApp(pool *pgxpool.Pool, now func() time.Time) ordersapp.Applicat
 			GetQuotation:        ordersquery.NewGetQuotationHandler(quotations),
 			GetInvoiceByOrder:   ordersquery.NewGetInvoiceByOrderHandler(invoices),
 			ListPaymentsByOrder: ordersquery.NewListPaymentsByOrderHandler(payments),
+			GetPolicy:           ordersquery.NewGetPolicyHandler(ordersadapters.NewPolicyReplicaRepository(pool, tx)),
 		},
 	}
 }
