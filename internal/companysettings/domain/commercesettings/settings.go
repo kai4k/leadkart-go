@@ -194,7 +194,7 @@ func (s *Settings) Change(in ChangeInput) (ChangeResult, error) {
 	if in.ExpectedVersion != s.version {
 		return ChangeResult{}, &VersionConflictError{Expected: in.ExpectedVersion, Current: s.version}
 	}
-	res, errs := commercepolicy.Apply(s.policy, in.Changes)
+	res, errs := commercepolicy.Apply(s.policy, in.Changes, in.Now)
 	if errs != nil {
 		return ChangeResult{}, errs.Err()
 	}
@@ -370,7 +370,7 @@ func checkReason(reason string, requiredForTax bool) (string, error) {
 }
 
 // CodeInFuture is the refusal of a confirmation date later than today.
-const CodeInFuture = "in_future"
+const CodeInFuture = commercepolicy.CodeInFuture
 
 // confirmedOnCode returns the code a confirmation date breaks, or "". A date
 // after tomorrow (UTC) is in the future whatever the company's time zone.

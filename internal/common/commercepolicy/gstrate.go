@@ -39,6 +39,7 @@ const (
 	CodeOutOfRange        = "out_of_range"
 	CodeInvalidFormat     = "invalid_format"
 	CodeDuplicate         = "duplicate"
+	CodeInFuture          = "in_future"
 )
 
 // ErrInvalidFields is the sentinel for refused fields; the field codes are in a

@@ -224,17 +224,30 @@ func Encode(p Policy) ([]byte, error) {
 	return b, nil
 }
 
-// Decode reads a stored or received policy. It is strict: an unknown key or an
-// invalid value is an error, not something to paper over.
+// Decode reads a stored or received policy onto the defaults: a key the stored
+// document does not have (it predates the setting) takes its default, so adding
+// a setting never needs every stored row rewritten. It is strict about unknown
+// keys and validates the result: use it for the LIVE policy.
 func Decode(raw []byte) (Policy, error) {
-	var p Policy
+	p, err := DecodeStored(raw)
+	if err != nil {
+		return Policy{}, err
+	}
+	if errs := Validate(p); len(errs) > 0 {
+		return Policy{}, fmt.Errorf("commercepolicy: decode: invalid policy: %w", errs.Err())
+	}
+	return p, nil
+}
+
+// DecodeStored reads a policy document as it was stored, onto the defaults and
+// WITHOUT validating it: history rows are immutable and must stay readable after
+// a later release tightens a bound.
+func DecodeStored(raw []byte) (Policy, error) {
+	p := Default()
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&p); err != nil {
 		return Policy{}, fmt.Errorf("commercepolicy: decode: %w", err)
-	}
-	if errs := Validate(p); len(errs) > 0 {
-		return Policy{}, fmt.Errorf("commercepolicy: decode: invalid policy: %w", errs.Err())
 	}
 	return p, nil
 }

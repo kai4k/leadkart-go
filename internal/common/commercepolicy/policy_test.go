@@ -63,8 +63,10 @@ func TestEncodeDecode_RoundTripAndStrict(t *testing.T) {
 	if _, err := commercepolicy.Decode([]byte(`{"expiry":{"stop_months_before":1,"surprise":2}}`)); err == nil {
 		t.Fatal("an unknown key must be refused")
 	}
-	if _, err := commercepolicy.Decode([]byte(`{}`)); err == nil {
-		t.Fatal("an empty policy is not a valid policy")
+	// A document with no keys takes every default (review M3): a row stored before a
+	// setting existed must keep reading.
+	if empty, err := commercepolicy.Decode([]byte(`{}`)); err != nil || !cmp.Equal(empty, commercepolicy.Default()) {
+		t.Fatalf("an empty document must decode onto the defaults: %v", err)
 	}
 }
 
@@ -87,7 +89,7 @@ func TestApply_ExpiryRange(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, errs := commercepolicy.Apply(commercepolicy.Default(), changes(t, map[string]any{"expiry.stop_months_before": tc.v}))
+			_, errs := applyAt(commercepolicy.Default(), changes(t, map[string]any{"expiry.stop_months_before": tc.v}))
 			got := ""
 			if c := errs["expiry.stop_months_before"]; len(c) > 0 {
 				got = c[0]
@@ -102,7 +104,7 @@ func TestApply_ExpiryRange(t *testing.T) {
 func TestApply_ChangedKeysAndNoOp(t *testing.T) {
 	t.Parallel()
 	d := commercepolicy.Default()
-	res, errs := commercepolicy.Apply(d, changes(t, map[string]any{
+	res, errs := applyAt(d, changes(t, map[string]any{
 		"expiry.stop_months_before": 3,
 		"pricing.discount_enabled":  true, // already true: not a change
 		"eway.enforcement":          "block",
@@ -117,7 +119,7 @@ func TestApply_ChangedKeysAndNoOp(t *testing.T) {
 	if res.Policy.Expiry.StopMonthsBefore != 3 || d.Expiry.StopMonthsBefore != 1 {
 		t.Fatal("Apply must change the copy, never the input")
 	}
-	again, errs := commercepolicy.Apply(res.Policy, changes(t, map[string]any{"expiry.stop_months_before": 3}))
+	again, errs := applyAt(res.Policy, changes(t, map[string]any{"expiry.stop_months_before": 3}))
 	if errs != nil || len(again.Changed) != 0 {
 		t.Fatalf("re-applying the same value must be a no-op: %v %v", again.Changed, errs)
 	}
@@ -125,7 +127,7 @@ func TestApply_ChangedKeysAndNoOp(t *testing.T) {
 
 func TestApply_NothingHalfApplied(t *testing.T) {
 	t.Parallel()
-	res, errs := commercepolicy.Apply(commercepolicy.Default(), changes(t, map[string]any{
+	res, errs := applyAt(commercepolicy.Default(), changes(t, map[string]any{
 		"expiry.stop_months_before": 2,
 		"eway.enforcement":          "maybe",
 	}))
@@ -139,7 +141,7 @@ func TestApply_NothingHalfApplied(t *testing.T) {
 
 func TestApply_UnknownAndManagedElsewhere(t *testing.T) {
 	t.Parallel()
-	_, errs := commercepolicy.Apply(commercepolicy.Default(), changes(t, map[string]any{
+	_, errs := applyAt(commercepolicy.Default(), changes(t, map[string]any{
 		"expiry.grace_days": 3,
 		"tax.gst_rates":     []any{},
 	}))
@@ -153,7 +155,7 @@ func TestApply_UnknownAndManagedElsewhere(t *testing.T) {
 
 func TestApply_WarningDays(t *testing.T) {
 	t.Parallel()
-	res, errs := commercepolicy.Apply(commercepolicy.Default(), changes(t, map[string]any{"expiry.warning_days": []int{30, 365, 60}}))
+	res, errs := applyAt(commercepolicy.Default(), changes(t, map[string]any{"expiry.warning_days": []int{30, 365, 60}}))
 	if errs != nil {
 		t.Fatal(errs)
 	}
@@ -166,12 +168,12 @@ func TestApply_WarningDays(t *testing.T) {
 		"over two yrs": {731},
 		"duplicate":    {30, 30},
 	} {
-		_, errs := commercepolicy.Apply(commercepolicy.Default(), changes(t, map[string]any{"expiry.warning_days": v}))
+		_, errs := applyAt(commercepolicy.Default(), changes(t, map[string]any{"expiry.warning_days": v}))
 		if len(errs["expiry.warning_days"]) == 0 {
 			t.Errorf("%s must be refused", name)
 		}
 	}
-	if _, errs := commercepolicy.Apply(commercepolicy.Default(), changes(t, map[string]any{"expiry.warning_days": []int{}})); errs != nil {
+	if _, errs := applyAt(commercepolicy.Default(), changes(t, map[string]any{"expiry.warning_days": []int{}})); errs != nil {
 		t.Errorf("an empty list switches tiered warnings off: %v", errs)
 	}
 }
@@ -179,16 +181,16 @@ func TestApply_WarningDays(t *testing.T) {
 func TestApply_ShortageChoices(t *testing.T) {
 	t.Parallel()
 	d := commercepolicy.Default()
-	if _, errs := commercepolicy.Apply(d, changes(t, map[string]any{"fulfilment.shortage_allowed": []string{}})); len(errs["fulfilment.shortage_allowed"]) == 0 {
+	if _, errs := applyAt(d, changes(t, map[string]any{"fulfilment.shortage_allowed": []string{}})); len(errs["fulfilment.shortage_allowed"]) == 0 {
 		t.Error("empty allowed set must be refused")
 	}
 	// Removing the default from the allowed set is refused on the default key.
-	_, errs := commercepolicy.Apply(d, changes(t, map[string]any{"fulfilment.shortage_allowed": []string{"refuse"}}))
+	_, errs := applyAt(d, changes(t, map[string]any{"fulfilment.shortage_allowed": []string{"refuse"}}))
 	if errs["fulfilment.shortage_default"][0] != commercepolicy.CodeNotInAllowed {
 		t.Errorf("default outside allowed: %v", errs)
 	}
 	// Both together is fine, and stored in canonical order.
-	res, errs := commercepolicy.Apply(d, changes(t, map[string]any{
+	res, errs := applyAt(d, changes(t, map[string]any{
 		"fulfilment.shortage_allowed": []string{"partial_reduce", "refuse"},
 		"fulfilment.shortage_default": "refuse",
 	}))
@@ -198,7 +200,7 @@ func TestApply_ShortageChoices(t *testing.T) {
 	if !slices.Equal(res.Policy.Fulfilment.ShortageAllowed, []string{"refuse", "partial_reduce"}) {
 		t.Fatalf("allowed = %v", res.Policy.Fulfilment.ShortageAllowed)
 	}
-	if _, errs := commercepolicy.Apply(d, changes(t, map[string]any{"fulfilment.shortage_allowed": []string{"hold", "hold"}})); len(errs) == 0 {
+	if _, errs := applyAt(d, changes(t, map[string]any{"fulfilment.shortage_allowed": []string{"hold", "hold"}})); len(errs) == 0 {
 		t.Error("duplicate option must be refused")
 	}
 }
@@ -212,18 +214,18 @@ func TestApply_AdvanceModeAndValue(t *testing.T) {
 		key  string
 		code string
 	}{
-		{"percent needs a value", map[string]any{"payment.advance_mode": "percent"}, "payment.advance_value", commercepolicy.CodeOutOfRange},
+		{"percent needs a value", map[string]any{"payment.advance_mode": "percent"}, "payment.advance_value", commercepolicy.CodeValueRequired},
 		{"percent over 100", map[string]any{"payment.advance_mode": "percent", "payment.advance_value": 10001}, "payment.advance_value", commercepolicy.CodeOutOfRange},
 		{"fixed needs a value", map[string]any{"payment.advance_mode": "fixed"}, "payment.advance_value", commercepolicy.CodeValueRequired},
 		{"any amount takes no value", map[string]any{"payment.advance_value": 500}, "payment.advance_value", commercepolicy.CodeValueNotAllowed},
 	}
 	for _, tc := range cases {
-		_, errs := commercepolicy.Apply(d, changes(t, tc.kv))
+		_, errs := applyAt(d, changes(t, tc.kv))
 		if len(errs[tc.key]) == 0 || errs[tc.key][0] != tc.code {
 			t.Errorf("%s: errs = %v, want %s on %s", tc.name, errs, tc.code, tc.key)
 		}
 	}
-	res, errs := commercepolicy.Apply(d, changes(t, map[string]any{"payment.advance_mode": "percent", "payment.advance_value": 2500}))
+	res, errs := applyAt(d, changes(t, map[string]any{"payment.advance_mode": "percent", "payment.advance_value": 2500}))
 	if errs != nil || res.Policy.Payment.AdvanceValue != 2500 {
 		t.Fatalf("25%% advance: %v %v", res.Policy.Payment, errs)
 	}
@@ -233,19 +235,19 @@ func TestApply_PrefixAndAnnualReturn(t *testing.T) {
 	t.Parallel()
 	d := commercepolicy.Default()
 	for _, bad := range []string{"", "inv", "INVOI", "IN-V", "I N"} {
-		if _, errs := commercepolicy.Apply(d, changes(t, map[string]any{"doc.invoice_prefix": bad})); len(errs["doc.invoice_prefix"]) == 0 {
+		if _, errs := applyAt(d, changes(t, map[string]any{"doc.invoice_prefix": bad})); len(errs["doc.invoice_prefix"]) == 0 {
 			t.Errorf("prefix %q must be refused", bad)
 		}
 	}
-	if _, errs := commercepolicy.Apply(d, changes(t, map[string]any{"doc.invoice_prefix": "A1B2"})); errs != nil {
+	if _, errs := applyAt(d, changes(t, map[string]any{"doc.invoice_prefix": "A1B2"})); errs != nil {
 		t.Errorf("A1B2 is a valid prefix: %v", errs)
 	}
 	ok := map[string]string{"2025-26": "2026-09-30"}
-	if res, errs := commercepolicy.Apply(d, changes(t, map[string]any{"tax.annual_return_filed": ok})); errs != nil || res.Policy.Tax.AnnualReturnFiled["2025-26"] != "2026-09-30" {
+	if res, errs := applyAt(d, changes(t, map[string]any{"tax.annual_return_filed": ok})); errs != nil || res.Policy.Tax.AnnualReturnFiled["2025-26"] != "2026-09-30" {
 		t.Errorf("valid filing: %v", errs)
 	}
 	for _, bad := range []map[string]string{{"2025-27": "2026-09-30"}, {"2025-26": "30/09/2026"}, {"FY26": "2026-09-30"}} {
-		if _, errs := commercepolicy.Apply(d, changes(t, map[string]any{"tax.annual_return_filed": bad})); len(errs["tax.annual_return_filed"]) == 0 {
+		if _, errs := applyAt(d, changes(t, map[string]any{"tax.annual_return_filed": bad})); len(errs["tax.annual_return_filed"]) == 0 {
 			t.Errorf("%v must be refused", bad)
 		}
 	}

@@ -68,7 +68,7 @@ func (r *SettingsHistoryReader) ListHistory(ctx context.Context, tenantID tenant
 	}
 	items := make([]query.HistoryEntry, 0, len(rows))
 	for _, row := range rows {
-		pol, derr := commercepolicy.Decode(row.Policy)
+		pol, derr := commercepolicy.DecodeStored(row.Policy)
 		if derr != nil {
 			return pagination.Page[query.HistoryEntry]{}, fmt.Errorf("settings history: stored policy: %w", derr)
 		}

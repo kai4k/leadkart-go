@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Kind is the value shape of a setting.
@@ -151,7 +152,7 @@ type Result struct {
 // Apply sets every key in changes on a copy of p and validates the whole
 // result. It returns the new policy and the changed keys, or field errors keyed
 // by setting key. Nothing is half-applied.
-func Apply(p Policy, changes Changes) (Result, FieldErrors) {
+func Apply(p Policy, changes Changes, now time.Time) (Result, FieldErrors) {
 	errs := FieldErrors{}
 	next := p.Clone()
 	keys := make([]string, 0, len(changes))
@@ -178,6 +179,23 @@ func Apply(p Policy, changes Changes) (Result, FieldErrors) {
 		after := reflect.ValueOf(s.ptr(&next)).Elem().Interface()
 		if !reflect.DeepEqual(before, after) {
 			changed = append(changed, k)
+		}
+	}
+	if len(errs) > 0 {
+		return Result{}, errs
+	}
+	// The same integer is basis points under percent and paise under fixed, so a
+	// change of mode must bring its own value: never re-read the stored one.
+	if next.Payment.AdvanceMode != p.Payment.AdvanceMode &&
+		(next.Payment.AdvanceMode == AdvancePercent || next.Payment.AdvanceMode == AdvanceFixed) {
+		if _, sent := changes["payment.advance_value"]; !sent {
+			errs.add("payment.advance_value", CodeValueRequired)
+		}
+	}
+	for fy, date := range next.Tax.AnnualReturnFiled {
+		if d, err := time.Parse(DateLayout, date); err == nil && p.Tax.AnnualReturnFiled[fy] != date &&
+			d.After(now.UTC().AddDate(0, 0, 1)) {
+			errs.add(AnnualReturnKey, CodeInFuture)
 		}
 	}
 	if len(errs) > 0 {
@@ -233,6 +251,12 @@ func Validate(p Policy) FieldErrors {
 		if c.Payment.AdvanceValue != 0 {
 			errs.add("payment.advance_value", CodeValueNotAllowed)
 		}
+	}
+	if c.Doc.InvoicePrefix == c.Doc.CreditNotePrefix {
+		// The two series count separately: one prefix would let one number be both an
+		// invoice and a credit note in a financial year.
+		errs.add("doc.invoice_prefix", CodeDuplicate)
+		errs.add("doc.credit_note_prefix", CodeDuplicate)
 	}
 	for _, code := range validateGSTRates(c.Tax.GSTRates) {
 		errs.add(ManagedElsewhereKey, code)
@@ -323,9 +347,16 @@ func (s Setting) check(v any) string {
 	case []int:
 		return s.checkIntList(x)
 	case map[string]string:
+		if len(x) > MaxAnnualReturnEntries {
+			return CodeTooMany
+		}
 		for fy, date := range x {
 			if !validFY(fy) || CheckDate(date) != "" {
 				return CodeInvalidFormat
+			}
+			// A return cannot be filed before the year it closes has ended.
+			if d, _ := time.Parse(DateLayout, date); d.Before(fyEnd(fy)) {
+				return CodeOutOfRange
 			}
 		}
 	}
@@ -384,6 +415,21 @@ func rangeCode(v, lo, hi int64) string {
 		return CodeOutOfRange
 	}
 	return ""
+}
+
+// MaxAnnualReturnEntries caps the filing map: it is copied into every history row
+// and event and decoded on every replica read.
+const MaxAnnualReturnEntries = 20
+
+// AnnualReturnKey is the registry key of the filing dates.
+const AnnualReturnKey = "tax.annual_return_filed"
+
+// fyEnd is the last day of a financial year "YYYY-YY": 31 March of the closing
+// year (the GST financial year these filing dates belong to).
+func fyEnd(fy string) time.Time {
+	m := fyRE.FindStringSubmatch(fy)
+	start, _ := strconv.Atoi(m[1])
+	return time.Date(start+1, time.March, 31, 0, 0, 0, 0, time.UTC)
 }
 
 // validFY reports whether s is a financial year "YYYY-YY" whose second part is
