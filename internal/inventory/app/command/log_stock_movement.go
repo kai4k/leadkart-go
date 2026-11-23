@@ -9,6 +9,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+	"github.com/leadkart/leadkart-go/internal/inventory/app/sellability"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
 )
@@ -34,8 +35,12 @@ type LogStockMovementCommand struct {
 // LogStockMovementResult carries the new MovementID and the batch's
 // post-mutation quantity_on_hand (for SPA optimistic-update reconciliation).
 type LogStockMovementResult struct {
-	MovementID          stockmovement.ID
-	QuantityOnHandAfter int64
+	// Warnings names non-fatal conditions: see [WarningPastSellableCutoff].
+	Warnings []string
+	// QuantityQuarantinedAfter is the batch quarantined bucket after the movement.
+	QuantityQuarantinedAfter int64
+	MovementID               stockmovement.ID
+	QuantityOnHandAfter      int64
 }
 
 // LogStockMovementHandler is the slice's central orchestration: a
@@ -55,6 +60,7 @@ type LogStockMovementHandler struct {
 	uow           pg.UnitOfWork
 	batches       batch.Repository
 	movements     stockmovement.Repository
+	window        sellability.Resolver
 	now           func() time.Time
 	newMovementID func() stockmovement.ID
 }
@@ -62,7 +68,7 @@ type LogStockMovementHandler struct {
 // NewLogStockMovementHandler wires the handler. now is the injected clock
 // (nil → time.Now). newMovementID is the StockMovement-ID factory required by
 // TestArch_HandlersInjectIDFactory; tests inject a deterministic one.
-func NewLogStockMovementHandler(uow pg.UnitOfWork, batches batch.Repository, movements stockmovement.Repository, now func() time.Time, newMovementID func() stockmovement.ID) LogStockMovementHandler {
+func NewLogStockMovementHandler(uow pg.UnitOfWork, batches batch.Repository, movements stockmovement.Repository, window sellability.Resolver, now func() time.Time, newMovementID func() stockmovement.ID) LogStockMovementHandler {
 	if newMovementID == nil {
 		panic("command: NewLogStockMovementHandler newMovementID required")
 	}
@@ -70,7 +76,7 @@ func NewLogStockMovementHandler(uow pg.UnitOfWork, batches batch.Repository, mov
 		now = time.Now
 	}
 	return LogStockMovementHandler{
-		uow: uow, batches: batches, movements: movements,
+		uow: uow, batches: batches, movements: movements, window: window,
 		now: now, newMovementID: newMovementID,
 	}
 }
@@ -91,7 +97,11 @@ func (h LogStockMovementHandler) Handle(ctx context.Context, cmd LogStockMovemen
 	if magnitude < 0 {
 		return LogStockMovementResult{}, fmt.Errorf("%w: quantity must be a positive magnitude (got %d)", batch.ErrInvalid, magnitude)
 	}
-	return h.persist(ctx, cmd, magnitude, h.now())
+	w, err := h.window.Resolve(ctx, cmd.TenantID)
+	if err != nil {
+		return LogStockMovementResult{}, fmt.Errorf("log stock movement: %w", err)
+	}
+	return h.persist(ctx, cmd, magnitude, h.now(), w)
 }
 
 // persist runs the multi-aggregate single-tx write. Batch UpdateByID acquires
@@ -99,13 +109,17 @@ func (h LogStockMovementHandler) Handle(ctx context.Context, cmd LogStockMovemen
 //
 // now is captured once in Handle so Batch.ApplyMovement's updatedAt and
 // StockMovement.occurredAt match exactly in audit/ledger queries.
-func (h LogStockMovementHandler) persist(ctx context.Context, cmd LogStockMovementCommand, magnitude int64, now time.Time) (LogStockMovementResult, error) {
+func (h LogStockMovementHandler) persist(ctx context.Context, cmd LogStockMovementCommand, magnitude int64, now time.Time, w sellability.Window) (LogStockMovementResult, error) {
 	var result LogStockMovementResult
+	var warnings []string
 	err := h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
 		var loaded *batch.Batch
 		updateErr := h.batches.UpdateByID(ctx, cmd.TenantID, cmd.BatchID, func(b *batch.Batch) (bool, error) {
-			if err := b.ApplyMovement(cmd.Type, magnitude, now); err != nil {
+			if err := b.ApplyMovement(cmd.Type, magnitude, now, w.Today); err != nil {
 				return false, err
+			}
+			if cmd.Type == batch.MovementInbound && !w.IsSellable(b.ExpiryDate()) {
+				warnings = []string{WarningPastSellableCutoff}
 			}
 			loaded = b
 			// Persist always: ApplyMovement bumps version on every
@@ -136,8 +150,10 @@ func (h LogStockMovementHandler) persist(ctx context.Context, cmd LogStockMoveme
 			return fmt.Errorf("log stock movement: persist movement: %w", err)
 		}
 		result = LogStockMovementResult{
-			MovementID:          m.ID(),
-			QuantityOnHandAfter: loaded.QuantityOnHand(),
+			MovementID:               m.ID(),
+			QuantityOnHandAfter:      loaded.QuantityOnHand(),
+			QuantityQuarantinedAfter: loaded.QuantityQuarantined(),
+			Warnings:                 warnings,
 		}
 		return nil
 	})
@@ -147,13 +163,13 @@ func (h LogStockMovementHandler) persist(ctx context.Context, cmd LogStockMoveme
 	return result, nil
 }
 
-// signedQuantityForType applies the ledger sign convention: Outbound negates,
+// signedQuantityForType applies the ledger sign convention: Outbound and WriteOff negate,
 // everything else keeps the positive magnitude.
 //
 // Adjustment direction (count-up vs shrinkage) is not disambiguated in Slice 1;
 // add a direction enum and branch here when product asks (ADR 0061 §"Deferred").
 func signedQuantityForType(mt batch.MovementType, magnitude int64) int64 {
-	if mt == batch.MovementOutbound {
+	if mt == batch.MovementOutbound || mt == batch.MovementWriteOff {
 		return -magnitude
 	}
 	return magnitude

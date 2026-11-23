@@ -10,6 +10,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	expiryPkg "github.com/leadkart/leadkart-go/internal/common/expiry"
 )
 
 // invBatchCount counts a product's batches, expired ones included.
@@ -90,7 +92,7 @@ func TestE2E_Inventory_AddBatchWithInitialStock(t *testing.T) {
 
 	// Stock cannot be received into an expired batch (the existing inbound rule):
 	// the whole request is refused, so the batch does not half-exist.
-	resp = invAddBatch(t, f, tok, productID, "EXPIRED", time.Now().UTC().AddDate(0, 0, -1), map[string]any{"initial_quantity": 5})
+	resp = invAddBatch(t, f, tok, productID, "EXPIRED", expiryPkg.MonthEnd(time.Now().UTC().Year(), time.Now().UTC().Month()-1), map[string]any{"initial_quantity": 5})
 	if resp.status != http.StatusConflict || errorCode(t, resp.body) != "batch_expired" {
 		t.Fatalf("expired with stock: status %d body %s; want 409 batch_expired", resp.status, resp.body)
 	}

@@ -55,27 +55,37 @@ const getProductStockByID = `-- name: GetProductStockByID :one
 SELECT p.id, p.tenant_id, p.sku, p.name, p.dosage_form, p.pack_size, p.hsn_code,
        p.gst_rate_bps, p.manufacturer, p.is_active, p.created_at, p.updated_at,
        p.reorder_level, p.expiry_alert_threshold_days, p.product_category,
-       COALESCE(s.stock_on_hand, 0)::bigint  AS stock_on_hand,
-       COALESCE(s.stock_reserved, 0)::bigint AS stock_reserved,
-       s.earliest_expiry::date               AS earliest_expiry
+       COALESCE(s.stock_on_hand, 0)::bigint     AS stock_on_hand,
+       COALESCE(s.stock_reserved, 0)::bigint    AS stock_reserved,
+       COALESCE(s.stock_quarantined, 0)::bigint AS stock_quarantined,
+       COALESCE(s.stock_available, 0)::bigint   AS stock_available,
+       COALESCE(s.stock_unsellable, 0)::bigint  AS stock_unsellable,
+       s.earliest_expiry::date                  AS earliest_expiry
 FROM   inventory.products p
 LEFT   JOIN LATERAL (
-           SELECT SUM(b.quantity_on_hand)  AS stock_on_hand,
-                  SUM(b.quantity_reserved) AS stock_reserved,
-                  MIN(b.expiry_date) FILTER (WHERE b.quantity_on_hand > 0) AS earliest_expiry
+           SELECT SUM(b.quantity_on_hand)    AS stock_on_hand,
+                  SUM(b.quantity_reserved)   AS stock_reserved,
+                  SUM(b.quantity_quarantined) AS stock_quarantined,
+                  SUM(CASE WHEN b.expiry_date >= $1::date
+                           THEN b.quantity_on_hand - b.quantity_reserved - b.quantity_quarantined ELSE 0 END) AS stock_available,
+                  SUM(CASE WHEN b.expiry_date <  $1::date
+                           THEN b.quantity_on_hand - b.quantity_reserved - b.quantity_quarantined ELSE 0 END) AS stock_unsellable,
+                  SUM(CASE WHEN b.expiry_date >= $1::date
+                           THEN b.quantity_on_hand - b.quantity_quarantined ELSE 0 END) AS stock_sellable,
+                  MIN(b.expiry_date) FILTER (WHERE b.expiry_date >= $1::date
+                                              AND  b.quantity_on_hand - b.quantity_quarantined > 0) AS earliest_expiry
            FROM   inventory.batches b
            WHERE  b.product_id = p.id
            AND    b.tenant_id  = p.tenant_id
            AND    NOT b.is_deleted
-           AND    b.expiry_date > $1::date
        ) s ON true
 WHERE  p.id = $2
 AND    NOT p.is_deleted
 `
 
 type GetProductStockByIDParams struct {
-	Today pgtype.Date
-	ID    pgtype.UUID
+	MinSellable pgtype.Date
+	ID          pgtype.UUID
 }
 
 type GetProductStockByIDRow struct {
@@ -96,17 +106,21 @@ type GetProductStockByIDRow struct {
 	ProductCategory          string
 	StockOnHand              int64
 	StockReserved            int64
+	StockQuarantined         int64
+	StockAvailable           int64
+	StockUnsellable          int64
 	EarliestExpiry           pgtype.Date
 }
 
-// Read model for the product detail: the product row plus its stock totals,
-// in ONE statement (no per-product follow-up read). The totals count LIVE
-// batches that are NOT expired (expiry_date > today, the rule the FEFO picker
-// and the reorder scan use): units in an expired batch are not stock.
-// earliest_expiry is the soonest expiry among those batches that hold stock;
-// NULL when none does. RLS scopes both tables to the caller's tenant.
+// Read model for the product detail: the product row plus its stock buckets,
+// in ONE statement (no per-product follow-up read). min_sellable is the ONE
+// expiry bound (common/expiry.MinSellableExpiry): a batch is sellable exactly
+// when expiry_date >= min_sellable. The buckets sum to on-hand:
+// reserved + available + unsellable + quarantined. earliest_expiry is the
+// soonest expiry among SELLABLE batches that hold stock; NULL when none does.
+// RLS scopes both tables to the caller's tenant.
 func (q *Queries) GetProductStockByID(ctx context.Context, arg GetProductStockByIDParams) (GetProductStockByIDRow, error) {
-	row := q.db.QueryRow(ctx, getProductStockByID, arg.Today, arg.ID)
+	row := q.db.QueryRow(ctx, getProductStockByID, arg.MinSellable, arg.ID)
 	var i GetProductStockByIDRow
 	err := row.Scan(
 		&i.ID,
@@ -126,6 +140,9 @@ func (q *Queries) GetProductStockByID(ctx context.Context, arg GetProductStockBy
 		&i.ProductCategory,
 		&i.StockOnHand,
 		&i.StockReserved,
+		&i.StockQuarantined,
+		&i.StockAvailable,
+		&i.StockUnsellable,
 		&i.EarliestExpiry,
 	)
 	return i, err
@@ -191,19 +208,29 @@ const listProductStockPage = `-- name: ListProductStockPage :many
 SELECT p.id, p.tenant_id, p.sku, p.name, p.dosage_form, p.pack_size, p.hsn_code,
        p.gst_rate_bps, p.manufacturer, p.is_active, p.created_at, p.updated_at,
        p.reorder_level, p.expiry_alert_threshold_days, p.product_category,
-       COALESCE(s.stock_on_hand, 0)::bigint  AS stock_on_hand,
-       COALESCE(s.stock_reserved, 0)::bigint AS stock_reserved,
-       s.earliest_expiry::date               AS earliest_expiry
+       COALESCE(s.stock_on_hand, 0)::bigint     AS stock_on_hand,
+       COALESCE(s.stock_reserved, 0)::bigint    AS stock_reserved,
+       COALESCE(s.stock_quarantined, 0)::bigint AS stock_quarantined,
+       COALESCE(s.stock_available, 0)::bigint   AS stock_available,
+       COALESCE(s.stock_unsellable, 0)::bigint  AS stock_unsellable,
+       s.earliest_expiry::date                  AS earliest_expiry
 FROM   inventory.products p
 LEFT   JOIN LATERAL (
-           SELECT SUM(b.quantity_on_hand)  AS stock_on_hand,
-                  SUM(b.quantity_reserved) AS stock_reserved,
-                  MIN(b.expiry_date) FILTER (WHERE b.quantity_on_hand > 0) AS earliest_expiry
+           SELECT SUM(b.quantity_on_hand)    AS stock_on_hand,
+                  SUM(b.quantity_reserved)   AS stock_reserved,
+                  SUM(b.quantity_quarantined) AS stock_quarantined,
+                  SUM(CASE WHEN b.expiry_date >= $1::date
+                           THEN b.quantity_on_hand - b.quantity_reserved - b.quantity_quarantined ELSE 0 END) AS stock_available,
+                  SUM(CASE WHEN b.expiry_date <  $1::date
+                           THEN b.quantity_on_hand - b.quantity_reserved - b.quantity_quarantined ELSE 0 END) AS stock_unsellable,
+                  SUM(CASE WHEN b.expiry_date >= $1::date
+                           THEN b.quantity_on_hand - b.quantity_quarantined ELSE 0 END) AS stock_sellable,
+                  MIN(b.expiry_date) FILTER (WHERE b.expiry_date >= $1::date
+                                              AND  b.quantity_on_hand - b.quantity_quarantined > 0) AS earliest_expiry
            FROM   inventory.batches b
            WHERE  b.product_id = p.id
            AND    b.tenant_id  = p.tenant_id
            AND    NOT b.is_deleted
-           AND    b.expiry_date > $1::date
        ) s ON true
 WHERE  p.tenant_id = $2
 AND    NOT p.is_deleted
@@ -217,30 +244,31 @@ AND    ($6::text = '' OR lower(p.dosage_form) = lower($6))
 AND    ($7::text = '' OR lower(p.manufacturer) = lower($7))
 AND    (
         NOT $8::boolean
-        OR (p.reorder_level > 0 AND COALESCE(s.stock_on_hand, 0) < p.reorder_level)
+        OR (p.reorder_level > 0 AND COALESCE(s.stock_sellable, 0) < p.reorder_level)
        )
 AND    (
-        $9::int < 0
-        OR s.earliest_expiry <= $1::date + $9::int
+        NOT $9::boolean
+        OR s.earliest_expiry <= $10::date
        )
-AND    (p.created_at, p.id) < ($10::timestamptz, $11::uuid)
+AND    (p.created_at, p.id) < ($11::timestamptz, $12::uuid)
 ORDER  BY p.created_at DESC, p.id DESC
-LIMIT  $12
+LIMIT  $13
 `
 
 type ListProductStockPageParams struct {
-	Today              pgtype.Date
-	TenantID           pgtype.UUID
-	ActiveOnly         bool
-	Search             string
-	Category           string
-	DosageForm         string
-	Manufacturer       string
-	LowStock           bool
-	ExpiringWithinDays int32
-	CursorCreatedAt    pgtype.Timestamptz
-	CursorID           pgtype.UUID
-	Limit              int32
+	MinSellable     pgtype.Date
+	TenantID        pgtype.UUID
+	ActiveOnly      bool
+	Search          string
+	Category        string
+	DosageForm      string
+	Manufacturer    string
+	LowStock        bool
+	ExpiringFilter  bool
+	ExpiringUpper   pgtype.Date
+	CursorCreatedAt pgtype.Timestamptz
+	CursorID        pgtype.UUID
+	Limit           int32
 }
 
 type ListProductStockPageRow struct {
@@ -261,6 +289,9 @@ type ListProductStockPageRow struct {
 	ProductCategory          string
 	StockOnHand              int64
 	StockReserved            int64
+	StockQuarantined         int64
+	StockAvailable           int64
+	StockUnsellable          int64
 	EarliestExpiry           pgtype.Date
 }
 
@@ -276,13 +307,19 @@ type ListProductStockPageRow struct {
 //	category             ''   exact product_category, case-insensitive
 //	dosage_form          ''   exact, case-insensitive
 //	manufacturer         ''   exact, case-insensitive
-//	low_stock            false; true = reorder_level > 0 AND stock_on_hand <
+//	low_stock            false; true = reorder_level > 0 AND sellable stock <
 //	                     reorder_level (the reorder scan's rule)
-//	expiring_within_days -1;  n >= 0 = a live, in-stock, not-expired batch
-//	                     expires on or before today + n days
+//	expiring_filter      false; true = a sellable batch with stock whose LAST
+//	                     SELLABLE DAY is on or before the window's end:
+//	                     expiry_date <= expiring_upper
+//	                     (common/expiry.LatestExpiryBy(today + n days, N))
+//
+// min_sellable is the ONE expiry bound (common/expiry.MinSellableExpiry): a
+// batch is sellable exactly when expiry_date >= min_sellable. The buckets sum
+// to on-hand: reserved + available + unsellable + quarantined.
 func (q *Queries) ListProductStockPage(ctx context.Context, arg ListProductStockPageParams) ([]ListProductStockPageRow, error) {
 	rows, err := q.db.Query(ctx, listProductStockPage,
-		arg.Today,
+		arg.MinSellable,
 		arg.TenantID,
 		arg.ActiveOnly,
 		arg.Search,
@@ -290,7 +327,8 @@ func (q *Queries) ListProductStockPage(ctx context.Context, arg ListProductStock
 		arg.DosageForm,
 		arg.Manufacturer,
 		arg.LowStock,
-		arg.ExpiringWithinDays,
+		arg.ExpiringFilter,
+		arg.ExpiringUpper,
 		arg.CursorCreatedAt,
 		arg.CursorID,
 		arg.Limit,
@@ -320,6 +358,9 @@ func (q *Queries) ListProductStockPage(ctx context.Context, arg ListProductStock
 			&i.ProductCategory,
 			&i.StockOnHand,
 			&i.StockReserved,
+			&i.StockQuarantined,
+			&i.StockAvailable,
+			&i.StockUnsellable,
 			&i.EarliestExpiry,
 		); err != nil {
 			return nil, err

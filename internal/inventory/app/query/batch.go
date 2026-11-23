@@ -7,6 +7,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+	"github.com/leadkart/leadkart-go/internal/inventory/app/sellability"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
@@ -28,14 +29,25 @@ type BatchView struct {
 	PurchasePricePaise         int64
 	QuantityOnHand             int64
 	QuantityReserved           int64
-	Version                    int64
-	CreatedAt                  time.Time
-	UpdatedAt                  time.Time
+	QuantityQuarantined        int64
+	// QuantityAvailable and QuantityUnsellable are the batch free units split by
+	// whether the batch is still sellable under the company expiry rule.
+	QuantityAvailable  int64
+	QuantityUnsellable int64
+	// Sellable is the one expiry rule applied to this batch today; LastSellableDay
+	// is the last day it may be sold; PastPrintedExpiry is the legal limit.
+	Sellable          bool
+	LastSellableDay   time.Time
+	PastPrintedExpiry bool
+	Version           int64
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 // projectBatch maps the write aggregate to the flat read View — the
 // single source of truth for batch read projection.
-func projectBatch(b *batch.Batch) BatchView {
+func projectBatch(b *batch.Batch, w sellability.Window) BatchView {
+	bk := b.Buckets(w.IsSellable(b.ExpiryDate()))
 	return BatchView{
 		ID:                         b.ID().String(),
 		ProductID:                  b.ProductID().String(),
@@ -49,6 +61,12 @@ func projectBatch(b *batch.Batch) BatchView {
 		PurchasePricePaise:         b.PurchasePricePaise(),
 		QuantityOnHand:             b.QuantityOnHand(),
 		QuantityReserved:           b.QuantityReserved(),
+		QuantityQuarantined:        b.QuantityQuarantined(),
+		QuantityAvailable:          bk.Available,
+		QuantityUnsellable:         bk.Unsellable,
+		Sellable:                   w.IsSellable(b.ExpiryDate()),
+		LastSellableDay:            w.LastSellableDay(b.ExpiryDate()),
+		PastPrintedExpiry:          w.IsPastPrintedExpiry(b.ExpiryDate()),
 		Version:                    b.Version(),
 		CreatedAt:                  b.CreatedAt(),
 		UpdatedAt:                  b.UpdatedAt(),
@@ -68,20 +86,25 @@ type GetBatchQuery struct {
 // GetBatchHandler returns a Batch or batch.ErrNotFound.
 type GetBatchHandler struct {
 	batches batch.Repository
+	window  sellability.Resolver
 }
 
 // NewGetBatchHandler wires the handler.
-func NewGetBatchHandler(batches batch.Repository) GetBatchHandler {
-	return GetBatchHandler{batches: batches}
+func NewGetBatchHandler(batches batch.Repository, window sellability.Resolver) GetBatchHandler {
+	return GetBatchHandler{batches: batches, window: window}
 }
 
 // Handle returns the batch View or batch.ErrNotFound.
 func (h GetBatchHandler) Handle(ctx context.Context, q GetBatchQuery) (BatchView, error) {
+	w, err := h.window.Resolve(ctx, q.TenantID)
+	if err != nil {
+		return BatchView{}, fmt.Errorf("get batch: %w", err)
+	}
 	b, err := h.batches.GetByID(ctx, q.TenantID, q.BatchID)
 	if err != nil {
 		return BatchView{}, err
 	}
-	return projectBatch(b), nil
+	return projectBatch(b, w), nil
 }
 
 // ListBatchesByProductQuery — cursor-paginated batches list for a Product.
@@ -99,24 +122,30 @@ type ListBatchesByProductQuery struct {
 // ListBatchesByProductHandler returns a keyset-paginated page.
 type ListBatchesByProductHandler struct {
 	batches batch.Repository
+	window  sellability.Resolver
 }
 
 // NewListBatchesByProductHandler wires the handler.
-func NewListBatchesByProductHandler(batches batch.Repository) ListBatchesByProductHandler {
-	return ListBatchesByProductHandler{batches: batches}
+func NewListBatchesByProductHandler(batches batch.Repository, window sellability.Resolver) ListBatchesByProductHandler {
+	return ListBatchesByProductHandler{batches: batches, window: window}
 }
 
 // Handle returns the page of BatchView.
 func (h ListBatchesByProductHandler) Handle(ctx context.Context, q ListBatchesByProductQuery) (pagination.Page[BatchView], error) {
+	w, err := h.window.Resolve(ctx, q.TenantID)
+	if err != nil {
+		return pagination.Page[BatchView]{}, fmt.Errorf("list batches: %w", err)
+	}
 	page, err := h.batches.ListByProductPage(ctx, q.TenantID, q.ProductID, batch.ListFilter{
 		IncludeExpired: q.IncludeExpired,
+		MinSellable:    w.MinSellable,
 	}, q.Cursor, pagination.ClampPageSize(q.PageSize))
 	if err != nil {
 		return pagination.Page[BatchView]{}, fmt.Errorf("list batches: %w", err)
 	}
 	views := make([]BatchView, 0, len(page.Items))
 	for _, b := range page.Items {
-		views = append(views, projectBatch(b))
+		views = append(views, projectBatch(b, w))
 	}
 	return pagination.Page[BatchView]{
 		Items:      views,

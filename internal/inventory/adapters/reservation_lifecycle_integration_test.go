@@ -7,6 +7,7 @@ package adapters_test
 
 import (
 	"context"
+	"github.com/leadkart/leadkart-go/internal/inventory/app/sellability/sellabilitytest"
 	"testing"
 	"time"
 
@@ -53,7 +54,7 @@ func newReservationRig(t *testing.T) reservationRig {
 		batches: batches,
 		// movements satisfies both stockmovement.Repository (writer) and
 		// command.ReservationLedger (the outstanding-by-batch reads).
-		reserve: command.NewReserveOrderStockHandler(tx, batches, movements, movements, enq, clk, newMID),
+		reserve: command.NewReserveOrderStockHandler(tx, batches, movements, movements, enq, sellabilitytest.Resolver(fixedNow), clk, newMID),
 		release: command.NewReleaseOrderStockHandler(tx, batches, movements, movements, clk, newMID),
 		consume: command.NewConsumeOrderStockHandler(tx, batches, movements, movements, clk, newMID),
 	}
@@ -74,11 +75,11 @@ func (r reservationRig) seedStockedBatch(t *testing.T, onHand int64) (*product.P
 	b, err := batch.New(batch.ID(ids.NewV7().String()), p.ID(), r.tid, r.actor,
 		batch.Spec{BatchNumber: "LOT-" + ids.NewV7().String()[:8],
 			ManufactureDate:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-			ExpiryDate:       time.Date(2028, 1, 1, 0, 0, 0, 0, time.UTC),
+			ExpiryDate:       time.Date(2028, 1, 31, 0, 0, 0, 0, time.UTC),
 			ManufacturerName: "Acme", ManufacturingLicenceNumber: "ML-1",
 			MRPPaise: 25000, PurchasePricePaise: 18000}, fixedNow)
 	require.NoError(t, err)
-	require.NoError(t, b.ApplyMovement(batch.MovementInbound, onHand, fixedNow))
+	require.NoError(t, b.ApplyMovement(batch.MovementInbound, onHand, fixedNow, fixedNow))
 	require.NoError(t, batches.Add(r.ctx, b))
 	return p, b
 }

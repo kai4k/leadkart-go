@@ -61,7 +61,7 @@ func seedProduct(t *testing.T, repo *producttest.FakeRepository, tid tenant.ID, 
 func seedBatch(t *testing.T, repo *batchtest.FakeRepository, p *product.Product, actor membership.ID, batchNumber string) *batch.Batch {
 	t.Helper()
 	mfg := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	exp := time.Date(2028, 1, 1, 0, 0, 0, 0, time.UTC)
+	exp := time.Date(2028, 1, 31, 0, 0, 0, 0, time.UTC)
 	b, err := batch.New(
 		batch.ID(ids.NewV7().String()),
 		p.ID(), p.TenantID(), actor,
@@ -108,7 +108,7 @@ func seedBatchExpiryStock(t *testing.T, repo *batchtest.FakeRepository, p *produ
 		t.Fatalf("batch.New: %v", err)
 	}
 	if qty > 0 {
-		if merr := b.ApplyMovement(batch.MovementInbound, qty, fixedNow); merr != nil {
+		if merr := b.ApplyMovement(batch.MovementInbound, qty, fixedNow, fixedNow); merr != nil {
 			t.Fatalf("seed inbound: %v", merr)
 		}
 	}
@@ -121,14 +121,14 @@ func seedBatchExpiryStock(t *testing.T, repo *batchtest.FakeRepository, p *produ
 // seedBatchWithStock seeds a batch (default 2028 expiry) carrying qty on-hand.
 func seedBatchWithStock(t *testing.T, repo *batchtest.FakeRepository, p *product.Product, actor membership.ID, batchNumber string, qty int64) *batch.Batch {
 	t.Helper()
-	return seedBatchExpiryStock(t, repo, p, actor, batchNumber, time.Date(2028, 1, 1, 0, 0, 0, 0, time.UTC), qty)
+	return seedBatchExpiryStock(t, repo, p, actor, batchNumber, time.Date(2028, 1, 31, 0, 0, 0, 0, time.UTC), qty)
 }
 
 // seedBatchLaterExpiryWithStock seeds a batch with a 2029 expiry (sorts AFTER a
 // default 2028 batch under FEFO) carrying qty on-hand.
 func seedBatchLaterExpiryWithStock(t *testing.T, repo *batchtest.FakeRepository, p *product.Product, actor membership.ID, batchNumber string, qty int64) *batch.Batch {
 	t.Helper()
-	return seedBatchExpiryStock(t, repo, p, actor, batchNumber, time.Date(2029, 1, 1, 0, 0, 0, 0, time.UTC), qty)
+	return seedBatchExpiryStock(t, repo, p, actor, batchNumber, time.Date(2029, 1, 31, 0, 0, 0, 0, time.UTC), qty)
 }
 
 // countMovements counts ledger rows of a given movement type in the fake.

@@ -83,11 +83,11 @@ func (h ConsumeOrderStockHandler) Handle(ctx context.Context, cmd ConsumeOrderSt
 		for _, o := range outstanding {
 			var releaseOnHand, shipOnHand int64
 			updErr := h.batches.UpdateByID(ctx, cmd.TenantID, o.BatchID, func(b *batch.Batch) (bool, error) {
-				if merr := b.ApplyMovement(batch.MovementRelease, o.Quantity, now); merr != nil {
+				if merr := b.ApplyMovement(batch.MovementRelease, o.Quantity, now, now); merr != nil {
 					return false, merr
 				}
 				releaseOnHand = b.QuantityOnHand() // unchanged by release
-				if merr := b.ApplyMovement(batch.MovementOutbound, o.Quantity, now); merr != nil {
+				if merr := b.ApplyMovement(batch.MovementOutbound, o.Quantity, now, now); merr != nil {
 					return false, merr
 				}
 				shipOnHand = b.QuantityOnHand() // reduced by outbound

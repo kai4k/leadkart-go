@@ -220,7 +220,7 @@ func (r *FakeRepository) AnyLiveWithStockForProduct(_ context.Context, _ tenant.
 // batch first. `now` is the wall-clock instant the caller threads in;
 // the fake compares strict greater-than (matches the SQL `expiry_date
 // > $2`).
-func (r *FakeRepository) ListFefoForProduct(_ context.Context, tenantID tenant.ID, productID product.ID, now time.Time) ([]*batch.Batch, error) {
+func (r *FakeRepository) ListFefoForProduct(_ context.Context, tenantID tenant.ID, productID product.ID, minSellable time.Time) ([]*batch.Batch, error) {
 	out := make([]*batch.Batch, 0)
 	for _, b := range r.Batches {
 		if b.IsDeleted() {
@@ -232,10 +232,10 @@ func (r *FakeRepository) ListFefoForProduct(_ context.Context, tenantID tenant.I
 		if b.ProductID() != productID {
 			continue
 		}
-		if b.QuantityOnHand() <= 0 {
+		if b.AvailableQuantity() <= 0 {
 			continue
 		}
-		if !b.ExpiryDate().After(now) {
+		if b.ExpiryDate().Before(minSellable) {
 			continue
 		}
 		out = append(out, b)

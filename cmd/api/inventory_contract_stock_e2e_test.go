@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	expiryPkg "github.com/leadkart/leadkart-go/internal/common/expiry"
 )
 
 // invAddBatch adds a batch expiring on expiry; extra keys are merged into the body.
@@ -19,7 +21,7 @@ func invAddBatch(t *testing.T, f e2eFixture, tok, productID, number string, expi
 	body := map[string]any{
 		"batch_number":      number,
 		"manufacture_date":  time.Now().UTC().AddDate(-2, 0, 0).Format(time.RFC3339),
-		"expiry_date":       expiry.UTC().Format(time.RFC3339),
+		"expiry_month":      expiryPkg.PrintedMonth(expiry),
 		"manufacturer_name": "Acme", "manufacturing_licence_number": "ML-1",
 		"mrp_paise": 25000, "purchase_price_paise": 18000,
 	}
@@ -82,18 +84,22 @@ func TestE2E_Inventory_ProductStockTotalsAndFilters(t *testing.T) {
 	f := newE2EFixture(t)
 	tok := f.registerAndLogin(t, "invstock").AccessToken
 	now := time.Now().UTC()
+	month := func(plus int) time.Time { return expiryPkg.MonthEnd(now.Year(), now.Month()+time.Month(plus)) }
 
-	// A: 40 units expiring in 30 days, 20 in 400 days, 5 already expired; reorder level 100.
+	// A: 40 units printed two months ahead (still for sale: the default stop is the
+	// start of the printed month), 20 fourteen months ahead, 5 in a printed month that
+	// is over; reorder level 100.
 	a := invCreateProduct(t, f, tok, "STK-A", map[string]any{"product_category": "Cardiac", "reorder_level": 100})
-	soon := invBatchWithStock(t, f, tok, a, "A-SOON", now.AddDate(0, 0, 30), "inbound", 40)
-	invBatchWithStock(t, f, tok, a, "A-LATE", now.AddDate(0, 0, 400), "inbound", 20)
-	invBatchWithStock(t, f, tok, a, "A-GONE", now.AddDate(0, 0, -1), "adjustment", 5)
+	soon := invBatchWithStock(t, f, tok, a, "A-SOON", month(2), "inbound", 40)
+	invBatchWithStock(t, f, tok, a, "A-LATE", month(14), "inbound", 20)
+	invBatchWithStock(t, f, tok, a, "A-GONE", month(-1), "adjustment", 5)
 	// B: plenty of stock, no reorder level. C: no batches, reorder level 10.
 	b := invCreateProduct(t, f, tok, "STK-B", nil)
-	invBatchWithStock(t, f, tok, b, "B-1", now.AddDate(0, 0, 400), "inbound", 500)
+	invBatchWithStock(t, f, tok, b, "B-1", month(14), "inbound", 500)
 	c := invCreateProduct(t, f, tok, "STK-C", map[string]any{"reorder_level": 10})
 
-	// Detail: expired units are not stock; the earliest expiry is the soonest live batch holding stock.
+	// Detail: the five buckets; expired units are on hand but not for sale; the earliest
+	// expiry is the soonest SELLABLE batch holding stock.
 	resp := f.authedJSON(t, http.MethodGet, "/api/v1/inventory/batches/"+soon, tok, nil)
 	if resp.status != http.StatusOK {
 		t.Fatalf("get batch: status %d body %s", resp.status, resp.body)
@@ -103,9 +109,11 @@ func TestE2E_Inventory_ProductStockTotalsAndFilters(t *testing.T) {
 	invWant(t, soonBatch, "quantity_reserved", 0)
 
 	pa := invGetProduct(t, f, tok, a)
-	invWant(t, pa, "stock_on_hand", 60)
+	invWant(t, pa, "stock_on_hand", 65)
 	invWant(t, pa, "stock_reserved", 0)
 	invWant(t, pa, "stock_available", 60)
+	invWant(t, pa, "stock_unsellable", 5)
+	invWant(t, pa, "stock_quarantined", 0)
 	invWant(t, pa, "earliest_expiry", soonBatch["expiry_date"])
 	pc := invGetProduct(t, f, tok, c)
 	invWant(t, pc, "stock_on_hand", 0)
@@ -117,7 +125,8 @@ func TestE2E_Inventory_ProductStockTotalsAndFilters(t *testing.T) {
 	// List: same numbers, one read.
 	all := invListProducts(t, f, tok, "")
 	invWantIDs(t, "no filter", all, a, b, c)
-	invWant(t, all[a], "stock_on_hand", 60)
+	invWant(t, all[a], "stock_on_hand", 65)
+	invWant(t, all[a], "stock_unsellable", 5)
 	invWant(t, all[a], "earliest_expiry", soonBatch["expiry_date"])
 	invWant(t, all[b], "stock_available", 500)
 	invWant(t, all[c], "reorder_level", 10)
@@ -125,7 +134,7 @@ func TestE2E_Inventory_ProductStockTotalsAndFilters(t *testing.T) {
 	// Filters.
 	invWantIDs(t, "low_stock", invListProducts(t, f, tok, "low_stock=true"), a, c)
 	invWantIDs(t, "low_stock=false", invListProducts(t, f, tok, "low_stock=false"), a, b, c)
-	invWantIDs(t, "expiring_within_days=60", invListProducts(t, f, tok, "expiring_within_days=60"), a)
+	invWantIDs(t, "expiring_within_days=70", invListProducts(t, f, tok, "expiring_within_days=70"), a)
 	invWantIDs(t, "expiring_within_days=3650", invListProducts(t, f, tok, "expiring_within_days=3650"), a, b)
 	invWantIDs(t, "expiring_within_days=0", invListProducts(t, f, tok, "expiring_within_days=0"))
 	invWantIDs(t, "category", invListProducts(t, f, tok, "category=cardiac"), a)

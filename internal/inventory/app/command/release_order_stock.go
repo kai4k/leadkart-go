@@ -83,7 +83,7 @@ func (h ReleaseOrderStockHandler) Handle(ctx context.Context, cmd ReleaseOrderSt
 		for _, o := range outstanding {
 			var onHandAfter int64
 			updErr := h.batches.UpdateByID(ctx, cmd.TenantID, o.BatchID, func(b *batch.Batch) (bool, error) {
-				if merr := b.ApplyMovement(batch.MovementRelease, o.Quantity, now); merr != nil {
+				if merr := b.ApplyMovement(batch.MovementRelease, o.Quantity, now, now); merr != nil {
 					return false, merr
 				}
 				onHandAfter = b.QuantityOnHand()

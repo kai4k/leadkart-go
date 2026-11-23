@@ -37,12 +37,18 @@ type ProductDto struct {
 	ReorderLevel int `json:"reorder_level"`
 	// ExpiryAlertThresholdDays 0 means the expiry alert is off for this product.
 	ExpiryAlertThresholdDays int `json:"expiry_alert_threshold_days"`
-	// StockOnHand and StockReserved add up the product's live batches that
-	// are not expired; StockAvailable is on hand minus reserved.
-	StockOnHand    int64 `json:"stock_on_hand"`
-	StockReserved  int64 `json:"stock_reserved"`
-	StockAvailable int64 `json:"stock_available"`
-	// EarliestExpiry is the soonest expiry among the unexpired batches that
+	// The five stock buckets over the product's live batches. They sum:
+	// stock_on_hand = stock_reserved + stock_available + stock_unsellable +
+	// stock_quarantined. stock_available is the free units of sellable batches
+	// (what can be sold); stock_unsellable the free units past the company
+	// sellable cut-off (not quarantined yet); stock_quarantined the units set
+	// apart as "Not for sale".
+	StockOnHand      int64 `json:"stock_on_hand"`
+	StockReserved    int64 `json:"stock_reserved"`
+	StockAvailable   int64 `json:"stock_available"`
+	StockUnsellable  int64 `json:"stock_unsellable"`
+	StockQuarantined int64 `json:"stock_quarantined"`
+	// EarliestExpiry is the soonest expiry among the sellable batches that
 	// hold stock; left out when there is none.
 	EarliestExpiry *time.Time `json:"earliest_expiry,omitzero"`
 }
@@ -119,11 +125,13 @@ type ListProductsResponse struct {
 
 // BatchDto is the wire shape for a single Batch.
 type BatchDto struct {
-	ID                         string    `json:"id"`
-	ProductID                  string    `json:"product_id"`
-	TenantID                   string    `json:"tenant_id"`
-	BatchNumber                string    `json:"batch_number"`
-	ManufactureDate            time.Time `json:"manufacture_date"`
+	ID              string    `json:"id"`
+	ProductID       string    `json:"product_id"`
+	TenantID        string    `json:"tenant_id"`
+	BatchNumber     string    `json:"batch_number"`
+	ManufactureDate time.Time `json:"manufacture_date"`
+	// ExpiryMonth is the printed month ("2027-03"); ExpiryDate is its last day.
+	ExpiryMonth                string    `json:"expiry_month"`
 	ExpiryDate                 time.Time `json:"expiry_date"`
 	ManufacturerName           string    `json:"manufacturer_name"`
 	ManufacturingLicenceNumber string    `json:"manufacturing_licence_number"`
@@ -131,22 +139,36 @@ type BatchDto struct {
 	PurchasePricePaise         int64     `json:"purchase_price_paise"`
 	QuantityOnHand             int64     `json:"quantity_on_hand"`
 	// QuantityReserved is the part of QuantityOnHand held for confirmed
-	// orders; only on hand minus reserved can be sold, moved out or adjusted down.
-	QuantityReserved int64     `json:"quantity_reserved"`
-	Version          int64     `json:"version"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	// orders; only the free units can be sold, moved out or adjusted down.
+	QuantityReserved int64 `json:"quantity_reserved"`
+	// QuantityQuarantined is the part of QuantityOnHand set apart as "Not for sale".
+	QuantityQuarantined int64 `json:"quantity_quarantined"`
+	// QuantityAvailable and QuantityUnsellable split the free units by whether
+	// the batch is still sellable under the company expiry rule today.
+	QuantityAvailable  int64 `json:"quantity_available"`
+	QuantityUnsellable int64 `json:"quantity_unsellable"`
+	// Sellable is the one expiry rule applied to this batch today;
+	// LastSellableDay (YYYY-MM-DD) is the last day it may be sold;
+	// PastPrintedExpiry is the legal limit (no setting moves it).
+	Sellable          bool      `json:"sellable"`
+	LastSellableDay   string    `json:"last_sellable_day"`
+	PastPrintedExpiry bool      `json:"past_printed_expiry"`
+	Version           int64     `json:"version"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // AddBatchRequest — POST /api/v1/inventory/products/{productId}/batches.
 type AddBatchRequest struct {
-	BatchNumber                string    `json:"batch_number"`
-	ManufactureDate            time.Time `json:"manufacture_date"`
-	ExpiryDate                 time.Time `json:"expiry_date"`
-	ManufacturerName           string    `json:"manufacturer_name"`
-	ManufacturingLicenceNumber string    `json:"manufacturing_licence_number"`
-	MRPPaise                   int64     `json:"mrp_paise"`
-	PurchasePricePaise         int64     `json:"purchase_price_paise"`
+	BatchNumber     string    `json:"batch_number"`
+	ManufactureDate time.Time `json:"manufacture_date"`
+	// ExpiryMonth is the month printed on the label ("2027-03"); the batch is
+	// valid through its last day. A full date is not accepted.
+	ExpiryMonth                string `json:"expiry_month"`
+	ManufacturerName           string `json:"manufacturer_name"`
+	ManufacturingLicenceNumber string `json:"manufacturing_licence_number"`
+	MRPPaise                   int64  `json:"mrp_paise"`
+	PurchasePricePaise         int64  `json:"purchase_price_paise"`
 	// InitialQuantity is optional: the opening stock received with the batch,
 	// written as an inbound movement in the same transaction. Absent or 0
 	// adds an empty batch, as before.
@@ -156,6 +178,9 @@ type AddBatchRequest struct {
 // AddBatchResponse — 201 body.
 type AddBatchResponse struct {
 	BatchID string `json:"batch_id"`
+	// Warnings names non-fatal conditions, for example "past_sellable_cutoff":
+	// opening stock was received into a batch already past the company cut-off.
+	Warnings []string `json:"warnings"`
 }
 
 // ListBatchesResponse — GET /api/v1/inventory/products/{productId}/batches page.
@@ -210,8 +235,11 @@ type LogMovementRequest struct {
 // LogMovementResponse — 201 body. Returns the new MovementID + the
 // batch's post-mutation on-hand for SPA reconciliation.
 type LogMovementResponse struct {
-	MovementID          string `json:"movement_id"`
-	QuantityOnHandAfter int64  `json:"quantity_on_hand_after"`
+	MovementID               string `json:"movement_id"`
+	QuantityOnHandAfter      int64  `json:"quantity_on_hand_after"`
+	QuantityQuarantinedAfter int64  `json:"quantity_quarantined_after"`
+	// Warnings names non-fatal conditions, for example "past_sellable_cutoff".
+	Warnings []string `json:"warnings"`
 }
 
 // ListMovementsResponse — GET /api/v1/inventory/batches/{batchId}/movements.
@@ -252,8 +280,11 @@ const (
 	ErrCodeUnauthenticated     = "unauthenticated"
 	ErrCodeForbidden           = "forbidden"
 	ErrCodeInsufficientStock   = "insufficient_stock"
-	ErrCodeBatchExpired        = "batch_expired"
-	ErrCodeProductHasStock     = "product_has_live_stock"
-	ErrCodeConcurrencyConflict = "concurrency_conflict"
-	ErrCodeInternalError       = "internal_error"
+	// ErrCodeInsufficientQuarantined: a release or write-off asked for more
+	// quarantined units than the batch holds.
+	ErrCodeInsufficientQuarantined = "insufficient_quarantined"
+	ErrCodeBatchExpired            = "batch_expired"
+	ErrCodeProductHasStock         = "product_has_live_stock"
+	ErrCodeConcurrencyConflict     = "concurrency_conflict"
+	ErrCodeInternalError           = "internal_error"
 )

@@ -40,9 +40,13 @@ func platformGateRoutes() []platformRoute {
 		{"hard delete tenant", http.MethodDelete, func(v registeredTenant) string { return "/api/v1/platform/tenants/" + v.TenantID }, none},
 		{"global suspend person", http.MethodPost, func(v registeredTenant) string { return "/api/v1/platform/persons/" + v.PersonID + "/global-suspend" },
 			func(registeredTenant) any { return ports.GlobalSuspendPersonRequest{Reason: "gate test reason"} }},
-		{"lift global suspension", http.MethodPost, func(v registeredTenant) string { return "/api/v1/platform/persons/" + v.PersonID + "/lift-global-suspension" }, none},
+		{"lift global suspension", http.MethodPost, func(v registeredTenant) string {
+			return "/api/v1/platform/persons/" + v.PersonID + "/lift-global-suspension"
+		}, none},
 		{"update person profile", http.MethodPatch, func(v registeredTenant) string { return "/api/v1/platform/persons/" + v.PersonID + "/profile" },
-			func(registeredTenant) any { return ports.UpdatePersonProfileRequest{FirstName: "Hijacked", LastName: "Name"} }},
+			func(registeredTenant) any {
+				return ports.UpdatePersonProfileRequest{FirstName: "Hijacked", LastName: "Name"}
+			}},
 		{"create impersonation session", http.MethodPost, func(registeredTenant) string { return "/api/v1/platform/impersonation/sessions" },
 			func(v registeredTenant) any {
 				return ports.CreateImpersonationSessionRequest{TargetTenantID: v.TenantID, Reason: "ticket #1 gate test", DurationMinutes: 30}

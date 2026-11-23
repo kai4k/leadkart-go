@@ -10,6 +10,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+	"github.com/leadkart/leadkart-go/internal/inventory/app/sellability"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
@@ -55,13 +56,14 @@ type ReserveOrderStockHandler struct {
 	movements     stockmovement.Repository
 	ledger        ReservationLedger
 	enqueuer      OutboxEnqueuer
+	window        sellability.Resolver
 	now           func() time.Time
 	newMovementID func() stockmovement.ID
 }
 
 // NewReserveOrderStockHandler wires the handler. newMovementID is required
 // (TestArch_HandlersInjectIDFactory); now nil → time.Now.
-func NewReserveOrderStockHandler(uow pg.UnitOfWork, batches batch.Repository, movements stockmovement.Repository, ledger ReservationLedger, enqueuer OutboxEnqueuer, now func() time.Time, newMovementID func() stockmovement.ID) ReserveOrderStockHandler {
+func NewReserveOrderStockHandler(uow pg.UnitOfWork, batches batch.Repository, movements stockmovement.Repository, ledger ReservationLedger, enqueuer OutboxEnqueuer, window sellability.Resolver, now func() time.Time, newMovementID func() stockmovement.ID) ReserveOrderStockHandler {
 	if newMovementID == nil {
 		panic("command: NewReserveOrderStockHandler newMovementID required")
 	}
@@ -70,7 +72,7 @@ func NewReserveOrderStockHandler(uow pg.UnitOfWork, batches batch.Repository, mo
 	}
 	return ReserveOrderStockHandler{
 		uow: uow, batches: batches, movements: movements, ledger: ledger,
-		enqueuer: enqueuer, now: now, newMovementID: newMovementID,
+		enqueuer: enqueuer, window: window, now: now, newMovementID: newMovementID,
 	}
 }
 
@@ -103,7 +105,12 @@ func (h ReserveOrderStockHandler) Handle(ctx context.Context, cmd ReserveOrderSt
 	}
 
 	now := h.now()
-	plan, shortfalls, err := h.plan(ctx, cmd, now)
+	// The ONE expiry bound: FEFO never offers a batch past the company cut-off.
+	w, err := h.window.Resolve(ctx, cmd.TenantID)
+	if err != nil {
+		return ReserveOrderStockResult{}, fmt.Errorf("reserve order stock: %w", err)
+	}
+	plan, shortfalls, err := h.plan(ctx, cmd, w)
 	if err != nil {
 		return ReserveOrderStockResult{}, err
 	}
@@ -114,7 +121,7 @@ func (h ReserveOrderStockHandler) Handle(ctx context.Context, cmd ReserveOrderSt
 		return ReserveOrderStockResult{Shortfalls: shortfalls}, nil
 	}
 
-	if err := h.apply(ctx, cmd, plan, now); err != nil {
+	if err := h.apply(ctx, cmd, plan, now, w.Today); err != nil {
 		return ReserveOrderStockResult{}, err
 	}
 	return ReserveOrderStockResult{Reserved: true}, nil
@@ -124,14 +131,14 @@ func (h ReserveOrderStockHandler) Handle(ctx context.Context, cmd ReserveOrderSt
 // reservation tx; the in-tx ApplyMovement guard re-validates against locked
 // state, so a TOCTOU race rolls back and redelivery re-plans. Returns either a
 // full plan (shortfalls empty) or the shortfalls (plan ignored).
-func (h ReserveOrderStockHandler) plan(ctx context.Context, cmd ReserveOrderStockCommand, now time.Time) ([]allocation, []integrationevents.ReservationShortfall, error) {
+func (h ReserveOrderStockHandler) plan(ctx context.Context, cmd ReserveOrderStockCommand, w sellability.Window) ([]allocation, []integrationevents.ReservationShortfall, error) {
 	var plan []allocation
 	var shortfalls []integrationevents.ReservationShortfall
 	for _, line := range cmd.Lines {
 		if line.Quantity <= 0 {
 			return nil, nil, fmt.Errorf("%w: line quantity must be > 0 (product %s)", batch.ErrInvalid, line.ProductID)
 		}
-		fefo, err := h.batches.ListFefoForProduct(ctx, cmd.TenantID, line.ProductID, now)
+		fefo, err := h.batches.ListFefoForProduct(ctx, cmd.TenantID, line.ProductID, w.MinSellable)
 		if err != nil {
 			return nil, nil, fmt.Errorf("reserve order stock: fefo %s: %w", line.ProductID, err)
 		}
@@ -166,14 +173,14 @@ func (h ReserveOrderStockHandler) plan(ctx context.Context, cmd ReserveOrderStoc
 }
 
 // apply reserves every planned allocation in ONE tenant tx — all-or-nothing.
-func (h ReserveOrderStockHandler) apply(ctx context.Context, cmd ReserveOrderStockCommand, plan []allocation, now time.Time) error {
+func (h ReserveOrderStockHandler) apply(ctx context.Context, cmd ReserveOrderStockCommand, plan []allocation, now, today time.Time) error {
 	ref := cmd.OrderID
 	reason := truncateReason("order reservation: " + cmd.OrderID)
 	err := h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
 		for _, a := range plan {
 			var loaded *batch.Batch
 			updErr := h.batches.UpdateByID(ctx, cmd.TenantID, a.batchID, func(b *batch.Batch) (bool, error) {
-				if merr := b.ApplyMovement(batch.MovementReservation, a.quantity, now); merr != nil {
+				if merr := b.ApplyMovement(batch.MovementReservation, a.quantity, now, today); merr != nil {
 					return false, merr
 				}
 				loaded = b

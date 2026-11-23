@@ -9,6 +9,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+	"github.com/leadkart/leadkart-go/internal/inventory/app/sellability"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
 
@@ -38,15 +39,18 @@ type ProductView struct {
 	ReorderLevel             int
 	ExpiryAlertThresholdDays int
 
-	// StockOnHand and StockReserved add up the product's live batches that
-	// are not expired (expiry date after today): units in an expired batch
-	// are not stock. StockAvailable is on hand minus reserved, what can
-	// still be sold.
-	StockOnHand    int64
-	StockReserved  int64
-	StockAvailable int64
-	// EarliestExpiry is the soonest expiry date among those batches that
-	// hold stock; nil when the product has no unexpired stock.
+	// The five stock buckets of the live batches; they sum: StockOnHand =
+	// StockReserved + StockAvailable + StockUnsellable + StockQuarantined.
+	// Available is the free units of sellable batches (what can be sold);
+	// Unsellable the free units past the company cut-off (not quarantined yet);
+	// Quarantined the units set apart as "Not for sale".
+	StockOnHand      int64
+	StockReserved    int64
+	StockAvailable   int64
+	StockUnsellable  int64
+	StockQuarantined int64
+	// EarliestExpiry is the soonest expiry among SELLABLE batches that hold
+	// stock; nil when the product has none.
 	EarliestExpiry *time.Time
 }
 
@@ -76,10 +80,10 @@ type ProductListFilter struct {
 // ADR 0062; RLS remains the backstop.
 type ProductReader interface {
 	// GetProduct returns the live product or [product.ErrNotFound].
-	GetProduct(ctx context.Context, tenantID tenant.ID, id product.ID, today time.Time) (ProductView, error)
+	GetProduct(ctx context.Context, tenantID tenant.ID, id product.ID, w sellability.Window) (ProductView, error)
 	// ListProducts returns at most limit live products after cursor, ordered
 	// (created_at DESC, id DESC) per ADR 0038.
-	ListProducts(ctx context.Context, tenantID tenant.ID, filter ProductListFilter, today time.Time, cursor pagination.Cursor, limit int) ([]ProductView, error)
+	ListProducts(ctx context.Context, tenantID tenant.ID, filter ProductListFilter, w sellability.Window, cursor pagination.Cursor, limit int) ([]ProductView, error)
 }
 
 // GetProductQuery — single-product read.
@@ -95,21 +99,22 @@ type GetProductQuery struct {
 // GetProductHandler returns a Product view or product.ErrNotFound.
 type GetProductHandler struct {
 	products ProductReader
-	now      func() time.Time
+	window   sellability.Resolver
 }
 
 // NewGetProductHandler wires the handler. now is the explicit time source
 // (nil → time.Now); it decides which batches are expired.
-func NewGetProductHandler(products ProductReader, now func() time.Time) GetProductHandler {
-	if now == nil {
-		now = time.Now
-	}
-	return GetProductHandler{products: products, now: now}
+func NewGetProductHandler(products ProductReader, window sellability.Resolver) GetProductHandler {
+	return GetProductHandler{products: products, window: window}
 }
 
 // Handle returns the product View or product.ErrNotFound.
 func (h GetProductHandler) Handle(ctx context.Context, q GetProductQuery) (ProductView, error) {
-	return h.products.GetProduct(ctx, q.TenantID, q.ProductID, h.now())
+	w, err := h.window.Resolve(ctx, q.TenantID)
+	if err != nil {
+		return ProductView{}, fmt.Errorf("get product: %w", err)
+	}
+	return h.products.GetProduct(ctx, q.TenantID, q.ProductID, w)
 }
 
 // ListProductsPageQuery — cursor-paginated product list under tenant scope.
@@ -123,23 +128,24 @@ type ListProductsPageQuery struct {
 // ListProductsPageHandler returns a keyset-paginated page.
 type ListProductsPageHandler struct {
 	products ProductReader
-	now      func() time.Time
+	window   sellability.Resolver
 }
 
 // NewListProductsPageHandler wires the handler. now is the explicit time
 // source (nil → time.Now); it decides which batches are expired.
-func NewListProductsPageHandler(products ProductReader, now func() time.Time) ListProductsPageHandler {
-	if now == nil {
-		now = time.Now
-	}
-	return ListProductsPageHandler{products: products, now: now}
+func NewListProductsPageHandler(products ProductReader, window sellability.Resolver) ListProductsPageHandler {
+	return ListProductsPageHandler{products: products, window: window}
 }
 
 // Handle returns the page of ProductView. It asks the reader for one row more
 // than the page holds; pagination.BuildPage turns the extra row into HasMore.
 func (h ListProductsPageHandler) Handle(ctx context.Context, q ListProductsPageQuery) (pagination.Page[ProductView], error) {
 	size := pagination.ClampPageSize(q.PageSize)
-	rows, err := h.products.ListProducts(ctx, q.TenantID, q.Filter, h.now(), q.Cursor, size+1)
+	w, err := h.window.Resolve(ctx, q.TenantID)
+	if err != nil {
+		return pagination.Page[ProductView]{}, fmt.Errorf("list products: %w", err)
+	}
+	rows, err := h.products.ListProducts(ctx, q.TenantID, q.Filter, w, q.Cursor, size+1)
 	if err != nil {
 		return pagination.Page[ProductView]{}, fmt.Errorf("list products: %w", err)
 	}

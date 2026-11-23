@@ -4,23 +4,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/leadkart/leadkart-go/internal/common/expiry"
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/inventory/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/inventory/app/query"
+	"github.com/leadkart/leadkart-go/internal/inventory/app/sellability"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
-
-// noExpiryFilter is the neutral value of the expiring_within_days SQL argument.
-const noExpiryFilter = -1
 
 // ProductReader is the pgx/sqlc-backed [query.ProductReader]: the product
 // screens' read model. Each method is ONE statement that returns the product
@@ -42,7 +40,7 @@ func NewProductReader(pool *pgxpool.Pool, tx *pg.Transactor) *ProductReader {
 var _ query.ProductReader = (*ProductReader)(nil)
 
 // GetProduct satisfies [query.ProductReader].
-func (r *ProductReader) GetProduct(ctx context.Context, tenantID tenant.ID, id product.ID, today time.Time) (query.ProductView, error) {
+func (r *ProductReader) GetProduct(ctx context.Context, tenantID tenant.ID, id product.ID, w sellability.Window) (query.ProductView, error) {
 	uid, err := uuid.Parse(id.String())
 	if err != nil {
 		return query.ProductView{}, fmt.Errorf("product reader: parse id %q: %w", id, err)
@@ -50,8 +48,8 @@ func (r *ProductReader) GetProduct(ctx context.Context, tenantID tenant.ID, id p
 	var out query.ProductView
 	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		row, qerr := r.q.WithTx(tx).GetProductStockByID(ctx, db.GetProductStockByIDParams{
-			ID:    pgconv.PgUUID(uid),
-			Today: pgconv.PgDate(today),
+			ID:          pgconv.PgUUID(uid),
+			MinSellable: pgconv.PgDate(w.MinSellable),
 		})
 		if qerr != nil {
 			if errors.Is(qerr, pgx.ErrNoRows) {
@@ -71,7 +69,7 @@ func (r *ProductReader) GetProduct(ctx context.Context, tenantID tenant.ID, id p
 
 // ListProducts satisfies [query.ProductReader]. An empty cursor maps to the
 // sentinel MAX values so the keyset predicate matches every row.
-func (r *ProductReader) ListProducts(ctx context.Context, tenantID tenant.ID, filter query.ProductListFilter, today time.Time, cursor pagination.Cursor, limit int) ([]query.ProductView, error) {
+func (r *ProductReader) ListProducts(ctx context.Context, tenantID tenant.ID, filter query.ProductListFilter, w sellability.Window, cursor pagination.Cursor, limit int) ([]query.ProductView, error) {
 	tid, err := uuid.Parse(tenantID.String())
 	if err != nil {
 		return nil, fmt.Errorf("product reader: parse tenant id: %w", err)
@@ -84,26 +82,30 @@ func (r *ProductReader) ListProducts(ctx context.Context, tenantID tenant.ID, fi
 		}
 		cursorCreatedAt, cursorID = cursor.SortValue, uid
 	}
-	expiring := int32(noExpiryFilter)
-	if filter.ExpiringWithinDays != nil {
-		//nolint:gosec // bounded to [0, 36500] by the HTTP layer; a negative value only switches the filter off
-		expiring = int32(*filter.ExpiringWithinDays)
+	// "Expiring within n days" is a window on the LAST SELLABLE day, not on the
+	// printed expiry: a batch qualifies when it is still sellable and its last
+	// sellable day is on or before today + n (common/expiry.LatestExpiryBy).
+	expiringFilter := filter.ExpiringWithinDays != nil && *filter.ExpiringWithinDays >= 0
+	expiringUpper := w.MinSellable
+	if expiringFilter {
+		expiringUpper = expiry.LatestExpiryBy(w.Today.AddDate(0, 0, *filter.ExpiringWithinDays), w.StopMonthsBefore)
 	}
 
 	out := []query.ProductView{}
 	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		rows, qerr := r.q.WithTx(tx).ListProductStockPage(ctx, db.ListProductStockPageParams{
-			TenantID:           pgconv.PgUUID(tid),
-			Today:              pgconv.PgDate(today),
-			ActiveOnly:         filter.ActiveOnly,
-			Search:             filter.Search,
-			Category:           filter.Category,
-			DosageForm:         filter.DosageForm,
-			Manufacturer:       filter.Manufacturer,
-			LowStock:           filter.LowStock,
-			ExpiringWithinDays: expiring,
-			CursorCreatedAt:    pgconv.PgRequiredTimestamp(cursorCreatedAt),
-			CursorID:           pgconv.PgUUID(cursorID),
+			TenantID:        pgconv.PgUUID(tid),
+			MinSellable:     pgconv.PgDate(w.MinSellable),
+			ActiveOnly:      filter.ActiveOnly,
+			Search:          filter.Search,
+			Category:        filter.Category,
+			DosageForm:      filter.DosageForm,
+			Manufacturer:    filter.Manufacturer,
+			LowStock:        filter.LowStock,
+			ExpiringFilter:  expiringFilter,
+			ExpiringUpper:   pgconv.PgDate(expiringUpper),
+			CursorCreatedAt: pgconv.PgRequiredTimestamp(cursorCreatedAt),
+			CursorID:        pgconv.PgUUID(cursorID),
 			//nolint:gosec // limit is a clamped page size + 1 (at most 201)
 			Limit: int32(limit),
 		})
@@ -145,13 +147,15 @@ func productStockRowToView(row db.ListProductStockPageRow) query.ProductView {
 		ReorderLevel:             int(row.ReorderLevel),
 		ExpiryAlertThresholdDays: int(row.ExpiryAlertThresholdDays),
 
-		StockOnHand:    row.StockOnHand,
-		StockReserved:  row.StockReserved,
-		StockAvailable: row.StockOnHand - row.StockReserved,
+		StockOnHand:      row.StockOnHand,
+		StockReserved:    row.StockReserved,
+		StockAvailable:   row.StockAvailable,
+		StockUnsellable:  row.StockUnsellable,
+		StockQuarantined: row.StockQuarantined,
 	}
 	if row.EarliestExpiry.Valid {
-		expiry := pgconv.TimeFromPgDate(row.EarliestExpiry)
-		v.EarliestExpiry = &expiry
+		earliest := pgconv.TimeFromPgDate(row.EarliestExpiry)
+		v.EarliestExpiry = &earliest
 	}
 	return v
 }

@@ -20,6 +20,9 @@ const (
 	ruleTooSmall          = "too_small"
 	ruleTooLarge          = "too_large"
 	ruleInvalidType       = "invalid_type"
+	ruleInvalidFormat     = "invalid_format"
+	ruleRequired          = "required"
+	ruleInFuture          = "in_future"
 )
 
 // msgFieldsInvalid is the fixed message of a refusal that names its fields.

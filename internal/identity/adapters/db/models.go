@@ -453,6 +453,8 @@ type InventoryBatch struct {
 	CreatedByMembershipID pgtype.UUID
 	// Units soft-committed to confirmed orders but not yet shipped (ADR 0063 §4 true-hold). available = quantity_on_hand − quantity_reserved.
 	QuantityReserved int64
+	// Units set apart as "Not for sale" (expired or otherwise held). Part of quantity_on_hand; never reservable. Moved by quarantine / release_quarantine / write_off ledger rows.
+	QuantityQuarantined int64
 }
 
 // Event-fed replica of the company commerce policy (ADR 0070). Upserted only when the event version is newer. No row = defaults at version 0. Tenant-scoped, FORCE RLS.

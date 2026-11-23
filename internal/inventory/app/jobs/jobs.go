@@ -29,6 +29,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/riverqueue/river"
 
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+	"github.com/leadkart/leadkart-go/internal/inventory/app/sellability"
 	"github.com/leadkart/leadkart-go/internal/inventory/integrationevents"
 )
 
@@ -80,7 +82,7 @@ type AlertScanRepo interface {
 	ListBatchesNearExpiry(ctx context.Context, tenantID uuid.UUID, today time.Time) ([]BatchExpiring, error)
 	// ListProductsBelowReorder returns products below their reorder
 	// level (live + not-expired stock counted).
-	ListProductsBelowReorder(ctx context.Context, tenantID uuid.UUID, today time.Time) ([]ReorderProduct, error)
+	ListProductsBelowReorder(ctx context.Context, tenantID uuid.UUID, minSellable time.Time) ([]ReorderProduct, error)
 	// EmitIfNew atomically dedups + writes the integration event to
 	// the inventory outbox. Returns (true, nil) when newly emitted.
 	EmitIfNew(ctx context.Context, tenantID uuid.UUID, kind string, subjectID uuid.UUID, today time.Time, event integrationevents.Event) (bool, error)
@@ -186,13 +188,14 @@ func (ReorderScanJob) Kind() string { return "inventory.reorder_scan" }
 // ReorderScanWorker runs [ReorderScanJob].
 type ReorderScanWorker struct {
 	river.WorkerDefaults[ReorderScanJob]
-	repo AlertScanRepo
-	log  *slog.Logger
-	now  func() time.Time
+	repo   AlertScanRepo
+	window sellability.Resolver
+	log    *slog.Logger
+	now    func() time.Time
 }
 
 // NewReorderScanWorker wires the worker.
-func NewReorderScanWorker(repo AlertScanRepo, log *slog.Logger, now func() time.Time) *ReorderScanWorker {
+func NewReorderScanWorker(repo AlertScanRepo, window sellability.Resolver, log *slog.Logger, now func() time.Time) *ReorderScanWorker {
 	if repo == nil {
 		panic("jobs: NewReorderScanWorker repo required")
 	}
@@ -202,7 +205,7 @@ func NewReorderScanWorker(repo AlertScanRepo, log *slog.Logger, now func() time.
 	if now == nil {
 		now = time.Now
 	}
-	return &ReorderScanWorker{repo: repo, log: log, now: now}
+	return &ReorderScanWorker{repo: repo, window: window, log: log, now: now}
 }
 
 // Timeout enforces JobTimeout per river canon.
@@ -221,7 +224,11 @@ func (w *ReorderScanWorker) Work(ctx context.Context, _ *river.Job[ReorderScanJo
 
 	totalEmitted := 0
 	for _, tid := range tenants {
-		products, err := w.repo.ListProductsBelowReorder(ctx, tid, today)
+		win, err := w.window.Resolve(ctx, tenant.ID(tid.String()))
+		if err != nil {
+			return fmt.Errorf("reorder scan: tenant %s window: %w", tid, err)
+		}
+		products, err := w.repo.ListProductsBelowReorder(ctx, tid, win.MinSellable)
 		if err != nil {
 			return fmt.Errorf("reorder scan: tenant %s rows: %w", tid, err)
 		}

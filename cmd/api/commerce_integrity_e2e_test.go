@@ -11,6 +11,7 @@ package main
 
 import (
 	"encoding/json"
+	"github.com/leadkart/leadkart-go/internal/common/expiry"
 	"net/http"
 	"strings"
 	"testing"
@@ -198,7 +199,7 @@ func invProductWithBatch(t *testing.T, f e2eFixture, tok, sku string) (productID
 		t.Fatalf("decode: %v", err)
 	}
 	resp = f.authedJSON(t, http.MethodPost, "/api/v1/inventory/products/"+p.ProductID+"/batches", tok, invports.AddBatchRequest{
-		BatchNumber: "B-" + sku, ManufactureDate: time.Now().AddDate(0, -3, 0), ExpiryDate: time.Now().AddDate(2, 0, 0),
+		BatchNumber: "B-" + sku, ManufactureDate: time.Now().AddDate(0, -3, 0), ExpiryMonth: expiry.PrintedMonth(time.Now().AddDate(2, 0, 0)),
 		ManufacturerName: "Acme", ManufacturingLicenceNumber: "ML-1", MRPPaise: 25000, PurchasePricePaise: 18000,
 	})
 	if resp.status != http.StatusCreated {

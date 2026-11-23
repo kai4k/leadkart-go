@@ -10,6 +10,7 @@ package main
 
 import (
 	"encoding/json"
+	"github.com/leadkart/leadkart-go/internal/common/expiry"
 	"net/http"
 	"strings"
 	"testing"
@@ -134,7 +135,7 @@ func TestE2E_Commerce_NULInTextIs422NeverA500(t *testing.T) {
 	want("update manufacturer", f.authedJSON(t, http.MethodPatch, products+"/"+productID, tok, invports.UpdateProductRequest{Manufacturer: &bad}), "validation_failed")
 
 	batch := func(edit func(*invports.AddBatchRequest)) invports.AddBatchRequest {
-		b := invports.AddBatchRequest{BatchNumber: "B-" + uuid.NewString()[:8], ManufactureDate: time.Now().AddDate(0, -3, 0), ExpiryDate: time.Now().AddDate(2, 0, 0),
+		b := invports.AddBatchRequest{BatchNumber: "B-" + uuid.NewString()[:8], ManufactureDate: time.Now().AddDate(0, -3, 0), ExpiryMonth: expiry.PrintedMonth(time.Now().AddDate(2, 0, 0)),
 			ManufacturerName: "Acme", ManufacturingLicenceNumber: "ML-1", MRPPaise: 25000, PurchasePricePaise: 18000}
 		edit(&b)
 		return b
@@ -254,7 +255,7 @@ func TestE2E_Inventory_LimitsCountCharactersNotBytes(t *testing.T) {
 	// Batch: number, manufacturer and licence at their limits.
 	batches := products + "/" + p.ProductID + "/batches"
 	batch := invports.AddBatchRequest{
-		BatchNumber: dev(100), ManufactureDate: time.Now().AddDate(0, -3, 0), ExpiryDate: time.Now().AddDate(2, 0, 0),
+		BatchNumber: dev(100), ManufactureDate: time.Now().AddDate(0, -3, 0), ExpiryMonth: expiry.PrintedMonth(time.Now().AddDate(2, 0, 0)),
 		ManufacturerName: dev(200), ManufacturingLicenceNumber: dev(100), MRPPaise: 25000, PurchasePricePaise: 18000,
 	}
 	resp = f.authedJSON(t, http.MethodPost, batches, tok, batch)

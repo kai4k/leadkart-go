@@ -16,6 +16,7 @@ package adapters_test
 
 import (
 	"context"
+	"github.com/leadkart/leadkart-go/internal/inventory/app/sellability/sellabilitytest"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -57,7 +58,7 @@ func TestLogStockMovement_Concurrent_NoLostUpdate(t *testing.T) {
 		t.Fatalf("Add product: %v", err)
 	}
 	mfg := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	exp := time.Date(2028, 1, 1, 0, 0, 0, 0, time.UTC)
+	exp := time.Date(2028, 1, 31, 0, 0, 0, 0, time.UTC)
 	b, _ := batch.New(batch.ID(ids.NewV7().String()), p.ID(), tid, actor,
 		batch.Spec{
 			BatchNumber: "LOT-RACE", ManufactureDate: mfg, ExpiryDate: exp,
@@ -81,7 +82,7 @@ func TestLogStockMovement_Concurrent_NoLostUpdate(t *testing.T) {
 	var totalEntries atomic.Int64
 	instrumentedUoW := &countingUoW{inner: tx, counter: &totalEntries}
 
-	h := command.NewLogStockMovementHandler(instrumentedUoW, batches, movements, func() time.Time { return fixedNow }, func() stockmovement.ID { return stockmovement.ID(ids.NewV7().String()) })
+	h := command.NewLogStockMovementHandler(instrumentedUoW, batches, movements, sellabilitytest.Resolver(fixedNow), func() time.Time { return fixedNow }, func() stockmovement.ID { return stockmovement.ID(ids.NewV7().String()) })
 
 	// Channel barrier: all goroutines release simultaneously to maximise
 	// lock-acquisition pressure.

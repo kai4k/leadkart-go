@@ -3,6 +3,8 @@ package query_test
 import (
 	"context"
 	"errors"
+	"github.com/leadkart/leadkart-go/internal/inventory/app/sellability"
+	"github.com/leadkart/leadkart-go/internal/inventory/app/sellability/sellabilitytest"
 	"slices"
 	"sync"
 	"testing"
@@ -34,10 +36,10 @@ type fakeProductReader struct {
 	gotLimit  int
 }
 
-func (r *fakeProductReader) GetProduct(_ context.Context, tid tenant.ID, id product.ID, today time.Time) (query.ProductView, error) {
+func (r *fakeProductReader) GetProduct(_ context.Context, tid tenant.ID, id product.ID, w sellability.Window) (query.ProductView, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.gotToday = today
+	r.gotToday = w.Today
 	if r.err != nil {
 		return query.ProductView{}, r.err
 	}
@@ -49,10 +51,10 @@ func (r *fakeProductReader) GetProduct(_ context.Context, tid tenant.ID, id prod
 	return query.ProductView{}, product.ErrNotFound
 }
 
-func (r *fakeProductReader) ListProducts(_ context.Context, _ tenant.ID, f query.ProductListFilter, today time.Time, _ pagination.Cursor, limit int) ([]query.ProductView, error) {
+func (r *fakeProductReader) ListProducts(_ context.Context, _ tenant.ID, f query.ProductListFilter, w sellability.Window, _ pagination.Cursor, limit int) ([]query.ProductView, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.gotFilter, r.gotToday, r.gotLimit = f, today, limit
+	r.gotFilter, r.gotToday, r.gotLimit = f, w.Today, limit
 	if r.err != nil {
 		return nil, r.err
 	}
@@ -141,7 +143,7 @@ func newTenantID(t *testing.T) tenant.ID {
 
 // ----- GetProduct ----------------------------------------------------------
 
-func clock() time.Time { return fixedNow }
+func clock() sellability.Resolver { return sellabilitytest.Resolver(fixedNow) }
 
 func TestGetProductHandler_HappyPath(t *testing.T) {
 	t.Parallel()
@@ -153,21 +155,21 @@ func TestGetProductHandler_HappyPath(t *testing.T) {
 	}
 	reader := &fakeProductReader{views: []query.ProductView{want}}
 
-	got, err := query.NewGetProductHandler(reader, clock).Handle(t.Context(), query.GetProductQuery{TenantID: tid, ProductID: product.ID(want.ID)})
+	got, err := query.NewGetProductHandler(reader, clock()).Handle(t.Context(), query.GetProductQuery{TenantID: tid, ProductID: product.ID(want.ID)})
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
 	if got != want {
 		t.Fatalf("got %+v, want %+v", got, want)
 	}
-	if !reader.gotToday.Equal(fixedNow) {
-		t.Fatalf("expiry judged at %v, want the handler's clock %v", reader.gotToday, fixedNow)
+	if !reader.gotToday.Equal(time.Date(2026, 5, 24, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("expiry judged at %v, want the handler's clock %v", reader.gotToday, time.Date(2026, 5, 24, 0, 0, 0, 0, time.UTC))
 	}
 }
 
 func TestGetProductHandler_NotFound(t *testing.T) {
 	t.Parallel()
-	h := query.NewGetProductHandler(&fakeProductReader{}, clock)
+	h := query.NewGetProductHandler(&fakeProductReader{}, clock())
 	_, err := h.Handle(t.Context(), query.GetProductQuery{ProductID: product.ID("nope")})
 	if !errors.Is(err, product.ErrNotFound) {
 		t.Fatalf("err: got %v want ErrNotFound", err)
@@ -176,7 +178,7 @@ func TestGetProductHandler_NotFound(t *testing.T) {
 
 func TestGetProductHandler_ReaderError_Propagates(t *testing.T) {
 	t.Parallel()
-	h := query.NewGetProductHandler(&fakeProductReader{err: errSentinel}, clock)
+	h := query.NewGetProductHandler(&fakeProductReader{err: errSentinel}, clock())
 	_, err := h.Handle(t.Context(), query.GetProductQuery{ProductID: product.ID("any")})
 	if !errors.Is(err, errSentinel) {
 		t.Fatalf("err: got %v want errSentinel propagated", err)
@@ -191,7 +193,7 @@ func TestListProductsPageHandler_PassesFilterAndClockAndAsksOneExtraRow(t *testi
 	days := 30
 	filter := query.ProductListFilter{ActiveOnly: true, Category: "Cardiac", LowStock: true, ExpiringWithinDays: &days}
 
-	page, err := query.NewListProductsPageHandler(reader, clock).Handle(t.Context(), query.ListProductsPageQuery{
+	page, err := query.NewListProductsPageHandler(reader, clock()).Handle(t.Context(), query.ListProductsPageQuery{
 		TenantID: newTenantID(t), PageSize: 25, Filter: filter,
 	})
 	if err != nil {
@@ -203,8 +205,8 @@ func TestListProductsPageHandler_PassesFilterAndClockAndAsksOneExtraRow(t *testi
 	if reader.gotFilter != filter {
 		t.Fatalf("filter reached the reader as %+v, want %+v", reader.gotFilter, filter)
 	}
-	if reader.gotLimit != 26 || !reader.gotToday.Equal(fixedNow) {
-		t.Fatalf("limit %d today %v; want 26 (page size + 1) and %v", reader.gotLimit, reader.gotToday, fixedNow)
+	if reader.gotLimit != 26 || !reader.gotToday.Equal(time.Date(2026, 5, 24, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("limit %d today %v; want 26 (page size + 1) and %v", reader.gotLimit, reader.gotToday, time.Date(2026, 5, 24, 0, 0, 0, 0, time.UTC))
 	}
 }
 
@@ -217,7 +219,7 @@ func TestListProductsPageHandler_ExtraRowBecomesHasMore(t *testing.T) {
 		})
 	}
 
-	page, err := query.NewListProductsPageHandler(reader, clock).Handle(t.Context(), query.ListProductsPageQuery{
+	page, err := query.NewListProductsPageHandler(reader, clock()).Handle(t.Context(), query.ListProductsPageQuery{
 		TenantID: newTenantID(t), PageSize: 2,
 	})
 	if err != nil {
@@ -237,7 +239,7 @@ func TestListProductsPageHandler_ExtraRowBecomesHasMore(t *testing.T) {
 
 func TestListProductsPageHandler_ReaderError_Propagates(t *testing.T) {
 	t.Parallel()
-	h := query.NewListProductsPageHandler(&fakeProductReader{err: errSentinel}, clock)
+	h := query.NewListProductsPageHandler(&fakeProductReader{err: errSentinel}, clock())
 	_, err := h.Handle(t.Context(), query.ListProductsPageQuery{TenantID: newTenantID(t), PageSize: 25})
 	if !errors.Is(err, errSentinel) {
 		t.Fatalf("err: got %v want errSentinel propagated", err)
@@ -249,7 +251,7 @@ func TestListProductsPageHandler_ReaderError_Propagates(t *testing.T) {
 func TestGetBatchHandler_NotFound(t *testing.T) {
 	t.Parallel()
 	repo := newFakeBatchRepo()
-	h := query.NewGetBatchHandler(repo)
+	h := query.NewGetBatchHandler(repo, clock())
 	_, err := h.Handle(t.Context(), query.GetBatchQuery{BatchID: batch.ID("nope")})
 	if !errors.Is(err, batch.ErrNotFound) {
 		t.Fatalf("err: got %v want ErrNotFound", err)
@@ -260,7 +262,7 @@ func TestGetBatchHandler_RepoError_Propagates(t *testing.T) {
 	t.Parallel()
 	repo := newFakeBatchRepo()
 	repo.getErr = errSentinel
-	h := query.NewGetBatchHandler(repo)
+	h := query.NewGetBatchHandler(repo, clock())
 	_, err := h.Handle(t.Context(), query.GetBatchQuery{BatchID: batch.ID("any")})
 	if !errors.Is(err, errSentinel) {
 		t.Fatalf("err: got %v want errSentinel propagated", err)
@@ -273,7 +275,7 @@ func TestListBatchesByProductHandler_HappyPath(t *testing.T) {
 	t.Parallel()
 	repo := newFakeBatchRepo()
 	repo.listPage = pagination.Page[*batch.Batch]{Items: []*batch.Batch{}}
-	h := query.NewListBatchesByProductHandler(repo)
+	h := query.NewListBatchesByProductHandler(repo, clock())
 	_, err := h.Handle(t.Context(), query.ListBatchesByProductQuery{
 		ProductID: product.ID("p"), PageSize: 10,
 	})
@@ -286,7 +288,7 @@ func TestListBatchesByProductHandler_RepoError_Propagates(t *testing.T) {
 	t.Parallel()
 	repo := newFakeBatchRepo()
 	repo.listErr = errSentinel
-	h := query.NewListBatchesByProductHandler(repo)
+	h := query.NewListBatchesByProductHandler(repo, clock())
 	_, err := h.Handle(t.Context(), query.ListBatchesByProductQuery{
 		ProductID: product.ID("p"), PageSize: 10,
 	})
@@ -342,7 +344,7 @@ func TestFefoBatchesHandler_HappyPath_ReturnsItems(t *testing.T) {
 	t.Parallel()
 	repo := newFakeBatchRepo()
 	repo.listPage = pagination.Page[*batch.Batch]{Items: []*batch.Batch{}}
-	h := query.NewFefoBatchesHandler(repo, func() time.Time { return fixedNow })
+	h := query.NewFefoBatchesHandler(repo, clock())
 	_, err := h.Handle(t.Context(), query.FefoBatchesQuery{
 		TenantID: newTenantID(t), ProductID: product.ID("p"),
 	})
@@ -355,7 +357,7 @@ func TestFefoBatchesHandler_RepoError_Propagates(t *testing.T) {
 	t.Parallel()
 	repo := newFakeBatchRepo()
 	repo.listErr = errSentinel
-	h := query.NewFefoBatchesHandler(repo, func() time.Time { return fixedNow })
+	h := query.NewFefoBatchesHandler(repo, clock())
 	_, err := h.Handle(t.Context(), query.FefoBatchesQuery{
 		TenantID: newTenantID(t), ProductID: product.ID("p"),
 	})
@@ -408,7 +410,7 @@ func TestGetBatchHandler_CarriesQuantityReserved(t *testing.T) {
 		QuantityOnHand: 40, QuantityReserved: 15,
 	})
 
-	got, err := query.NewGetBatchHandler(repo).Handle(t.Context(), query.GetBatchQuery{TenantID: tid, BatchID: id})
+	got, err := query.NewGetBatchHandler(repo, clock()).Handle(t.Context(), query.GetBatchQuery{TenantID: tid, BatchID: id})
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}

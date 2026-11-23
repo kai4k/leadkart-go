@@ -2,6 +2,7 @@ package command_test
 
 import (
 	"context"
+	"github.com/leadkart/leadkart-go/internal/inventory/app/sellability/sellabilitytest"
 	"testing"
 	"time"
 
@@ -61,7 +62,7 @@ func TestReserveOrderStock_ReservesAcrossFefoBatches(t *testing.T) {
 	b1 := seedBatchWithStock(t, batches, p, actor, "B1", 30)
 	b2 := seedBatchLaterExpiryWithStock(t, batches, p, actor, "B2", 50)
 
-	h := command.NewReserveOrderStockHandler(uow, batches, movements, ledger, enq, fixedClock, testNewMovementID)
+	h := command.NewReserveOrderStockHandler(uow, batches, movements, ledger, enq, sellabilitytest.Resolver(fixedNow), fixedClock, testNewMovementID)
 	res, err := h.Handle(ctx, command.ReserveOrderStockCommand{
 		TenantID:          p.TenantID(),
 		OrderID:           uuid.NewString(),
@@ -89,7 +90,7 @@ func TestReserveOrderStock_AlreadyReservedIsNoOp(t *testing.T) {
 	p := seedProduct(t, newFakeProductRepo(), newTenantID(t), actor, "SKU-RES-2")
 	b := seedBatchWithStock(t, batches, p, actor, "B1", 100)
 
-	h := command.NewReserveOrderStockHandler(uow, batches, movements, ledger, enq, fixedClock, testNewMovementID)
+	h := command.NewReserveOrderStockHandler(uow, batches, movements, ledger, enq, sellabilitytest.Resolver(fixedNow), fixedClock, testNewMovementID)
 	res, err := h.Handle(t.Context(), command.ReserveOrderStockCommand{
 		TenantID: p.TenantID(), OrderID: uuid.NewString(), ActorMembershipID: actor,
 		Lines: []command.ReserveLine{{ProductID: p.ID(), Quantity: 10}},
@@ -113,7 +114,7 @@ func TestReserveOrderStock_ShortfallEmitsEventAndReservesNothing(t *testing.T) {
 	b := seedBatchWithStock(t, batches, p, actor, "B1", 10) // only 10 available
 
 	orderID := uuid.NewString()
-	h := command.NewReserveOrderStockHandler(uow, batches, movements, ledger, enq, fixedClock, testNewMovementID)
+	h := command.NewReserveOrderStockHandler(uow, batches, movements, ledger, enq, sellabilitytest.Resolver(fixedNow), fixedClock, testNewMovementID)
 	res, err := h.Handle(t.Context(), command.ReserveOrderStockCommand{
 		TenantID: p.TenantID(), OrderID: orderID, ActorMembershipID: actor,
 		Lines: []command.ReserveLine{{ProductID: p.ID(), Quantity: 40}},
@@ -143,7 +144,7 @@ func TestReleaseOrderStock_ReleasesOutstandingHold(t *testing.T) {
 	actor := newMembershipID(t)
 	p := seedProduct(t, newFakeProductRepo(), newTenantID(t), actor, "SKU-REL-1")
 	b := seedBatchWithStock(t, batches, p, actor, "B1", 100)
-	require.NoError(t, b.ApplyMovement(batch.MovementReservation, 30, fixedNow)) // hold 30
+	require.NoError(t, b.ApplyMovement(batch.MovementReservation, 30, fixedNow, fixedNow)) // hold 30
 	ledger := &fakeReservationLedger{outstanding: []stockmovement.OutstandingReservation{
 		{BatchID: b.ID(), ProductID: p.ID(), Quantity: 30},
 	}}
@@ -187,7 +188,7 @@ func TestConsumeOrderStock_ShipsAndReleasesHold(t *testing.T) {
 	actor := newMembershipID(t)
 	p := seedProduct(t, newFakeProductRepo(), newTenantID(t), actor, "SKU-CON-1")
 	b := seedBatchWithStock(t, batches, p, actor, "B1", 100)
-	require.NoError(t, b.ApplyMovement(batch.MovementReservation, 40, fixedNow)) // hold 40
+	require.NoError(t, b.ApplyMovement(batch.MovementReservation, 40, fixedNow, fixedNow)) // hold 40
 	ledger := &fakeReservationLedger{outstanding: []stockmovement.OutstandingReservation{
 		{BatchID: b.ID(), ProductID: p.ID(), Quantity: 40},
 	}}

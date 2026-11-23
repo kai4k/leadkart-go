@@ -26,6 +26,10 @@ var ErrAnyLiveStock = errs.New(errs.KindConflict, "batch", "product has live bat
 // ListFilter is the filter set the GET /v1/inventory/products/{id}/batches
 // endpoint surfaces. SoftDeleted batches are always excluded.
 type ListFilter struct {
+	// MinSellable is the one expiry bound (common/expiry.MinSellableExpiry): a
+	// batch is sellable exactly when its expiry_date >= MinSellable. Unless
+	// IncludeExpired is set, only sellable batches are listed.
+	MinSellable time.Time
 	// IncludeExpired when true returns expired batches alongside live
 	// ones; default (false) filters them out at SQL level.
 	IncludeExpired bool
@@ -79,5 +83,5 @@ type Repository interface {
 	// Returns ALL eligible batches (no cursor pagination) because the
 	// dispatch picker needs the full set to compute multi-batch
 	// allocations against a single order quantity.
-	ListFefoForProduct(ctx context.Context, tenantID tenant.ID, productID product.ID, now time.Time) ([]*Batch, error)
+	ListFefoForProduct(ctx context.Context, tenantID tenant.ID, productID product.ID, minSellable time.Time) ([]*Batch, error)
 }

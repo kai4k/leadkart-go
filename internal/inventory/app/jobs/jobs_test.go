@@ -3,6 +3,7 @@ package jobs_test
 import (
 	"context"
 	"errors"
+	"github.com/leadkart/leadkart-go/internal/inventory/app/sellability/sellabilitytest"
 	"io"
 	"log/slog"
 	"testing"
@@ -191,7 +192,7 @@ func TestReorderScanWorker_HappyPath_EmitsForEachProduct(t *testing.T) {
 		SKU: "AMOX-500", ReorderLevel: 100, StockOnHand: 25,
 	}}
 
-	w := jobs.NewReorderScanWorker(repo, silentLogger(), func() time.Time { return fixedNow })
+	w := jobs.NewReorderScanWorker(repo, sellabilitytest.Resolver(fixedNow), silentLogger(), func() time.Time { return fixedNow })
 	if err := w.Work(t.Context(), &river.Job[jobs.ReorderScanJob]{Args: jobs.ReorderScanJob{}}); err != nil {
 		t.Fatalf("Work: %v", err)
 	}
@@ -226,7 +227,7 @@ func TestReorderScanWorker_Dedup_SecondRunNoOp(t *testing.T) {
 	}}
 	repo.dedupKeys[jobs.AlertKindProductBelowReorder+":"+productA.String()] = struct{}{}
 
-	w := jobs.NewReorderScanWorker(repo, silentLogger(), func() time.Time { return fixedNow })
+	w := jobs.NewReorderScanWorker(repo, sellabilitytest.Resolver(fixedNow), silentLogger(), func() time.Time { return fixedNow })
 	if err := w.Work(t.Context(), &river.Job[jobs.ReorderScanJob]{Args: jobs.ReorderScanJob{}}); err != nil {
 		t.Fatalf("Work: %v", err)
 	}
@@ -242,7 +243,7 @@ func TestReorderScanWorker_NoEligibleProducts_CleanNoOp(t *testing.T) {
 	repo.tenants = []uuid.UUID{tenantA}
 	// No products under reorder for this tenant.
 
-	w := jobs.NewReorderScanWorker(repo, silentLogger(), func() time.Time { return fixedNow })
+	w := jobs.NewReorderScanWorker(repo, sellabilitytest.Resolver(fixedNow), silentLogger(), func() time.Time { return fixedNow })
 	if err := w.Work(t.Context(), &river.Job[jobs.ReorderScanJob]{Args: jobs.ReorderScanJob{}}); err != nil {
 		t.Fatalf("Work: %v", err)
 	}

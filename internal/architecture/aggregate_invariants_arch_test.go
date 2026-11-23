@@ -450,12 +450,13 @@ func TestArch_MutatorsEmitEventsOnStateChange(t *testing.T) {
 	// version column.
 	type recv struct{ typ, method string }
 	allowMethodsPerType := map[recv]bool{
-		{"Batch", "ApplyMovement"}:          true, // paired StockMovement emits the inventory.* event
-		{"Batch", "SoftDelete"}:             true, // version bump only; deletion auditing via outbox row
-		{"Role", "ChangeHierarchyLevel"}:    true, // hierarchy edges aggregate owns the event surface (ADR 0058)
-		{"Order", "AttachInvoice"}:          true, // event emitted via advance(StateInvoiced, ...) per ADR 0063 §4 state-machine canon
-		{"Order", "AttachConsignment"}:      true, // event emitted via advance(StateDispatched, ...) per ADR 0063 §4 state-machine canon
-		{"Product", "applyExtendedUpdates"}: true, // sub-applier of Update; the single UpdatedEvent is emitted by Update after merging changed-field sets
+		{"Batch", "ApplyMovement"}:           true, // paired StockMovement emits the inventory.* event
+		{"Batch", "applyQuarantineMovement"}: true, // the paired StockMovement row (quarantine, release_quarantine, write_off) is the event
+		{"Batch", "SoftDelete"}:              true, // version bump only; deletion auditing via outbox row
+		{"Role", "ChangeHierarchyLevel"}:     true, // hierarchy edges aggregate owns the event surface (ADR 0058)
+		{"Order", "AttachInvoice"}:           true, // event emitted via advance(StateInvoiced, ...) per ADR 0063 §4 state-machine canon
+		{"Order", "AttachConsignment"}:       true, // event emitted via advance(StateDispatched, ...) per ADR 0063 §4 state-machine canon
+		{"Product", "applyExtendedUpdates"}:  true, // sub-applier of Update; the single UpdatedEvent is emitted by Update after merging changed-field sets
 	}
 
 	type violation struct {

@@ -64,7 +64,7 @@ func TestKeysetStockMovementsPage_UsesIndexUnderRLS(t *testing.T) {
 		batch.Spec{
 			BatchNumber:                "LOT-MOV",
 			ManufactureDate:            time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-			ExpiryDate:                 time.Date(2028, 1, 1, 0, 0, 0, 0, time.UTC),
+			ExpiryDate:                 time.Date(2028, 1, 31, 0, 0, 0, 0, time.UTC),
 			ManufacturerName:           "Acme",
 			ManufacturingLicenceNumber: "ML-1",
 			MRPPaise:                   100,
@@ -84,7 +84,7 @@ func TestKeysetStockMovementsPage_UsesIndexUnderRLS(t *testing.T) {
 		err := tx.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
 			// Reload + apply under one tx: version check and outbox write stay consistent.
 			return batches.UpdateByID(ctx, tid, b.ID(), func(bb *batch.Batch) (bool, error) {
-				if err := bb.ApplyMovement(batch.MovementInbound, 1, occurredAt); err != nil {
+				if err := bb.ApplyMovement(batch.MovementInbound, 1, occurredAt, occurredAt); err != nil {
 					return false, err
 				}
 				m, err := stockmovement.New(

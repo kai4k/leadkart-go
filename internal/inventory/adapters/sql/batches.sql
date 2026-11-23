@@ -27,7 +27,7 @@ SELECT id, product_id, tenant_id, batch_number,
        quantity_on_hand, version,
        created_at, updated_at,
        is_deleted, deleted_at, deleted_by, created_by_membership_id,
-       quantity_reserved
+       quantity_reserved, quantity_quarantined
 FROM   inventory.batches
 WHERE  id = $1
 AND    NOT is_deleted;
@@ -58,7 +58,8 @@ SET    quantity_on_hand = $2,
        batch_number     = $8,
        manufacturer_name = $9,
        manufacturing_licence_number = $10,
-       quantity_reserved = sqlc.arg(quantity_reserved)
+       quantity_reserved = sqlc.arg(quantity_reserved),
+       quantity_quarantined = sqlc.arg(quantity_quarantined)
 WHERE  id = $1
 AND    version = sqlc.arg(version_expected);
 
@@ -75,11 +76,11 @@ SELECT id, product_id, tenant_id, batch_number,
        quantity_on_hand, version,
        created_at, updated_at,
        is_deleted, deleted_at, deleted_by, created_by_membership_id,
-       quantity_reserved
+       quantity_reserved, quantity_quarantined
 FROM   inventory.batches
 WHERE  product_id = $1
 AND    NOT is_deleted
-AND    (sqlc.arg(include_expired)::boolean OR expiry_date > now())
+AND    (sqlc.arg(include_expired)::boolean OR expiry_date >= sqlc.arg(min_sellable)::date)
 AND    (expiry_date, id) < (sqlc.arg(cursor_expiry_date)::date, sqlc.arg(cursor_id)::uuid)
 ORDER  BY expiry_date DESC, id DESC
 LIMIT  sqlc.arg('limit');
@@ -98,7 +99,9 @@ SELECT EXISTS (
 -- dispatch picker so warehouse staff pull oldest-expiring inventory
 -- first. Filters: live + in-stock + not-yet-expired. Order: expiry_date
 -- ASC, id ASC. No pagination — the dispatch picker needs the FULL set.
--- today (UTC, date-only) bounds the not-yet-expired filter. Column order
+-- min_sellable is the ONE expiry bound (common/expiry.MinSellableExpiry): a batch
+-- is sellable exactly when expiry_date >= min_sellable. Only batches with FREE
+-- units (on hand minus reserved minus quarantined) are returned. Column order
 -- MUST match inventory.batches so sqlc returns the db.InventoryBatch model.
 SELECT id, product_id, tenant_id, batch_number,
        manufacture_date, expiry_date,
@@ -107,12 +110,12 @@ SELECT id, product_id, tenant_id, batch_number,
        quantity_on_hand, version,
        created_at, updated_at,
        is_deleted, deleted_at, deleted_by, created_by_membership_id,
-       quantity_reserved
+       quantity_reserved, quantity_quarantined
 FROM   inventory.batches
 WHERE  product_id = $1
 AND    NOT is_deleted
-AND    quantity_on_hand > 0
-AND    expiry_date > sqlc.arg('today')::date
+AND    quantity_on_hand - quantity_reserved - quantity_quarantined > 0
+AND    expiry_date >= sqlc.arg('min_sellable')::date
 ORDER  BY expiry_date ASC, id ASC;
 
 -- name: ListBatchesNearExpiryForTenant :many
@@ -143,21 +146,22 @@ ORDER  BY b.expiry_date ASC, b.id ASC;
 -- name: ListProductsBelowReorderForTenant :many
 -- ReorderScanJob workhorse. Per-tenant scan returning products where
 --   reorder_level > 0 AND
---   SUM(live + not-expired batches' quantity_on_hand) < reorder_level
--- LEFT JOIN so products with NO live batches still surface.
--- $1 = tenant_id, $2 = today (UTC, date-only).
+--   SUM(sellable batches' on-hand units, quarantined excluded) < reorder_level
+-- A sellable batch is one with expiry_date >= min_sellable (the one bound).
+-- LEFT JOIN so products with NO sellable stock still surface.
+-- $1 = tenant_id, min_sellable = common/expiry.MinSellableExpiry.
 SELECT p.id, p.sku, p.reorder_level,
-       COALESCE(SUM(b.quantity_on_hand), 0)::bigint AS stock_on_hand
+       COALESCE(SUM(b.quantity_on_hand - b.quantity_quarantined), 0)::bigint AS stock_on_hand
 FROM   inventory.products p
 LEFT JOIN inventory.batches b
     ON  b.product_id = p.id
     AND b.tenant_id  = p.tenant_id
     AND NOT b.is_deleted
-    AND b.quantity_on_hand > 0
-    AND b.expiry_date > sqlc.arg('today')::date
+    AND b.quantity_on_hand - b.quantity_quarantined > 0
+    AND b.expiry_date >= sqlc.arg('min_sellable')::date
 WHERE  p.tenant_id = $1
 AND    NOT p.is_deleted
 AND    p.reorder_level > 0
 GROUP  BY p.id, p.sku, p.reorder_level
-HAVING COALESCE(SUM(b.quantity_on_hand), 0) < p.reorder_level
+HAVING COALESCE(SUM(b.quantity_on_hand - b.quantity_quarantined), 0) < p.reorder_level
 ORDER  BY p.id ASC;

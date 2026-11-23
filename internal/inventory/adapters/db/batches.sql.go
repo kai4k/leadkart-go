@@ -36,7 +36,7 @@ SELECT id, product_id, tenant_id, batch_number,
        quantity_on_hand, version,
        created_at, updated_at,
        is_deleted, deleted_at, deleted_by, created_by_membership_id,
-       quantity_reserved
+       quantity_reserved, quantity_quarantined
 FROM   inventory.batches
 WHERE  id = $1
 AND    NOT is_deleted
@@ -65,6 +65,7 @@ func (q *Queries) GetBatchByID(ctx context.Context, id pgtype.UUID) (InventoryBa
 		&i.DeletedBy,
 		&i.CreatedByMembershipID,
 		&i.QuantityReserved,
+		&i.QuantityQuarantined,
 	)
 	return i, err
 }
@@ -136,19 +137,20 @@ SELECT id, product_id, tenant_id, batch_number,
        quantity_on_hand, version,
        created_at, updated_at,
        is_deleted, deleted_at, deleted_by, created_by_membership_id,
-       quantity_reserved
+       quantity_reserved, quantity_quarantined
 FROM   inventory.batches
 WHERE  product_id = $1
 AND    NOT is_deleted
-AND    ($2::boolean OR expiry_date > now())
-AND    (expiry_date, id) < ($3::date, $4::uuid)
+AND    ($2::boolean OR expiry_date >= $3::date)
+AND    (expiry_date, id) < ($4::date, $5::uuid)
 ORDER  BY expiry_date DESC, id DESC
-LIMIT  $5
+LIMIT  $6
 `
 
 type ListBatchesByProductPageParams struct {
 	ProductID        pgtype.UUID
 	IncludeExpired   bool
+	MinSellable      pgtype.Date
 	CursorExpiryDate pgtype.Date
 	CursorID         pgtype.UUID
 	Limit            int32
@@ -163,6 +165,7 @@ func (q *Queries) ListBatchesByProductPage(ctx context.Context, arg ListBatchesB
 	rows, err := q.db.Query(ctx, listBatchesByProductPage,
 		arg.ProductID,
 		arg.IncludeExpired,
+		arg.MinSellable,
 		arg.CursorExpiryDate,
 		arg.CursorID,
 		arg.Limit,
@@ -194,6 +197,7 @@ func (q *Queries) ListBatchesByProductPage(ctx context.Context, arg ListBatchesB
 			&i.DeletedBy,
 			&i.CreatedByMembershipID,
 			&i.QuantityReserved,
+			&i.QuantityQuarantined,
 		); err != nil {
 			return nil, err
 		}
@@ -304,28 +308,30 @@ SELECT id, product_id, tenant_id, batch_number,
        quantity_on_hand, version,
        created_at, updated_at,
        is_deleted, deleted_at, deleted_by, created_by_membership_id,
-       quantity_reserved
+       quantity_reserved, quantity_quarantined
 FROM   inventory.batches
 WHERE  product_id = $1
 AND    NOT is_deleted
-AND    quantity_on_hand > 0
-AND    expiry_date > $2::date
+AND    quantity_on_hand - quantity_reserved - quantity_quarantined > 0
+AND    expiry_date >= $2::date
 ORDER  BY expiry_date ASC, id ASC
 `
 
 type ListFefoBatchesForProductParams struct {
-	ProductID pgtype.UUID
-	Today     pgtype.Date
+	ProductID   pgtype.UUID
+	MinSellable pgtype.Date
 }
 
 // FEFO (First Expired First Out) ordering per BRD §6.5 — feeds the
 // dispatch picker so warehouse staff pull oldest-expiring inventory
 // first. Filters: live + in-stock + not-yet-expired. Order: expiry_date
 // ASC, id ASC. No pagination — the dispatch picker needs the FULL set.
-// today (UTC, date-only) bounds the not-yet-expired filter. Column order
+// min_sellable is the ONE expiry bound (common/expiry.MinSellableExpiry): a batch
+// is sellable exactly when expiry_date >= min_sellable. Only batches with FREE
+// units (on hand minus reserved minus quarantined) are returned. Column order
 // MUST match inventory.batches so sqlc returns the db.InventoryBatch model.
 func (q *Queries) ListFefoBatchesForProduct(ctx context.Context, arg ListFefoBatchesForProductParams) ([]InventoryBatch, error) {
-	rows, err := q.db.Query(ctx, listFefoBatchesForProduct, arg.ProductID, arg.Today)
+	rows, err := q.db.Query(ctx, listFefoBatchesForProduct, arg.ProductID, arg.MinSellable)
 	if err != nil {
 		return nil, err
 	}
@@ -353,6 +359,7 @@ func (q *Queries) ListFefoBatchesForProduct(ctx context.Context, arg ListFefoBat
 			&i.DeletedBy,
 			&i.CreatedByMembershipID,
 			&i.QuantityReserved,
+			&i.QuantityQuarantined,
 		); err != nil {
 			return nil, err
 		}
@@ -366,25 +373,25 @@ func (q *Queries) ListFefoBatchesForProduct(ctx context.Context, arg ListFefoBat
 
 const listProductsBelowReorderForTenant = `-- name: ListProductsBelowReorderForTenant :many
 SELECT p.id, p.sku, p.reorder_level,
-       COALESCE(SUM(b.quantity_on_hand), 0)::bigint AS stock_on_hand
+       COALESCE(SUM(b.quantity_on_hand - b.quantity_quarantined), 0)::bigint AS stock_on_hand
 FROM   inventory.products p
 LEFT JOIN inventory.batches b
     ON  b.product_id = p.id
     AND b.tenant_id  = p.tenant_id
     AND NOT b.is_deleted
-    AND b.quantity_on_hand > 0
-    AND b.expiry_date > $2::date
+    AND b.quantity_on_hand - b.quantity_quarantined > 0
+    AND b.expiry_date >= $2::date
 WHERE  p.tenant_id = $1
 AND    NOT p.is_deleted
 AND    p.reorder_level > 0
 GROUP  BY p.id, p.sku, p.reorder_level
-HAVING COALESCE(SUM(b.quantity_on_hand), 0) < p.reorder_level
+HAVING COALESCE(SUM(b.quantity_on_hand - b.quantity_quarantined), 0) < p.reorder_level
 ORDER  BY p.id ASC
 `
 
 type ListProductsBelowReorderForTenantParams struct {
-	TenantID pgtype.UUID
-	Today    pgtype.Date
+	TenantID    pgtype.UUID
+	MinSellable pgtype.Date
 }
 
 type ListProductsBelowReorderForTenantRow struct {
@@ -397,12 +404,13 @@ type ListProductsBelowReorderForTenantRow struct {
 // ReorderScanJob workhorse. Per-tenant scan returning products where
 //
 //	reorder_level > 0 AND
-//	SUM(live + not-expired batches' quantity_on_hand) < reorder_level
+//	SUM(sellable batches' on-hand units, quarantined excluded) < reorder_level
 //
-// LEFT JOIN so products with NO live batches still surface.
-// $1 = tenant_id, $2 = today (UTC, date-only).
+// A sellable batch is one with expiry_date >= min_sellable (the one bound).
+// LEFT JOIN so products with NO sellable stock still surface.
+// $1 = tenant_id, min_sellable = common/expiry.MinSellableExpiry.
 func (q *Queries) ListProductsBelowReorderForTenant(ctx context.Context, arg ListProductsBelowReorderForTenantParams) ([]ListProductsBelowReorderForTenantRow, error) {
-	rows, err := q.db.Query(ctx, listProductsBelowReorderForTenant, arg.TenantID, arg.Today)
+	rows, err := q.db.Query(ctx, listProductsBelowReorderForTenant, arg.TenantID, arg.MinSellable)
 	if err != nil {
 		return nil, err
 	}
@@ -455,9 +463,10 @@ SET    quantity_on_hand = $2,
        batch_number     = $8,
        manufacturer_name = $9,
        manufacturing_licence_number = $10,
-       quantity_reserved = $11
+       quantity_reserved = $11,
+       quantity_quarantined = $12
 WHERE  id = $1
-AND    version = $12
+AND    version = $13
 `
 
 type UpdateBatchWithVersionCheckParams struct {
@@ -472,6 +481,7 @@ type UpdateBatchWithVersionCheckParams struct {
 	ManufacturerName           string
 	ManufacturingLicenceNumber string
 	QuantityReserved           int64
+	QuantityQuarantined        int64
 	VersionExpected            int64
 }
 
@@ -492,6 +502,7 @@ func (q *Queries) UpdateBatchWithVersionCheck(ctx context.Context, arg UpdateBat
 		arg.ManufacturerName,
 		arg.ManufacturingLicenceNumber,
 		arg.QuantityReserved,
+		arg.QuantityQuarantined,
 		arg.VersionExpected,
 	)
 	if err != nil {

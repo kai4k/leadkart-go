@@ -30,6 +30,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/leadkart/leadkart-go/internal/common/errs"
+	"github.com/leadkart/leadkart-go/internal/common/expiry"
 	"github.com/leadkart/leadkart-go/internal/common/textlimit"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -71,13 +72,21 @@ const (
 	MovementAdjustment  MovementType = "adjustment"
 	MovementReservation MovementType = "reservation"
 	MovementRelease     MovementType = "release"
+	// MovementQuarantine sets free units apart as "Not for sale".
+	MovementQuarantine MovementType = "quarantine"
+	// MovementReleaseQuarantine returns quarantined units to free stock.
+	MovementReleaseQuarantine MovementType = "release_quarantine"
+	// MovementWriteOff removes quarantined units from the books. The batch row
+	// and the ledger keep the history: it is a state change, never a delete.
+	MovementWriteOff MovementType = "write_off"
 )
 
 // IsValid reports whether m is in the closed catalogue.
 func (m MovementType) IsValid() bool {
 	switch m {
 	case MovementInbound, MovementOutbound, MovementAdjustment,
-		MovementReservation, MovementRelease:
+		MovementReservation, MovementRelease,
+		MovementQuarantine, MovementReleaseQuarantine, MovementWriteOff:
 		return true
 	default:
 		return false
@@ -91,7 +100,7 @@ func (m MovementType) IsValid() bool {
 // true-hold reservation semantics adopted per ADR 0063 §4.
 func (m MovementType) IsMutating() bool {
 	switch m {
-	case MovementInbound, MovementOutbound, MovementAdjustment:
+	case MovementInbound, MovementOutbound, MovementAdjustment, MovementWriteOff:
 		return true
 	default:
 		return false
@@ -116,10 +125,23 @@ var ErrInsufficientAvailable = errs.New(errs.KindConflict, "batch", "insufficien
 // prior reservations exactly).
 var ErrReleaseExceedsReserved = errs.New(errs.KindInvalidInput, "batch", "release exceeds reserved quantity")
 
-// ErrExpired — Inbound rejected because the batch's expiry date is in
-// the past. Outbound from an expired batch IS allowed (write-off /
-// disposal) — the gate is one-way.
-var ErrExpired = errs.New(errs.KindConflict, "batch", "batch has expired; inbound movements rejected")
+// ErrExpired — the movement is refused because the batch is past its printed
+// expiry month: stock cannot be received into it or released from quarantine
+// (the legal limit no setting moves). Outbound, quarantine and write-off stay
+// allowed so expired stock can be set apart and disposed of.
+var ErrExpired = errs.New(errs.KindConflict, "batch", "batch is past its printed expiry; the movement is refused")
+
+// ErrInsufficientFree — a quarantine requested more than the batch's free units
+// (on hand minus reserved minus already quarantined).
+var ErrInsufficientFree = errs.New(errs.KindConflict, "batch", "insufficient free stock to quarantine")
+
+// ErrInsufficientQuarantined — a release or write-off requested more than the
+// batch's quarantined units.
+var ErrInsufficientQuarantined = errs.New(errs.KindConflict, "batch", "insufficient quarantined stock")
+
+// ErrManufactureDateInFuture — the manufacture date is after the company business
+// day: a batch cannot have been made tomorrow.
+var ErrManufactureDateInFuture = errs.New(errs.KindInvalidInput, "batch", "manufacture_date is in the future")
 
 // ErrDeleted — operation rejected on a soft-deleted batch.
 var ErrDeleted = errs.New(errs.KindConflict, "batch", "batch is deleted")
@@ -175,6 +197,7 @@ type Batch struct {
 	purchasePricePaise         int64
 	quantityOnHand             int64
 	quantityReserved           int64
+	quantityQuarantined        int64
 	version                    int64
 	createdAt                  time.Time
 	updatedAt                  time.Time
@@ -242,6 +265,9 @@ func New(id ID, productID product.ID, tenantID tenant.ID, actorID membership.ID,
 	}
 	if spec.ExpiryDate.IsZero() {
 		return nil, fmt.Errorf("%w: expiry_date required", ErrInvalid)
+	}
+	if !expiry.IsMonthEnd(spec.ExpiryDate) {
+		return nil, fmt.Errorf("%w: expiry_date must be the last day of the printed month", ErrInvalid)
 	}
 	if !spec.ExpiryDate.After(spec.ManufactureDate) {
 		return nil, fmt.Errorf("%w: expiry_date must be after manufacture_date", ErrInvalid)
@@ -322,7 +348,50 @@ func (b *Batch) QuantityReserved() int64 { return b.quantityReserved }
 // AvailableQuantity returns the stock free to reserve: on-hand minus
 // reserved. This is the figure the reservation guard checks — the
 // oversell-prevention invariant (ADR 0063 §4).
-func (b *Batch) AvailableQuantity() int64 { return b.quantityOnHand - b.quantityReserved }
+func (b *Batch) AvailableQuantity() int64 {
+	return b.quantityOnHand - b.quantityReserved - b.quantityQuarantined
+}
+
+// QuantityQuarantined returns the units set apart as "Not for sale". They are
+// part of QuantityOnHand and are never available to reserve or sell.
+func (b *Batch) QuantityQuarantined() int64 { return b.quantityQuarantined }
+
+// Buckets splits the batch's on-hand units into the five stock buckets, given
+// whether the batch is still sellable under the company's expiry rule. The five
+// always sum to on-hand: reserved + available + unsellable + quarantined.
+//
+//   - Reserved: held for orders.
+//   - Quarantined: set apart as "Not for sale".
+//   - Available: free units of a sellable batch.
+//   - Unsellable: free units of a batch past the company's cut-off (not
+//     quarantined yet): they must be set apart, never sold.
+func (b *Batch) Buckets(sellable bool) Buckets {
+	free := b.quantityOnHand - b.quantityReserved - b.quantityQuarantined
+	out := Buckets{OnHand: b.quantityOnHand, Reserved: b.quantityReserved, Quarantined: b.quantityQuarantined}
+	if sellable {
+		out.Available = free
+	} else {
+		out.Unsellable = free
+	}
+	return out
+}
+
+// Buckets is the stock split of a batch or, summed, of a product.
+type Buckets struct {
+	OnHand      int64
+	Reserved    int64
+	Available   int64
+	Unsellable  int64
+	Quarantined int64
+}
+
+// Add returns the bucket-wise sum.
+func (a Buckets) Add(o Buckets) Buckets {
+	return Buckets{
+		OnHand: a.OnHand + o.OnHand, Reserved: a.Reserved + o.Reserved, Available: a.Available + o.Available,
+		Unsellable: a.Unsellable + o.Unsellable, Quarantined: a.Quarantined + o.Quarantined,
+	}
+}
 
 // Version returns the optimistic-concurrency token. The adapter writes
 // `WHERE version = $current` + bumps to current+1 on UPDATE; mismatch
@@ -345,12 +414,11 @@ func (b *Batch) CreatedAt() time.Time { return b.createdAt }
 // UpdatedAt returns the most-recent mutation timestamp.
 func (b *Batch) UpdatedAt() time.Time { return b.updatedAt }
 
-// IsExpired reports whether the batch's expiry date is in the past
-// relative to the supplied `now`. Caller passes the same instant used
-// for the surrounding operation so expiry decisions stay deterministic
-// inside a multi-aggregate handler invocation.
-func (b *Batch) IsExpired(now time.Time) bool {
-	return !b.expiryDate.After(now)
+// IsPastPrintedExpiry reports whether the batch's printed expiry month is over
+// on the business day today. This is the legal limit; the company's own
+// cut-off is the Window of the inventory app.
+func (b *Batch) IsPastPrintedExpiry(today time.Time) bool {
+	return expiry.IsPastPrintedExpiry(b.expiryDate, today)
 }
 
 // ----- State transitions ----------------------------------------------------
@@ -388,7 +456,7 @@ func (b *Batch) IsExpired(now time.Time) bool {
 // updatedAt timestamp — caller threads the same value into the paired
 // StockMovement.New so the ledger row + the batch row share one moment
 // in audit / reconciliation queries.
-func (b *Batch) ApplyMovement(movement MovementType, quantity int64, now time.Time) error {
+func (b *Batch) ApplyMovement(movement MovementType, quantity int64, now, today time.Time) error {
 	if b.deleted {
 		return fmt.Errorf("%w: %s", ErrDeleted, b.id)
 	}
@@ -400,8 +468,8 @@ func (b *Batch) ApplyMovement(movement MovementType, quantity int64, now time.Ti
 		if quantity <= 0 {
 			return fmt.Errorf("%w: inbound quantity must be > 0 (got %d)", ErrInvalid, quantity)
 		}
-		if b.IsExpired(now) {
-			return fmt.Errorf("%w: expired %s", ErrExpired, b.expiryDate.Format("2006-01-02"))
+		if b.IsPastPrintedExpiry(today) {
+			return fmt.Errorf("%w: printed expiry %s", ErrExpired, expiry.PrintedMonth(b.expiryDate))
 		}
 		b.quantityOnHand += quantity
 	case MovementOutbound:
@@ -420,8 +488,8 @@ func (b *Batch) ApplyMovement(movement MovementType, quantity int64, now time.Ti
 			return fmt.Errorf("%w: adjustment quantity must be non-zero", ErrInvalid)
 		}
 		next := b.quantityOnHand + quantity
-		// Adjustment-down cannot drop on-hand below the reserved hold.
-		if next < b.quantityReserved {
+		// Adjustment-down cannot drop on-hand below the held units.
+		if next < b.quantityReserved+b.quantityQuarantined {
 			return fmt.Errorf("%w: adjustment would drive on-hand (%d) below reserved (%d), delta %d",
 				ErrInsufficientStock, b.quantityOnHand, b.quantityReserved, quantity)
 		}
@@ -444,9 +512,47 @@ func (b *Batch) ApplyMovement(movement MovementType, quantity int64, now time.Ti
 			return fmt.Errorf("%w: requested %d, reserved %d", ErrReleaseExceedsReserved, quantity, b.quantityReserved)
 		}
 		b.quantityReserved -= quantity
+	default:
+		if err := b.applyQuarantineMovement(movement, quantity, today); err != nil {
+			return err
+		}
 	}
 	b.version++
 	b.updatedAt = now.UTC()
+	return nil
+}
+
+// applyQuarantineMovement applies quarantine, release_quarantine and write_off.
+func (b *Batch) applyQuarantineMovement(movement MovementType, quantity int64, today time.Time) error {
+	if quantity <= 0 {
+		return fmt.Errorf("%w: %s quantity must be > 0 (got %d)", ErrInvalid, movement, quantity)
+	}
+	switch movement {
+	case MovementQuarantine:
+		if quantity > b.AvailableQuantity() {
+			return fmt.Errorf("%w: requested %d, free %d (on-hand %d, reserved %d, quarantined %d)",
+				ErrInsufficientFree, quantity, b.AvailableQuantity(), b.quantityOnHand, b.quantityReserved, b.quantityQuarantined)
+		}
+		b.quantityQuarantined += quantity
+	case MovementReleaseQuarantine:
+		if quantity > b.quantityQuarantined {
+			return fmt.Errorf("%w: requested %d, quarantined %d", ErrInsufficientQuarantined, quantity, b.quantityQuarantined)
+		}
+		// Stock past its printed expiry may only stay apart, go back to the
+		// maker or be written off (Rule 65(17)).
+		if b.IsPastPrintedExpiry(today) {
+			return fmt.Errorf("%w: printed expiry %s", ErrExpired, expiry.PrintedMonth(b.expiryDate))
+		}
+		b.quantityQuarantined -= quantity
+	case MovementWriteOff:
+		if quantity > b.quantityQuarantined {
+			return fmt.Errorf("%w: requested %d, quarantined %d", ErrInsufficientQuarantined, quantity, b.quantityQuarantined)
+		}
+		b.quantityQuarantined -= quantity
+		b.quantityOnHand -= quantity
+	default:
+		return fmt.Errorf("%w: unknown movement type %q", ErrInvalid, movement)
+	}
 	return nil
 }
 
@@ -488,6 +594,7 @@ type Snapshot struct {
 	PurchasePricePaise         int64
 	QuantityOnHand             int64
 	QuantityReserved           int64
+	QuantityQuarantined        int64
 	Version                    int64
 	CreatedAt                  time.Time
 	UpdatedAt                  time.Time
@@ -512,6 +619,7 @@ func UnmarshalFromDB(s Snapshot) *Batch {
 		purchasePricePaise:         s.PurchasePricePaise,
 		quantityOnHand:             s.QuantityOnHand,
 		quantityReserved:           s.QuantityReserved,
+		quantityQuarantined:        s.QuantityQuarantined,
 		version:                    s.Version,
 		createdAt:                  s.CreatedAt,
 		updatedAt:                  s.UpdatedAt,

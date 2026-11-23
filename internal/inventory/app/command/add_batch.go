@@ -9,6 +9,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+	"github.com/leadkart/leadkart-go/internal/inventory/app/sellability"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
@@ -42,7 +43,15 @@ type AddBatchCommand struct {
 // AddBatchResult carries the new BatchID.
 type AddBatchResult struct {
 	BatchID batch.ID
+	// Warnings names non-fatal conditions: see [WarningPastSellableCutoff].
+	Warnings []string
 }
+
+// WarningPastSellableCutoff is returned (never an error) when stock is received
+// into a batch already past the company sellable cut-off but not past its
+// printed expiry: the units are on hand yet not for sale (they count in the
+// unsellable bucket until set apart).
+const WarningPastSellableCutoff = "past_sellable_cutoff"
 
 // AddBatchHandler resolves the parent Product, constructs the Batch, and
 // persists, all inside one UoW transaction.
@@ -63,6 +72,7 @@ type AddBatchHandler struct {
 	products      product.Repository
 	batches       batch.Repository
 	movements     stockmovement.Repository
+	window        sellability.Resolver
 	now           func() time.Time
 	newBatchID    func() batch.ID
 	newMovementID func() stockmovement.ID
@@ -71,7 +81,7 @@ type AddBatchHandler struct {
 // NewAddBatchHandler wires the handler. now is the injected clock (nil →
 // time.Now). newBatchID and newMovementID are the aggregate-ID factories
 // required by TestArch_HandlersInjectIDFactory; tests inject deterministic ones.
-func NewAddBatchHandler(uow pg.UnitOfWork, products product.Repository, batches batch.Repository, movements stockmovement.Repository, now func() time.Time, newBatchID func() batch.ID, newMovementID func() stockmovement.ID) AddBatchHandler {
+func NewAddBatchHandler(uow pg.UnitOfWork, products product.Repository, batches batch.Repository, movements stockmovement.Repository, window sellability.Resolver, now func() time.Time, newBatchID func() batch.ID, newMovementID func() stockmovement.ID) AddBatchHandler {
 	if newBatchID == nil {
 		panic("command: NewAddBatchHandler newBatchID required")
 	}
@@ -82,7 +92,7 @@ func NewAddBatchHandler(uow pg.UnitOfWork, products product.Repository, batches 
 		now = time.Now
 	}
 	return AddBatchHandler{
-		uow: uow, products: products, batches: batches, movements: movements,
+		uow: uow, products: products, batches: batches, movements: movements, window: window,
 		now: now, newBatchID: newBatchID, newMovementID: newMovementID,
 	}
 }
@@ -100,9 +110,18 @@ func (h AddBatchHandler) Handle(ctx context.Context, cmd AddBatchCommand) (AddBa
 	if cmd.InitialQuantity < 0 {
 		return AddBatchResult{}, fmt.Errorf("%w: initial_quantity must be >= 0 (got %d)", batch.ErrInvalid, cmd.InitialQuantity)
 	}
+	// The company expiry rule (business day, cut-off) is read BEFORE the
+	// transaction opens; ReadPolicy joins a caller transaction when there is one.
+	w, err := h.window.Resolve(ctx, cmd.TenantID)
+	if err != nil {
+		return AddBatchResult{}, fmt.Errorf("add batch: %w", err)
+	}
+	if cmd.ManufactureDate.After(w.Today) {
+		return AddBatchResult{}, fmt.Errorf("%w: manufacture_date %s", batch.ErrManufactureDateInFuture, cmd.ManufactureDate.Format(time.DateOnly))
+	}
 	now := h.now()
 	var result AddBatchResult
-	err := h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
+	err = h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
 		p, err := h.products.GetByID(ctx, cmd.TenantID, cmd.ProductID)
 		if err != nil {
 			if errors.Is(err, product.ErrNotFound) {
@@ -138,7 +157,7 @@ func (h AddBatchHandler) Handle(ctx context.Context, cmd AddBatchCommand) (AddBa
 		}
 		var opening *stockmovement.Movement
 		if cmd.InitialQuantity > 0 {
-			if opening, err = h.openingStock(b, cmd, now); err != nil {
+			if opening, err = h.openingStock(b, cmd, now, w.Today); err != nil {
 				return err
 			}
 		}
@@ -152,6 +171,9 @@ func (h AddBatchHandler) Handle(ctx context.Context, cmd AddBatchCommand) (AddBa
 			}
 		}
 		result = AddBatchResult{BatchID: b.ID()}
+		if cmd.InitialQuantity > 0 && !w.IsSellable(b.ExpiryDate()) {
+			result.Warnings = []string{WarningPastSellableCutoff}
+		}
 		return nil
 	})
 	if err != nil {
@@ -163,8 +185,8 @@ func (h AddBatchHandler) Handle(ctx context.Context, cmd AddBatchCommand) (AddBa
 // openingStock applies cmd.InitialQuantity (above 0) to the not-yet-stored
 // batch as an inbound movement and returns its ledger row. It writes nothing:
 // a refusal here leaves the database untouched.
-func (h AddBatchHandler) openingStock(b *batch.Batch, cmd AddBatchCommand, now time.Time) (*stockmovement.Movement, error) {
-	if err := b.ApplyMovement(batch.MovementInbound, cmd.InitialQuantity, now); err != nil {
+func (h AddBatchHandler) openingStock(b *batch.Batch, cmd AddBatchCommand, now, today time.Time) (*stockmovement.Movement, error) {
+	if err := b.ApplyMovement(batch.MovementInbound, cmd.InitialQuantity, now, today); err != nil {
 		return nil, fmt.Errorf("add batch: opening stock: %w", err)
 	}
 	m, err := stockmovement.New(h.newMovementID(), stockmovement.Spec{

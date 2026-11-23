@@ -207,13 +207,14 @@ func New(id ID, spec Spec, now time.Time) (*Movement, error) {
 // re-derive it.
 func validateQuantityForType(mt batch.MovementType, q int64) error {
 	switch mt {
-	case batch.MovementInbound, batch.MovementReservation, batch.MovementRelease:
+	case batch.MovementInbound, batch.MovementReservation, batch.MovementRelease,
+		batch.MovementQuarantine, batch.MovementReleaseQuarantine:
 		if q <= 0 {
 			return fmt.Errorf("%w: %s quantity must be > 0 (got %d)", ErrInvalid, mt, q)
 		}
-	case batch.MovementOutbound:
+	case batch.MovementOutbound, batch.MovementWriteOff:
 		if q >= 0 {
-			return fmt.Errorf("%w: outbound quantity must be < 0 (got %d)", ErrInvalid, q)
+			return fmt.Errorf("%w: %s quantity must be < 0 (got %d)", ErrInvalid, mt, q)
 		}
 	case batch.MovementAdjustment:
 		if q == 0 {

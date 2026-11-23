@@ -2613,7 +2613,7 @@ paths:
           in: query
           required: false
           schema: { type: integer, minimum: 0, maximum: 36500 }
-          description: 'Only products whose `earliest_expiry` is on or before today plus this many days (so: an unexpired batch that holds stock expires within the window; the bound is inclusive; 0 matches nothing, because a batch expiring today is already expired). 400 `invalid_query`, `errors.expiring_within_days`: `invalid_type` (not an integer), `too_small` (below 0), `too_large` (above 36500).'
+          description: 'Only products with a SELLABLE batch holding stock whose LAST SELLABLE DAY (not the printed expiry) is on or before the business day plus this many days; the bound is inclusive. 400 `invalid_query`, `errors.expiring_within_days`: `invalid_type` (not an integer), `too_small` (below 0), `too_large` (above 36500).'
         - $ref: '#/components/parameters/XTenantId'
       responses:
         '429': { $ref: '#/components/responses/TooManyRequests' }
@@ -2780,8 +2780,9 @@ paths:
       summary: List Batches for a Product (cursor-paginated, FEFO-ordered)
       description: |
         Requires `inventory.stock.read` OR `inventory.stock.manage`.
-        Returns live batches ordered by expiry_date DESC. Expired batches
-        excluded by default (pass `include_expired=true` to include).
+        Returns live batches ordered by expiry_date DESC. Batches past the
+        company sellable cut-off (`sellable: false`) are excluded by default
+        (pass `include_expired=true` to include them).
       parameters:
         - { $ref: '#/components/parameters/ProductId' }
         - { $ref: '#/components/parameters/Cursor' }
@@ -2911,7 +2912,7 @@ paths:
           required: false
           schema:
             type: string
-            enum: [inbound, outbound, adjustment, reservation, release]
+            enum: [inbound, outbound, adjustment, reservation, release, quarantine, release_quarantine, write_off]
         - $ref: '#/components/parameters/XTenantId'
       responses:
         '429': { $ref: '#/components/responses/TooManyRequests' }
@@ -6317,7 +6318,7 @@ components:
         balance:   { type: integer, format: int64 }
     ProductDto:
       type: object
-      required: [id, tenant_id, sku, name, dosage_form, pack_size, hsn_code, gst_rate_bps, is_active, created_at, updated_at, product_category, reorder_level, expiry_alert_threshold_days, stock_on_hand, stock_reserved, stock_available]
+      required: [id, tenant_id, sku, name, dosage_form, pack_size, hsn_code, gst_rate_bps, is_active, created_at, updated_at, product_category, reorder_level, expiry_alert_threshold_days, stock_on_hand, stock_reserved, stock_available, stock_unsellable, stock_quarantined]
       properties:
         id:            { type: string, format: uuid }
         tenant_id:     { type: string, format: uuid }
@@ -6334,10 +6335,12 @@ components:
         product_category:            { type: string, minLength: 1, maxLength: 64, description: 'Never empty: a product stored without a category reads `General`. Free text; the values the form offers come from `GET /inventory/product-categories`.' }
         reorder_level:               { type: integer, minimum: 0, maximum: 2147483647, description: 'Units. 0: the low-stock alert is off for this product.' }
         expiry_alert_threshold_days: { type: integer, minimum: 0, maximum: 36500, description: 'Days before expiry at which a batch is reported as expiring soon. 0: the expiry alert is off for this product.' }
-        stock_on_hand:               { type: integer, format: int64, minimum: 0, description: 'Units on hand, added up over the product''s live batches that are NOT expired (expiry date after today, UTC). Units in an expired batch are not counted: they cannot be sold.' }
-        stock_reserved:              { type: integer, format: int64, minimum: 0, description: 'Of `stock_on_hand`, the units held for confirmed orders (same batches).' }
-        stock_available:             { type: integer, format: int64, minimum: 0, description: '`stock_on_hand` minus `stock_reserved`: what can still be sold.' }
-        earliest_expiry:             { type: string, format: date-time, description: 'The soonest expiry date among the unexpired batches that hold stock (midnight UTC, the shape of `BatchDto.expiry_date`). Absent when the product has no unexpired stock.' }
+        stock_on_hand:               { type: integer, format: int64, minimum: 0, description: 'Every live unit of the product, expired and quarantined included. The five stock fields sum: `stock_on_hand = stock_reserved + stock_available + stock_unsellable + stock_quarantined`.' }
+        stock_reserved:              { type: integer, format: int64, minimum: 0, description: 'Units held for confirmed orders.' }
+        stock_available:             { type: integer, format: int64, minimum: 0, description: 'The free units (not reserved, not quarantined) of batches still SELLABLE today under the company expiry rule (`expiry.stop_months_before`, business day at `expiry.business_day_utc_offset_minutes`). What can be sold.' }
+        stock_unsellable:            { type: integer, format: int64, minimum: 0, description: 'Free units of batches past the company sellable cut-off that are not quarantined yet. Never sold; they should be set apart (`quarantine` movement).' }
+        stock_quarantined:           { type: integer, format: int64, minimum: 0, description: 'Units set apart as "Not for sale" (Drugs Rules, Rule 65(17)). Part of `stock_on_hand`, never available.' }
+        earliest_expiry:             { type: string, format: date-time, description: 'The soonest expiry (the last day of the printed month, midnight UTC) among the SELLABLE batches that hold stock. Absent when none does.' }
 
     CreateProductRequest:
       type: object
@@ -6399,31 +6402,40 @@ components:
 
     BatchDto:
       type: object
-      required: [id, product_id, tenant_id, batch_number, manufacture_date, expiry_date, manufacturer_name, manufacturing_licence_number, mrp_paise, purchase_price_paise, quantity_on_hand, quantity_reserved, version, created_at, updated_at]
+      required: [id, product_id, tenant_id, batch_number, manufacture_date, expiry_date, manufacturer_name, manufacturing_licence_number, mrp_paise, purchase_price_paise, quantity_on_hand, quantity_reserved, quantity_quarantined, quantity_available, quantity_unsellable, expiry_month, sellable, last_sellable_day, past_printed_expiry, version, created_at, updated_at]
       properties:
         id:                            { type: string, format: uuid }
         product_id:                    { type: string, format: uuid }
         tenant_id:                     { type: string, format: uuid }
         batch_number:                  { type: string, minLength: 1, maxLength: 100 }
         manufacture_date:              { type: string, format: date-time }
-        expiry_date:                   { type: string, format: date-time }
+        expiry_month:                  { type: string, pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$', description: 'The month printed on the label, `2027-03`.' }
+        expiry_date:                   { type: string, format: date-time, description: 'The LAST DAY of the printed month (midnight UTC): a batch is valid through it (Drugs Rules, Rule 96). The database refuses any other date.' }
         manufacturer_name:             { type: string, minLength: 1, maxLength: 200 }
         manufacturing_licence_number:  { type: string, minLength: 1, maxLength: 100 }
         mrp_paise:                     { type: integer, format: int64, minimum: 0, description: 'Maximum Retail Price in paise (1 INR = 100 paise; Stripe canon)' }
         purchase_price_paise:          { type: integer, format: int64, minimum: 0 }
         quantity_on_hand:              { type: integer, format: int64, minimum: 0 }
         quantity_reserved:             { type: integer, format: int64, minimum: 0, description: 'Of `quantity_on_hand`, the units held for confirmed orders. Only `quantity_on_hand - quantity_reserved` can be sold, moved out (`outbound`) or adjusted away; asking for more is 409 `insufficient_stock`.' }
+        quantity_quarantined:          { type: integer, format: int64, minimum: 0, description: 'Of `quantity_on_hand`, the units set apart as "Not for sale". Never available, reservable or shippable.' }
+        quantity_available:            { type: integer, format: int64, minimum: 0, description: 'The free units (on hand minus reserved minus quarantined) while the batch is sellable today; 0 once it is past the cut-off.' }
+        quantity_unsellable:           { type: integer, format: int64, minimum: 0, description: 'The free units once the batch is past the company cut-off (not quarantined yet); 0 while it is sellable.' }
+        sellable:                      { type: boolean, description: 'The company expiry rule applied to this batch today: today (the business day) is not after `last_sellable_day`.' }
+        last_sellable_day:             { type: string, format: date, description: 'The last day this batch may be sold: the last day of (printed month minus `expiry.stop_months_before` months).' }
+        past_printed_expiry:           { type: boolean, description: 'The printed month is over. The legal limit, whatever the setting: such stock can only be quarantined, returned to the maker or written off.' }
         version:                       { type: integer, format: int64, description: 'Optimistic-concurrency token (Vernon IDDD ch.10)' }
         created_at:                    { type: string, format: date-time }
         updated_at:                    { type: string, format: date-time }
 
     AddBatchRequest:
       type: object
-      required: [batch_number, manufacture_date, expiry_date, manufacturer_name, manufacturing_licence_number, mrp_paise, purchase_price_paise]
+      required: [batch_number, manufacture_date, expiry_month, manufacturer_name, manufacturing_licence_number, mrp_paise, purchase_price_paise]
+      description: |
+        Refusals: `errors.expiry_month` (`required`, `invalid_format`: not a `YYYY-MM` month), `errors.manufacture_date` (`in_future`: after the company business day).
       properties:
         batch_number:                  { type: string, minLength: 1, maxLength: 100 }
         manufacture_date:              { type: string, format: date-time }
-        expiry_date:                   { type: string, format: date-time }
+        expiry_month:                  { type: string, pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$', description: 'The month printed on the label, `2027-03`; the batch is valid through its last day. A full date is not accepted.' }
         manufacturer_name:             { type: string, minLength: 1, maxLength: 200 }
         manufacturing_licence_number:  { type: string, minLength: 1, maxLength: 100 }
         mrp_paise:                     { type: integer, format: int64, minimum: 0 }
@@ -6432,9 +6444,10 @@ components:
 
     AddBatchResponse:
       type: object
-      required: [batch_id]
+      required: [batch_id, warnings]
       properties:
         batch_id: { type: string, format: uuid }
+        warnings: { type: array, items: { type: string, enum: [past_sellable_cutoff] }, description: '`past_sellable_cutoff`: opening stock was received into a batch already past the company cut-off (but not past its printed expiry); the units are on hand and counted as unsellable. Received stock past the PRINTED expiry is refused (409 `batch_expired`).' }
 
     FefoBatchesResponse:
       type: object
@@ -6462,7 +6475,7 @@ components:
         batch_id:                 { type: string, format: uuid }
         product_id:               { type: string, format: uuid }
         tenant_id:                { type: string, format: uuid }
-        type:                     { type: string, enum: [inbound, outbound, adjustment, reservation, release] }
+        type:                     { type: string, enum: [inbound, outbound, adjustment, reservation, release, quarantine, release_quarantine, write_off] }
         quantity:                 { type: integer, format: int64, description: 'Signed delta; Outbound is negative.' }
         quantity_on_hand_after:   { type: integer, format: int64, minimum: 0 }
         reason:                   { type: string, minLength: 1, maxLength: 500 }
@@ -6474,17 +6487,19 @@ components:
       type: object
       required: [type, quantity, reason]
       properties:
-        type:             { type: string, enum: [inbound, outbound, adjustment], description: 'Request-only enum: the three types a caller may log. `reservation` and `release` belong to the order saga; they appear in the movement ledger READ shape (`MovementDto.type`) but are refused here with 422 invalid_movement_type, like any other value.' }
+        type:             { type: string, enum: [inbound, outbound, adjustment, quarantine, release_quarantine, write_off], description: 'Request-only enum: the types a caller may log. `quarantine` sets free units apart as "Not for sale" (never available or shippable); `release_quarantine` returns them (refused once the printed expiry month is over); `write_off` removes quarantined units from on hand (a state change: the batch and its ledger rows stay; 409 `insufficient_quarantined` when asked for more than is set apart). `reservation` and `release` belong to the order saga; they appear in the movement ledger READ shape (`MovementDto.type`) but are refused here with 422 invalid_movement_type, like any other value.' }
         quantity:         { type: integer, format: int64, minimum: 1, description: 'Positive magnitude; direction implicit in type.' }
         reason:           { type: string, minLength: 1, maxLength: 500 }
         source_reference: { type: string, maxLength: 200 }
 
     LogMovementResponse:
       type: object
-      required: [movement_id, quantity_on_hand_after]
+      required: [movement_id, quantity_on_hand_after, quantity_quarantined_after, warnings]
       properties:
-        movement_id:            { type: string, format: uuid }
-        quantity_on_hand_after: { type: integer, format: int64, minimum: 0 }
+        movement_id:               { type: string, format: uuid }
+        quantity_on_hand_after:    { type: integer, format: int64, minimum: 0 }
+        quantity_quarantined_after: { type: integer, format: int64, minimum: 0 }
+        warnings:                  { type: array, items: { type: string, enum: [past_sellable_cutoff] } }
 
     ListMovementsResponse:
       type: object

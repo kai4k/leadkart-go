@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/leadkart/leadkart-go/internal/common/expiry"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/common/pg/rlstest"
@@ -57,7 +58,7 @@ func TestKeysetBatchesPage_UsesIndexUnderRLS(t *testing.T) {
 	// 200 rows: enough for the planner to reliably prefer the index.
 	mfg := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	for i := range 200 {
-		exp := time.Date(2028, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(i) * 24 * time.Hour)
+		exp := expiry.MonthEnd(2028, time.Month(1+i)) // 200 distinct month ends
 		b, _ := batch.New(batch.ID(ids.NewV7().String()), p.ID(), tid, actor,
 			batch.Spec{
 				BatchNumber:                fmt.Sprintf("LOT-%03d", i),

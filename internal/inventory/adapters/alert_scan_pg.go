@@ -72,10 +72,10 @@ func (r *AlertScanRepository) ListBatchesNearExpiry(ctx context.Context, tenantI
 
 // ListProductsBelowReorder returns products whose live + not-expired
 // stock-on-hand is strictly below reorder_level.
-func (r *AlertScanRepository) ListProductsBelowReorder(ctx context.Context, tenantID uuid.UUID, today time.Time) ([]jobs.ReorderProduct, error) {
+func (r *AlertScanRepository) ListProductsBelowReorder(ctx context.Context, tenantID uuid.UUID, minSellable time.Time) ([]jobs.ReorderProduct, error) {
 	rows, err := r.q.ListProductsBelowReorderForTenant(ctx, db.ListProductsBelowReorderForTenantParams{
-		TenantID: pgconv.PgUUID(tenantID),
-		Today:    pgconv.PgDate(today),
+		TenantID:    pgconv.PgUUID(tenantID),
+		MinSellable: pgconv.PgDate(minSellable),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("alert scan repo: below reorder: %w", err)

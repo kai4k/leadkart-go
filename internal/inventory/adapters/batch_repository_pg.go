@@ -169,6 +169,7 @@ func (r *BatchRepository) ListByProductPage(ctx context.Context, tenantID tenant
 			CursorExpiryDate: cursorExpiry,
 			CursorID:         cursorID,
 			IncludeExpired:   filter.IncludeExpired,
+			MinSellable:      pgconv.PgDate(filter.MinSellable),
 			//nolint:gosec // pageSize clamped to MaxPageSize (200)
 			Limit: int32(pageSize + 1),
 		})
@@ -199,8 +200,8 @@ func (r *BatchRepository) ListByProductPage(ctx context.Context, tenantID tenant
 // ListFefoForProduct satisfies [batch.Repository]. Tenant-scoped read
 // — GUC bound from the explicit tenantID parameter (TDL canon per
 // ADR 0062). FEFO ordering (expiry_date ASC, id ASC) per BRD §6.5;
-// expired batches filtered at the SQL level using `now`.
-func (r *BatchRepository) ListFefoForProduct(ctx context.Context, tenantID tenant.ID, productID product.ID, now time.Time) ([]*batch.Batch, error) {
+// unsellable batches are filtered in SQL by the one bound, minSellable.
+func (r *BatchRepository) ListFefoForProduct(ctx context.Context, tenantID tenant.ID, productID product.ID, minSellable time.Time) ([]*batch.Batch, error) {
 	pid, err := uuid.Parse(productID.String())
 	if err != nil {
 		return nil, fmt.Errorf("batch repo: parse product id: %w", err)
@@ -209,8 +210,8 @@ func (r *BatchRepository) ListFefoForProduct(ctx context.Context, tenantID tenan
 	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		rows, err := q.ListFefoBatchesForProduct(ctx, db.ListFefoBatchesForProductParams{
-			ProductID: pgconv.PgUUID(pid),
-			Today:     pgconv.PgDate(now),
+			ProductID:   pgconv.PgUUID(pid),
+			MinSellable: pgconv.PgDate(minSellable),
 		})
 		if err != nil {
 			return fmt.Errorf("batch repo: list fefo: %w", err)
@@ -323,6 +324,7 @@ func persistBatchState(ctx context.Context, q *db.Queries, b *batch.Batch, expec
 		ID:                         pgconv.PgUUID(bid),
 		QuantityOnHand:             b.QuantityOnHand(),
 		QuantityReserved:           b.QuantityReserved(),
+		QuantityQuarantined:        b.QuantityQuarantined(),
 		Version:                    b.Version(),
 		UpdatedAt:                  pgconv.PgRequiredTimestamp(b.UpdatedAt()),
 		IsDeleted:                  b.IsDeleted(),
@@ -380,6 +382,7 @@ func rowToBatch(row db.InventoryBatch) (*batch.Batch, error) {
 		PurchasePricePaise:         row.PurchasePricePaise,
 		QuantityOnHand:             row.QuantityOnHand,
 		QuantityReserved:           row.QuantityReserved,
+		QuantityQuarantined:        row.QuantityQuarantined,
 		Version:                    row.Version,
 		CreatedAt:                  pgconv.TimeFromPg(row.CreatedAt),
 		UpdatedAt:                  pgconv.TimeFromPg(row.UpdatedAt),

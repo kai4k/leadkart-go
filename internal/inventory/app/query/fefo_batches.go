@@ -3,9 +3,9 @@ package query
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+	"github.com/leadkart/leadkart-go/internal/inventory/app/sellability"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
@@ -25,17 +25,13 @@ type FefoBatchesQuery struct {
 // FefoBatchesHandler returns the FEFO-ordered batch list.
 type FefoBatchesHandler struct {
 	batches batch.Repository
-	now     func() time.Time
+	window  sellability.Resolver
 }
 
-// NewFefoBatchesHandler wires the handler. `now` is the explicit time
-// source — composition root wires `time.Now`; tests inject a fixed-time
-// closure. Nil → time.Now.
-func NewFefoBatchesHandler(batches batch.Repository, now func() time.Time) FefoBatchesHandler {
-	if now == nil {
-		now = time.Now
-	}
-	return FefoBatchesHandler{batches: batches, now: now}
+// NewFefoBatchesHandler wires the handler. window resolves the company expiry
+// rule (the business day and the one SQL bound) at the injected clock.
+func NewFefoBatchesHandler(batches batch.Repository, window sellability.Resolver) FefoBatchesHandler {
+	return FefoBatchesHandler{batches: batches, window: window}
 }
 
 // Handle returns the FEFO-ordered batches for the product projected to
@@ -43,13 +39,17 @@ func NewFefoBatchesHandler(batches batch.Repository, now func() time.Time) FefoB
 // Repository errors propagate; an empty result is `nil, nil` — the HTTP
 // layer normalises to `[]` in the JSON wire shape.
 func (h FefoBatchesHandler) Handle(ctx context.Context, q FefoBatchesQuery) ([]BatchView, error) {
-	out, err := h.batches.ListFefoForProduct(ctx, q.TenantID, q.ProductID, h.now())
+	w, err := h.window.Resolve(ctx, q.TenantID)
+	if err != nil {
+		return nil, fmt.Errorf("fefo batches: %w", err)
+	}
+	out, err := h.batches.ListFefoForProduct(ctx, q.TenantID, q.ProductID, w.MinSellable)
 	if err != nil {
 		return nil, fmt.Errorf("fefo batches: %w", err)
 	}
 	views := make([]BatchView, 0, len(out))
 	for _, b := range out {
-		views = append(views, projectBatch(b))
+		views = append(views, projectBatch(b, w))
 	}
 	return views, nil
 }

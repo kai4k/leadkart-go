@@ -81,6 +81,7 @@ import (
 	inventoryapp "github.com/leadkart/leadkart-go/internal/inventory/app"
 	inventorycommand "github.com/leadkart/leadkart-go/internal/inventory/app/command"
 	inventoryquery "github.com/leadkart/leadkart-go/internal/inventory/app/query"
+	inventorysellability "github.com/leadkart/leadkart-go/internal/inventory/app/sellability"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
@@ -936,6 +937,10 @@ func buildInventoryApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache) inven
 	batches := inventoryadapters.NewBatchRepository(pool, tx)
 	movements := inventoryadapters.NewStockMovementRepository(pool, tx)
 	gstDefaults := refdata.NewGstDefaultReaderPG(pool, hybridCache)
+	// The company expiry rule (business day, cut-off, the one SQL bound) is read
+	// from the Inventory replica of the policy; it joins the caller transaction.
+	policyReplica := inventoryadapters.NewPolicyReplicaRepository(pool, tx)
+	window := inventorysellability.NewResolver(policyReplica, time.Now)
 
 	// Inventory aggregate-ID factories (Pure Domain refactor).
 	newProductID := func() product.ID { return product.ID(ids.NewV7().String()) }
@@ -947,18 +952,18 @@ func buildInventoryApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache) inven
 			CreateProduct:    inventorycommand.NewCreateProductHandler(products, gstDefaults, time.Now, newProductID),
 			UpdateProduct:    inventorycommand.NewUpdateProductHandler(products, time.Now),
 			DeleteProduct:    inventorycommand.NewDeleteProductHandler(products, batches, time.Now),
-			AddBatch:         inventorycommand.NewAddBatchHandler(tx, products, batches, movements, time.Now, newBatchID, newMovementID),
-			LogStockMovement: inventorycommand.NewLogStockMovementHandler(tx, batches, movements, time.Now, newMovementID),
+			AddBatch:         inventorycommand.NewAddBatchHandler(tx, products, batches, movements, window, time.Now, newBatchID, newMovementID),
+			LogStockMovement: inventorycommand.NewLogStockMovementHandler(tx, batches, movements, window, time.Now, newMovementID),
 		},
 		Queries: inventoryapp.Queries{
-			GetProduct:             inventoryquery.NewGetProductHandler(productReader, time.Now),
-			ListProductsPage:       inventoryquery.NewListProductsPageHandler(productReader, time.Now),
-			GetBatch:               inventoryquery.NewGetBatchHandler(batches),
-			ListBatchesByProduct:   inventoryquery.NewListBatchesByProductHandler(batches),
+			GetProduct:             inventoryquery.NewGetProductHandler(productReader, window),
+			ListProductsPage:       inventoryquery.NewListProductsPageHandler(productReader, window),
+			GetBatch:               inventoryquery.NewGetBatchHandler(batches, window),
+			ListBatchesByProduct:   inventoryquery.NewListBatchesByProductHandler(batches, window),
 			ListBatchMovementsPage: inventoryquery.NewListBatchMovementsPageHandler(movements),
-			FefoBatches:            inventoryquery.NewFefoBatchesHandler(batches, time.Now),
+			FefoBatches:            inventoryquery.NewFefoBatchesHandler(batches, window),
 			ListProductCategories:  inventoryquery.NewListProductCategoriesHandler(inventoryadapters.NewProductCategoryReader(gstDefaults)),
-			GetPolicy:              inventoryquery.NewGetPolicyHandler(inventoryadapters.NewPolicyReplicaRepository(pool, tx)),
+			GetPolicy:              inventoryquery.NewGetPolicyHandler(policyReplica),
 		},
 	}
 }

@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/leadkart/leadkart-go/internal/common/expiry"
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
@@ -383,13 +385,23 @@ func handleAddBatch(log *slog.Logger, a app.Application) http.Handler {
 				map[string][]string{"initial_quantity": {ruleTooSmall}})
 			return
 		}
+		expiryDate, err := expiry.ParsePrintedMonth(req.ExpiryMonth)
+		if err != nil {
+			code := ruleInvalidFormat
+			if strings.TrimSpace(req.ExpiryMonth) == "" {
+				code = ruleRequired
+			}
+			writeFieldErrors(w, http.StatusUnprocessableEntity, ErrCodeValidationFailed,
+				map[string][]string{"expiry_month": {code}})
+			return
+		}
 		out, err := a.Commands.AddBatch.Handle(r.Context(), command.AddBatchCommand{
 			TenantID:                   tenant.ID(effTenant),
 			ProductID:                  product.ID(productID.String()),
 			ActorMembershipID:          membership.ID(c.MembershipID),
 			BatchNumber:                req.BatchNumber,
 			ManufactureDate:            req.ManufactureDate,
-			ExpiryDate:                 req.ExpiryDate,
+			ExpiryDate:                 expiryDate,
 			ManufacturerName:           req.ManufacturerName,
 			ManufacturingLicenceNumber: req.ManufacturingLicenceNumber,
 			MRPPaise:                   req.MRPPaise,
@@ -409,6 +421,10 @@ func handleAddBatch(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusConflict, ErrCodeBatchExpired,
 				"stock cannot be received into an expired batch; add the batch without initial_quantity")
 			return
+		case errors.Is(err, batch.ErrManufactureDateInFuture):
+			writeFieldErrors(w, http.StatusUnprocessableEntity, ErrCodeValidationFailed,
+				map[string][]string{"manufacture_date": {ruleInFuture}})
+			return
 		case errors.Is(err, batch.ErrInvalid):
 			writeError(w, http.StatusUnprocessableEntity, ErrCodeValidationFailed, err.Error())
 			return
@@ -417,7 +433,7 @@ func handleAddBatch(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
 			return
 		}
-		writeJSON(w, http.StatusCreated, AddBatchResponse{BatchID: out.BatchID.String()})
+		writeJSON(w, http.StatusCreated, AddBatchResponse{BatchID: out.BatchID.String(), Warnings: nonNil(out.Warnings)})
 	})
 }
 
@@ -526,7 +542,7 @@ func handleLogStockMovement(log *slog.Logger, a app.Application) http.Handler {
 		// order's hold here. Only the three manual types are public.
 		if !isPublicMovementType(batch.MovementType(req.Type)) {
 			writeError(w, http.StatusUnprocessableEntity, ErrCodeInvalidMovementType,
-				"type must be one of inbound, outbound, adjustment")
+				"type must be one of inbound, outbound, adjustment, quarantine, release_quarantine, write_off")
 			return
 		}
 		out, err := a.Commands.LogStockMovement.Handle(r.Context(), command.LogStockMovementCommand{
@@ -542,8 +558,11 @@ func handleLogStockMovement(log *slog.Logger, a app.Application) http.Handler {
 		case errors.Is(err, batch.ErrNotFound):
 			writeError(w, http.StatusNotFound, ErrCodeNotFound, "batch not found")
 			return
-		case errors.Is(err, batch.ErrInsufficientStock):
+		case errors.Is(err, batch.ErrInsufficientStock), errors.Is(err, batch.ErrInsufficientFree):
 			writeError(w, http.StatusConflict, ErrCodeInsufficientStock, err.Error())
+			return
+		case errors.Is(err, batch.ErrInsufficientQuarantined):
+			writeError(w, http.StatusConflict, ErrCodeInsufficientQuarantined, err.Error())
 			return
 		case errors.Is(err, batch.ErrExpired):
 			writeError(w, http.StatusConflict, ErrCodeBatchExpired, err.Error())
@@ -565,8 +584,10 @@ func handleLogStockMovement(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		writeJSON(w, http.StatusCreated, LogMovementResponse{
-			MovementID:          out.MovementID.String(),
-			QuantityOnHandAfter: out.QuantityOnHandAfter,
+			MovementID:               out.MovementID.String(),
+			QuantityOnHandAfter:      out.QuantityOnHandAfter,
+			QuantityQuarantinedAfter: out.QuantityQuarantinedAfter,
+			Warnings:                 nonNil(out.Warnings),
 		})
 	})
 }
@@ -748,10 +769,12 @@ func productViewToDto(v query.ProductView) ProductDto {
 		ReorderLevel:             v.ReorderLevel,
 		ExpiryAlertThresholdDays: v.ExpiryAlertThresholdDays,
 
-		StockOnHand:    v.StockOnHand,
-		StockReserved:  v.StockReserved,
-		StockAvailable: v.StockAvailable,
-		EarliestExpiry: v.EarliestExpiry,
+		StockOnHand:      v.StockOnHand,
+		StockReserved:    v.StockReserved,
+		StockAvailable:   v.StockAvailable,
+		StockUnsellable:  v.StockUnsellable,
+		StockQuarantined: v.StockQuarantined,
+		EarliestExpiry:   v.EarliestExpiry,
 	}
 }
 
@@ -763,6 +786,7 @@ func batchViewToDto(v query.BatchView) BatchDto {
 		TenantID:                   v.TenantID,
 		BatchNumber:                v.BatchNumber,
 		ManufactureDate:            v.ManufactureDate,
+		ExpiryMonth:                expiry.PrintedMonth(v.ExpiryDate),
 		ExpiryDate:                 v.ExpiryDate,
 		ManufacturerName:           v.ManufacturerName,
 		ManufacturingLicenceNumber: v.ManufacturingLicenceNumber,
@@ -770,6 +794,12 @@ func batchViewToDto(v query.BatchView) BatchDto {
 		PurchasePricePaise:         v.PurchasePricePaise,
 		QuantityOnHand:             v.QuantityOnHand,
 		QuantityReserved:           v.QuantityReserved,
+		QuantityQuarantined:        v.QuantityQuarantined,
+		QuantityAvailable:          v.QuantityAvailable,
+		QuantityUnsellable:         v.QuantityUnsellable,
+		Sellable:                   v.Sellable,
+		LastSellableDay:            v.LastSellableDay.Format(time.DateOnly),
+		PastPrintedExpiry:          v.PastPrintedExpiry,
 		Version:                    v.Version,
 		CreatedAt:                  v.CreatedAt,
 		UpdatedAt:                  v.UpdatedAt,
@@ -795,11 +825,21 @@ func movementViewToDto(v query.MovementView) MovementDto {
 	}
 }
 
+// nonNil returns a non-nil slice so a JSON list is [] and never null.
+func nonNil(in []string) []string {
+	if in == nil {
+		return []string{}
+	}
+	return in
+}
+
 // isPublicMovementType reports whether t may be logged through the public
-// movement route: the three manual types, never the saga-owned ones.
+// movement route: the manual types (stock in or out, a count correction, and the
+// quarantine trio), never the saga-owned reservation and release.
 func isPublicMovementType(t batch.MovementType) bool {
 	switch t {
-	case batch.MovementInbound, batch.MovementOutbound, batch.MovementAdjustment:
+	case batch.MovementInbound, batch.MovementOutbound, batch.MovementAdjustment,
+		batch.MovementQuarantine, batch.MovementReleaseQuarantine, batch.MovementWriteOff:
 		return true
 	default:
 		return false

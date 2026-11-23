@@ -74,6 +74,7 @@ import (
 	inventoryadapters "github.com/leadkart/leadkart-go/internal/inventory/adapters"
 	inventorycommand "github.com/leadkart/leadkart-go/internal/inventory/app/command"
 	inventoryjobs "github.com/leadkart/leadkart-go/internal/inventory/app/jobs"
+	inventorysellability "github.com/leadkart/leadkart-go/internal/inventory/app/sellability"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
 	inventorysubscribers "github.com/leadkart/leadkart-go/internal/inventory/ports/subscribers"
 	notificationsadapters "github.com/leadkart/leadkart-go/internal/notifications/adapters"
@@ -379,7 +380,10 @@ func run(ctx context.Context, stdout *os.File) error {
 	inventoryMovementRepo := inventoryadapters.NewStockMovementRepository(pool, tx)
 	inventoryOutbox := inventoryadapters.NewOutboxEnqueuer()
 	newStockMovementID := func() stockmovement.ID { return stockmovement.ID(ids.NewV7().String()) }
-	inventoryReserve := inventorycommand.NewReserveOrderStockHandler(tx, inventoryBatchRepo, inventoryMovementRepo, inventoryMovementRepo, inventoryOutbox, time.Now, newStockMovementID)
+	// The company expiry rule is read from the Inventory replica of the policy.
+	inventoryPolicyReplica := inventoryadapters.NewPolicyReplicaRepository(pool, tx)
+	inventoryWindow := inventorysellability.NewResolver(inventoryPolicyReplica, time.Now)
+	inventoryReserve := inventorycommand.NewReserveOrderStockHandler(tx, inventoryBatchRepo, inventoryMovementRepo, inventoryMovementRepo, inventoryOutbox, inventoryWindow, time.Now, newStockMovementID)
 	inventoryConsume := inventorycommand.NewConsumeOrderStockHandler(tx, inventoryBatchRepo, inventoryMovementRepo, inventoryMovementRepo, time.Now, newStockMovementID)
 	inventoryRelease := inventorycommand.NewReleaseOrderStockHandler(tx, inventoryBatchRepo, inventoryMovementRepo, inventoryMovementRepo, time.Now, newStockMovementID)
 	inventoryReserveSub := inventorysubscribers.NewReserveStockSubscriber(inventoryReserve, logger)
@@ -387,7 +391,6 @@ func run(ctx context.Context, stdout *os.File) error {
 	inventoryReleaseSub := inventorysubscribers.NewReleaseStockSubscriber(inventoryRelease, logger)
 	// companysettings.policy_changed.v1 -> Inventory's replica of the company
 	// commerce policy (ADR 0070): stored only when the version is newer.
-	inventoryPolicyReplica := inventoryadapters.NewPolicyReplicaRepository(pool, tx)
 	inventoryPolicyChangedSub := inventorysubscribers.NewPolicyChangedSubscriber(
 		inventorycommand.NewApplyPolicyHandler(tx, inventoryPolicyReplica), logger)
 
@@ -475,7 +478,7 @@ func run(ctx context.Context, stdout *os.File) error {
 	if err := river.AddWorkerSafely(workers, inventoryjobs.NewExpiryScanWorker(inventoryAlertScan, logger, time.Now)); err != nil {
 		return fmt.Errorf("register inventory expiry scan worker: %w", err)
 	}
-	if err := river.AddWorkerSafely(workers, inventoryjobs.NewReorderScanWorker(inventoryAlertScan, logger, time.Now)); err != nil {
+	if err := river.AddWorkerSafely(workers, inventoryjobs.NewReorderScanWorker(inventoryAlertScan, inventoryWindow, logger, time.Now)); err != nil {
 		return fmt.Errorf("register inventory reorder scan worker: %w", err)
 	}
 	// companysettings: daily republish of every stored commerce policy (ADR 0070).

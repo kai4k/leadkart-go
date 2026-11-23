@@ -29,7 +29,7 @@ func freshIDs(t *testing.T) (batch.ID, product.ID, tenant.ID, membership.ID) {
 
 func farFutureDates() (mfg time.Time, exp time.Time) {
 	mfg = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	exp = time.Date(2028, 1, 1, 0, 0, 0, 0, time.UTC)
+	exp = time.Date(2028, 1, 31, 0, 0, 0, 0, time.UTC)
 	return
 }
 
@@ -157,7 +157,7 @@ func TestNew_InvalidInputs(t *testing.T) {
 func TestApplyMovement_InboundIncrements(t *testing.T) {
 	t.Parallel()
 	b := freshBatch(t)
-	if err := b.ApplyMovement(batch.MovementInbound, 100, fixedNow); err != nil {
+	if err := b.ApplyMovement(batch.MovementInbound, 100, fixedNow, fixedNow); err != nil {
 		t.Fatalf("Inbound: %v", err)
 	}
 	if b.QuantityOnHand() != 100 {
@@ -171,10 +171,10 @@ func TestApplyMovement_InboundIncrements(t *testing.T) {
 func TestApplyMovement_OutboundDecrements(t *testing.T) {
 	t.Parallel()
 	b := freshBatch(t)
-	if err := b.ApplyMovement(batch.MovementInbound, 100, fixedNow); err != nil {
+	if err := b.ApplyMovement(batch.MovementInbound, 100, fixedNow, fixedNow); err != nil {
 		t.Fatalf("seed Inbound: %v", err)
 	}
-	if err := b.ApplyMovement(batch.MovementOutbound, 30, fixedNow); err != nil {
+	if err := b.ApplyMovement(batch.MovementOutbound, 30, fixedNow, fixedNow); err != nil {
 		t.Fatalf("Outbound: %v", err)
 	}
 	if b.QuantityOnHand() != 70 {
@@ -188,10 +188,10 @@ func TestApplyMovement_OutboundDecrements(t *testing.T) {
 func TestApplyMovement_OutboundOverdraftRejected(t *testing.T) {
 	t.Parallel()
 	b := freshBatch(t)
-	if err := b.ApplyMovement(batch.MovementInbound, 50, fixedNow); err != nil {
+	if err := b.ApplyMovement(batch.MovementInbound, 50, fixedNow, fixedNow); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	err := b.ApplyMovement(batch.MovementOutbound, 51, fixedNow)
+	err := b.ApplyMovement(batch.MovementOutbound, 51, fixedNow, fixedNow)
 	if !errors.Is(err, batch.ErrInsufficientStock) {
 		t.Fatalf("want ErrInsufficientStock, got %v", err)
 	}
@@ -209,7 +209,7 @@ func TestApplyMovement_InboundRejectedAfterExpiry(t *testing.T) {
 	bid, pid, tid, actor := freshIDs(t)
 	// Expiry already in the past for a freshly-constructed batch.
 	mfg := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
-	exp := time.Date(2022, 1, 1, 0, 0, 0, 0, time.UTC)
+	exp := time.Date(2022, 1, 31, 0, 0, 0, 0, time.UTC)
 	b, err := batch.New(bid, pid, tid, actor, batch.Spec{
 		BatchNumber:                "LOT-EXPIRED",
 		ManufactureDate:            mfg,
@@ -223,7 +223,7 @@ func TestApplyMovement_InboundRejectedAfterExpiry(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	_ = b.PullEvents()
-	if err := b.ApplyMovement(batch.MovementInbound, 10, fixedNow); !errors.Is(err, batch.ErrExpired) {
+	if err := b.ApplyMovement(batch.MovementInbound, 10, fixedNow, fixedNow); !errors.Is(err, batch.ErrExpired) {
 		t.Fatalf("want ErrExpired, got %v", err)
 	}
 	// Outbound from an expired batch IS allowed (write-off / disposal).
@@ -235,16 +235,16 @@ func TestApplyMovement_InboundRejectedAfterExpiry(t *testing.T) {
 func TestApplyMovement_AdjustmentIsSigned(t *testing.T) {
 	t.Parallel()
 	b := freshBatch(t)
-	if err := b.ApplyMovement(batch.MovementInbound, 100, fixedNow); err != nil {
+	if err := b.ApplyMovement(batch.MovementInbound, 100, fixedNow, fixedNow); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if err := b.ApplyMovement(batch.MovementAdjustment, -5, fixedNow); err != nil {
+	if err := b.ApplyMovement(batch.MovementAdjustment, -5, fixedNow, fixedNow); err != nil {
 		t.Fatalf("neg adj: %v", err)
 	}
 	if b.QuantityOnHand() != 95 {
 		t.Fatalf("on-hand: %d", b.QuantityOnHand())
 	}
-	if err := b.ApplyMovement(batch.MovementAdjustment, 3, fixedNow); err != nil {
+	if err := b.ApplyMovement(batch.MovementAdjustment, 3, fixedNow, fixedNow); err != nil {
 		t.Fatalf("pos adj: %v", err)
 	}
 	if b.QuantityOnHand() != 98 {
@@ -255,10 +255,10 @@ func TestApplyMovement_AdjustmentIsSigned(t *testing.T) {
 func TestApplyMovement_ReservationHoldsAvailableWithoutTouchingOnHand(t *testing.T) {
 	t.Parallel()
 	b := freshBatch(t)
-	if err := b.ApplyMovement(batch.MovementInbound, 100, fixedNow); err != nil {
+	if err := b.ApplyMovement(batch.MovementInbound, 100, fixedNow, fixedNow); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if err := b.ApplyMovement(batch.MovementReservation, 25, fixedNow); err != nil {
+	if err := b.ApplyMovement(batch.MovementReservation, 25, fixedNow, fixedNow); err != nil {
 		t.Fatalf("reservation: %v", err)
 	}
 	if b.QuantityOnHand() != 100 {
@@ -270,7 +270,7 @@ func TestApplyMovement_ReservationHoldsAvailableWithoutTouchingOnHand(t *testing
 	if b.AvailableQuantity() != 75 {
 		t.Fatalf("available = on-hand − reserved must be 75: %d", b.AvailableQuantity())
 	}
-	if err := b.ApplyMovement(batch.MovementRelease, 25, fixedNow); err != nil {
+	if err := b.ApplyMovement(batch.MovementRelease, 25, fixedNow, fixedNow); err != nil {
 		t.Fatalf("release: %v", err)
 	}
 	if b.QuantityOnHand() != 100 || b.QuantityReserved() != 0 || b.AvailableQuantity() != 100 {
@@ -282,14 +282,14 @@ func TestApplyMovement_ReservationHoldsAvailableWithoutTouchingOnHand(t *testing
 func TestApplyMovement_ReservationRejectsBeyondAvailable(t *testing.T) {
 	t.Parallel()
 	b := freshBatch(t)
-	if err := b.ApplyMovement(batch.MovementInbound, 30, fixedNow); err != nil {
+	if err := b.ApplyMovement(batch.MovementInbound, 30, fixedNow, fixedNow); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if err := b.ApplyMovement(batch.MovementReservation, 20, fixedNow); err != nil {
+	if err := b.ApplyMovement(batch.MovementReservation, 20, fixedNow, fixedNow); err != nil {
 		t.Fatalf("first reservation: %v", err)
 	}
 	// available is now 10; reserving 11 must fail (oversell guard).
-	if err := b.ApplyMovement(batch.MovementReservation, 11, fixedNow); !errors.Is(err, batch.ErrInsufficientAvailable) {
+	if err := b.ApplyMovement(batch.MovementReservation, 11, fixedNow, fixedNow); !errors.Is(err, batch.ErrInsufficientAvailable) {
 		t.Fatalf("expected ErrInsufficientAvailable, got %v", err)
 	}
 	// state unchanged after the rejected reservation.
@@ -301,13 +301,13 @@ func TestApplyMovement_ReservationRejectsBeyondAvailable(t *testing.T) {
 func TestApplyMovement_ReleaseRejectsBeyondReserved(t *testing.T) {
 	t.Parallel()
 	b := freshBatch(t)
-	if err := b.ApplyMovement(batch.MovementInbound, 50, fixedNow); err != nil {
+	if err := b.ApplyMovement(batch.MovementInbound, 50, fixedNow, fixedNow); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if err := b.ApplyMovement(batch.MovementReservation, 10, fixedNow); err != nil {
+	if err := b.ApplyMovement(batch.MovementReservation, 10, fixedNow, fixedNow); err != nil {
 		t.Fatalf("reservation: %v", err)
 	}
-	if err := b.ApplyMovement(batch.MovementRelease, 11, fixedNow); !errors.Is(err, batch.ErrReleaseExceedsReserved) {
+	if err := b.ApplyMovement(batch.MovementRelease, 11, fixedNow, fixedNow); !errors.Is(err, batch.ErrReleaseExceedsReserved) {
 		t.Fatalf("expected ErrReleaseExceedsReserved, got %v", err)
 	}
 }
@@ -315,21 +315,21 @@ func TestApplyMovement_ReleaseRejectsBeyondReserved(t *testing.T) {
 func TestApplyMovement_OutboundCannotShipReservedStock(t *testing.T) {
 	t.Parallel()
 	b := freshBatch(t)
-	if err := b.ApplyMovement(batch.MovementInbound, 40, fixedNow); err != nil {
+	if err := b.ApplyMovement(batch.MovementInbound, 40, fixedNow, fixedNow); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if err := b.ApplyMovement(batch.MovementReservation, 30, fixedNow); err != nil {
+	if err := b.ApplyMovement(batch.MovementReservation, 30, fixedNow, fixedNow); err != nil {
 		t.Fatalf("reservation: %v", err)
 	}
 	// available is 10; shipping 11 must fail (reserved units are held).
-	if err := b.ApplyMovement(batch.MovementOutbound, 11, fixedNow); !errors.Is(err, batch.ErrInsufficientStock) {
+	if err := b.ApplyMovement(batch.MovementOutbound, 11, fixedNow, fixedNow); !errors.Is(err, batch.ErrInsufficientStock) {
 		t.Fatalf("expected ErrInsufficientStock, got %v", err)
 	}
 	// consume path: release then outbound the freed units succeeds.
-	if err := b.ApplyMovement(batch.MovementRelease, 30, fixedNow); err != nil {
+	if err := b.ApplyMovement(batch.MovementRelease, 30, fixedNow, fixedNow); err != nil {
 		t.Fatalf("release: %v", err)
 	}
-	if err := b.ApplyMovement(batch.MovementOutbound, 40, fixedNow); err != nil {
+	if err := b.ApplyMovement(batch.MovementOutbound, 40, fixedNow, fixedNow); err != nil {
 		t.Fatalf("outbound after release: %v", err)
 	}
 	if b.QuantityOnHand() != 0 || b.QuantityReserved() != 0 {
@@ -344,7 +344,7 @@ func TestApplyMovement_RejectsAfterSoftDelete(t *testing.T) {
 	if err := b.SoftDelete(actor, fixedNow); err != nil {
 		t.Fatalf("SoftDelete: %v", err)
 	}
-	if err := b.ApplyMovement(batch.MovementInbound, 1, fixedNow); !errors.Is(err, batch.ErrDeleted) {
+	if err := b.ApplyMovement(batch.MovementInbound, 1, fixedNow, fixedNow); !errors.Is(err, batch.ErrDeleted) {
 		t.Fatalf("want ErrDeleted, got %v", err)
 	}
 }
@@ -355,7 +355,7 @@ func TestApplyMovement_RejectsZeroQuantityForMutatingTypes(t *testing.T) {
 	for _, tp := range []batch.MovementType{batch.MovementInbound, batch.MovementOutbound, batch.MovementAdjustment} {
 		t.Run(string(tp), func(t *testing.T) {
 			t.Parallel()
-			if err := b.ApplyMovement(tp, 0, fixedNow); !errors.Is(err, batch.ErrInvalid) {
+			if err := b.ApplyMovement(tp, 0, fixedNow, fixedNow); !errors.Is(err, batch.ErrInvalid) {
 				t.Fatalf("%v: want ErrInvalid, got %v", tp, err)
 			}
 		})
