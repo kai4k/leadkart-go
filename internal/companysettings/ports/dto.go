@@ -3,7 +3,6 @@
 package ports
 
 import (
-	"encoding/json"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/commercepolicy"
@@ -28,20 +27,23 @@ type SettingsDto struct {
 // sent change. expected_version is the version the form was loaded at; reason is
 // required when a tax, document or compliance setting changes.
 type PatchSettingsRequest struct {
-	ExpectedVersion *int64                                `json:"expected_version"`
-	Reason          string                                `json:"reason"`
-	Changes         map[string]map[string]json.RawMessage `json:"changes"`
+	ExpectedVersion *int64  `json:"expected_version"`
+	Reason          string  `json:"reason"`
+	Changes         Changes `json:"changes"`
 }
 
 // HistoryEntryDto is one stored version of the policy.
 type HistoryEntryDto struct {
-	Version                int64                 `json:"version"`
-	Policy                 commercepolicy.Policy `json:"policy"`
-	ChangedKeys            []string              `json:"changed_keys"`
-	Reason                 string                `json:"reason"`
-	ActorMembershipID      string                `json:"actor_membership_id,omitzero"`
-	ImpersonatorOperatorID string                `json:"impersonator_operator_id,omitzero"`
-	ChangedAt              time.Time             `json:"changed_at"`
+	Version           int64                 `json:"version"`
+	Policy            commercepolicy.Policy `json:"policy"`
+	ChangedKeys       []string              `json:"changed_keys"`
+	Reason            string                `json:"reason"`
+	ActorMembershipID string                `json:"actor_membership_id,omitzero"`
+	// ChangedBySupport is true when LeadKart support made the change during an
+	// impersonation session. The operator person id is for the platform audit
+	// trail, not for the tenant's readers.
+	ChangedBySupport bool      `json:"changed_by_support"`
+	ChangedAt        time.Time `json:"changed_at"`
 }
 
 // ListHistoryResponse is one page of the history, newest version first.

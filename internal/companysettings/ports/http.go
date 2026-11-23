@@ -87,8 +87,7 @@ func handlePatchSettings(log *slog.Logger, a app.Application) http.Handler {
 			op = c.Act.Sub
 		}
 		var req PatchSettingsRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+		if !decodeStrict(w, r, &req) {
 			return
 		}
 		errs := commercepolicy.FieldErrors{}
@@ -107,7 +106,7 @@ func handlePatchSettings(log *slog.Logger, a app.Application) http.Handler {
 		}
 		res, err := a.Commands.ChangeSettings.Handle(r.Context(), command.ChangeSettingsCommand{
 			TenantID: tenant.ID(effTenant), ExpectedVersion: *req.ExpectedVersion, Changes: changes, Reason: req.Reason,
-			ActorMembershipID: membership.ID(c.MembershipID), ImpersonatorOperatorID: op,
+			ActorMembershipID: membership.ID(authn.ActorMembershipID(r.Context())), ImpersonatorOperatorID: op,
 			MayManage:    authn.Satisfies(r.Context(), permission.IdentityPermissions.CompanySettings.Manage),
 			MayManageTax: authn.Satisfies(r.Context(), permission.IdentityPermissions.CompanySettings.TaxManage),
 		})
@@ -156,7 +155,7 @@ func handleListHistory(log *slog.Logger, a app.Application) http.Handler {
 		for _, e := range page.Items {
 			items = append(items, HistoryEntryDto{
 				Version: e.Version, Policy: e.Policy, ChangedKeys: e.ChangedKeys, Reason: e.Reason,
-				ActorMembershipID: e.ActorMembershipID, ImpersonatorOperatorID: e.ImpersonatorOperatorID, ChangedAt: e.ChangedAt,
+				ActorMembershipID: e.ActorMembershipID, ChangedBySupport: e.ImpersonatorOperatorID != "", ChangedAt: e.ChangedAt,
 			})
 		}
 		writeJSON(w, http.StatusOK, ListHistoryResponse{Items: items, HasMore: page.HasMore, NextCursor: page.NextCursor})
@@ -203,8 +202,7 @@ func handleCreateGSTRate(log *slog.Logger, a app.Application) http.Handler {
 			op = c.Act.Sub
 		}
 		var req CreateGSTRateRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+		if !decodeStrict(w, r, &req) {
 			return
 		}
 		if req.RateBps == nil {
@@ -215,7 +213,7 @@ func handleCreateGSTRate(log *slog.Logger, a app.Application) http.Handler {
 		out, err := a.Commands.AddGSTRate.Handle(r.Context(), command.AddGSTRateCommand{
 			TenantID: tenant.ID(effTenant), RateBps: *req.RateBps, Label: req.Label, ConfirmedBy: req.ConfirmedBy,
 			ConfirmedOn: req.ConfirmedOn, Reason: req.Reason,
-			ActorMembershipID: membership.ID(c.MembershipID), ImpersonatorOperatorID: op,
+			ActorMembershipID: membership.ID(authn.ActorMembershipID(r.Context())), ImpersonatorOperatorID: op,
 		})
 		if err != nil {
 			writeCommandError(w, r, log, "create gst rate", err)
@@ -246,14 +244,13 @@ func handlePatchGSTRate(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		var req PatchGSTRateRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+		if !decodeStrict(w, r, &req) {
 			return
 		}
 		out, err := a.Commands.UpdateGSTRate.Handle(r.Context(), command.UpdateGSTRateCommand{
 			TenantID: tenant.ID(effTenant), RateID: rateID.String(), Label: req.Label, ConfirmedBy: req.ConfirmedBy,
 			ConfirmedOn: req.ConfirmedOn, Active: req.Active, Reason: req.Reason,
-			ActorMembershipID: membership.ID(c.MembershipID), ImpersonatorOperatorID: op,
+			ActorMembershipID: membership.ID(authn.ActorMembershipID(r.Context())), ImpersonatorOperatorID: op,
 		})
 		if err != nil {
 			writeCommandError(w, r, log, "patch gst rate", err)
@@ -297,7 +294,7 @@ func writeCommandError(w http.ResponseWriter, r *http.Request, log *slog.Logger,
 
 // flattenChanges turns {"expiry": {"stop_months_before": 2}} into the registry
 // keys {"expiry.stop_months_before": 2}.
-func flattenChanges(in map[string]map[string]json.RawMessage) commercepolicy.Changes {
+func flattenChanges(in Changes) commercepolicy.Changes {
 	out := commercepolicy.Changes{}
 	for group, kv := range in {
 		for name, raw := range kv {
