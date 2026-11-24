@@ -82,7 +82,24 @@ func TestE2E_RoleCommands_PolicyDecides(t *testing.T) {
 	// arch-test:serial — subtests share one fixture and one tenant.
 	t.Run("system role: the platform operator cannot strip tenant.admin from Company Owner", func(t *testing.T) {
 		r := f.roleWrite(t, http.MethodPost, rolePath(ownerRole, "/permissions/revoke"), adminTok, ports.RolePermissionRequest{Permission: p.Meta.TenantAdmin})
-		f.wantForbidden(t, "admin revokes tenant.admin from Company Owner", r, http.StatusConflict, "role_system_default")
+		f.wantForbidden(t, "operator revokes tenant.admin from Company Owner", r, http.StatusConflict, "role_system_default")
+		assertOwnerRoleIntact(t)
+	})
+	// arch-test:serial — subtests share one fixture and one tenant.
+	t.Run("company Administrator is refused by the route gate on every role write", func(t *testing.T) {
+		own := map[string]string{"X-E2E-As-Company": "1"}
+		for name, c := range map[string]struct {
+			method, path string
+			body         any
+		}{
+			"create":     {http.MethodPost, "/api/v1/roles", ports.CreateRoleRequest{Name: "Nope", HierarchyLevel: 60}},
+			"rename":     {http.MethodPatch, rolePath(ownerRole, ""), map[string]any{"name": "Renamed Owner"}},
+			"grant":      {http.MethodPost, rolePath(ownerRole, "/permissions/grant"), ports.RolePermissionRequest{Permission: p.Crm.Leads.Read}},
+			"deactivate": {http.MethodPost, rolePath(ownerRole, "/deactivate"), nil},
+		} {
+			r := f.doWithHeaders(t, c.method, c.path, adminTok, c.body, own)
+			f.wantForbidden(t, "company Administrator "+name, r, http.StatusForbidden, "forbidden")
+		}
 		assertOwnerRoleIntact(t)
 	})
 	// arch-test:serial — subtests share one fixture and one tenant.

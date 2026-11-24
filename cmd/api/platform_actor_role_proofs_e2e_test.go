@@ -98,9 +98,8 @@ func TestE2E_PlatformOperator_WithoutOwnership_CannotTouchTenantAdminOnARole(t *
 	}
 	refused := func(what string, r httpResp) {
 		t.Helper()
-		if r.status != http.StatusForbidden {
-			t.Errorf("%s: %d %s, want 403", what, r.status, r.body)
-		}
+		// The ownership refusal, not a gate 403: the operator reached the policy and was stopped there.
+		f.wantForbidden(t, what, r, http.StatusForbidden, "ownership_authority_required")
 	}
 	refused("revoke tenant.admin", f.roleWrite(t, http.MethodPost, base+"/permissions/revoke", own, ports.RolePermissionRequest{Permission: p.Meta.TenantAdmin}))
 	refused("replace the permissions without tenant.admin", f.roleWrite(t, http.MethodPut, base+"/permissions", own, ports.ReplaceRolePermissionsRequest{Permissions: []string{p.Crm.Leads.Read}}))
@@ -133,6 +132,20 @@ func TestE2E_PlatformTenantOwner_ManagesLeadKartRoles(t *testing.T) {
 	if r := f.doWithHeaders(t, http.MethodPost, "/api/v1/roles/"+id+"/permissions/grant", tok, ports.RolePermissionRequest{Permission: permission.IdentityPermissions.Crm.Leads.Read}, nil); r.status != http.StatusNoContent {
 		t.Fatalf("platform-tenant owner grants on it: %d %s", r.status, r.body)
 	}
+	// The owner self-holder exemption (rank 0 may edit a role it holds itself): a super user gives the
+	// owner the role, and the owner still edits it.
+	super := f.mintPlatformTokenWith(t, nil, true)
+	if r := f.doWithHeaders(t, http.MethodPost, "/api/v1/users/"+platform.MembershipID+"/roles", super, ports.AssignUserRoleRequest{RoleID: id}, scopeHdr(platform.TenantID)); r.status != http.StatusNoContent {
+		t.Fatalf("a super user gives the platform owner the role: %d %s", r.status, r.body)
+	}
+	tok = f.loginToken(t, "platform-owner@e2e.test", "Correct-Horse-Battery-9!platform")
+	if r := f.doWithHeaders(t, http.MethodPost, "/api/v1/roles/"+id+"/permissions/grant", tok, ports.RolePermissionRequest{Permission: permission.IdentityPermissions.Crm.Leads.ReadAll}, nil); r.status != http.StatusNoContent {
+		t.Fatalf("platform-tenant owner edits a role it holds itself: %d %s, want 204", r.status, r.body)
+	}
+	if r := f.doWithHeaders(t, http.MethodDelete, "/api/v1/users/"+platform.MembershipID+"/roles/"+id, super, nil, scopeHdr(platform.TenantID)); r.status != http.StatusNoContent {
+		t.Fatalf("a super user takes the role off the platform owner: %d %s", r.status, r.body)
+	}
+	tok = f.loginToken(t, "platform-owner@e2e.test", "Correct-Horse-Battery-9!platform") // the edit and the revoke rotated the holder's stamp
 	if r := f.doWithHeaders(t, http.MethodPost, "/api/v1/roles/"+id+"/deactivate", tok, nil, nil); r.status != http.StatusOK {
 		t.Fatalf("platform-tenant owner deletes it: %d %s", r.status, r.body)
 	}

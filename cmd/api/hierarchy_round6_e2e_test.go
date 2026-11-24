@@ -82,8 +82,8 @@ func TestE2E_Round6_AnAdministratorApprovesTheUserLifecycleWithoutHoldingIt(t *t
 
 // Role writes are LeadKart platform authority (ADR 0073 addendum): the platform operator edits a custom role
 // that people hold, a company owner who holds it is still refused by the gate (the owner self-holder
-// exemption of the policy is only reachable inside the platform tenant, see
-// TestE2E_PlatformTenantOwner_ManagesLeadKartRoles).
+// exemption of the policy is only reachable inside the platform tenant; the platform owner editing a role
+// it holds is covered by TestE2E_PlatformTenantOwner_ManagesLeadKartRoles).
 func TestE2E_Round6_AnOwnerEditsACustomRoleTheyHold(t *testing.T) {
 	w := newAttackWorld(t)
 	p := permission.IdentityPermissions
