@@ -19,6 +19,7 @@ const (
 
 func newActorT(t *testing.T, in ActorInput) Actor {
 	t.Helper()
+	in.MayManageRoles = true
 	a, err := NewActor(in)
 	if err != nil {
 		t.Fatalf("NewActor: %v", err)

@@ -75,13 +75,13 @@ func TestAttack_Stale_EveryAuthorityChangeEndsTheOldToken(t *testing.T) {
 			f.grantOverrides(t, ownerTok, m.membershipID, []string{}, nil)
 		}},
 		{"the role loses a permission", customWithInventory, func(t *testing.T, _ createdMember, ownRole string) {
-			if r := f.authedJSON(t, http.MethodPost, "/api/v1/roles/"+ownRole+"/permissions/revoke", ownerTok, ports.RolePermissionRequest{Permission: p.Inventory.Catalog.Read}); r.status != http.StatusNoContent {
+			if r := f.roleWrite(t, http.MethodPost, "/api/v1/roles/"+ownRole+"/permissions/revoke", ownerTok, ports.RolePermissionRequest{Permission: p.Inventory.Catalog.Read}); r.status != http.StatusNoContent {
 				t.Fatalf("revoke role permission: %d %s", r.status, r.body)
 			}
 		}},
 		{"the role is re-levelled", customWithInventory, func(t *testing.T, _ createdMember, ownRole string) {
 			lvl := 45
-			if r := f.authedJSON(t, http.MethodPatch, "/api/v1/roles/"+ownRole, ownerTok, ports.UpdateRoleRequest{HierarchyLevel: &lvl}); r.status != http.StatusNoContent {
+			if r := f.roleWrite(t, http.MethodPatch, "/api/v1/roles/"+ownRole, ownerTok, ports.UpdateRoleRequest{HierarchyLevel: &lvl}); r.status != http.StatusNoContent {
 				t.Fatalf("re-level: %d %s", r.status, r.body)
 			}
 		}},

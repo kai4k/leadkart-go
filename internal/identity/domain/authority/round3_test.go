@@ -53,7 +53,7 @@ func TestApproval_AdminMustHoldAuthorityAndMoney(t *testing.T) {
 	for _, perm := range permission.All() {
 		n := perm.Name()
 		if !permission.IsRequestable(n) {
-			if list[n] {
+			if list[n] && !permission.IsPlatformManagedRole(n) {
 				t.Errorf("%s is in the must-hold list but is not requestable", n)
 			}
 			continue
@@ -88,7 +88,8 @@ func TestApproval_AdminMustHoldAuthorityAndMoney(t *testing.T) {
 			t.Errorf("owner approving %s: %v", n, err)
 		}
 	}
-	if inList != len(list) || outOfList == 0 {
+	// The three platform-managed role names sit on the list but are not requestable (ADR 0073 addendum).
+	if inList != len(list)-3 || outOfList == 0 {
 		t.Fatalf("catalogue coverage: %d of %d list names seen, %d outside", inList, len(list), outOfList)
 	}
 	// Deny never needs the permission.

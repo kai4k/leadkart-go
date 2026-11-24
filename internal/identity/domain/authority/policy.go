@@ -119,6 +119,11 @@ func (a Actor) mayChangePermissions(tenantID tenant.ID, names []string) error {
 			return fmt.Errorf("%w: %q is not a known permission", ErrGrantExceedsAuthority, n)
 		}
 	}
+	for _, n := range names {
+		if permission.IsPlatformManagedRole(n) && !a.mayManageRoles {
+			return fmt.Errorf("%w: %s is LeadKart platform authority", ErrGrantExceedsAuthority, n)
+		}
+	}
 	if a.superUser {
 		return nil
 	}
@@ -470,6 +475,9 @@ func (a Actor) MayCreateRole(tenantID tenant.ID, level int, perms []string, pare
 	if err != nil || !a.valid {
 		return ErrNoAuthority
 	}
+	if !a.mayManageRoles {
+		return fmt.Errorf("%w: creating a role is LeadKart platform authority", ErrNoAuthority)
+	}
 	if !validLevel(level) {
 		return fmt.Errorf("%w: level %d is outside [%d, %d]", ErrInsufficientRank, level, minLevel, role.HierarchyLevelMax)
 	}
@@ -517,6 +525,9 @@ func parentEligible(parent *role.Role, childLevel Rank) error {
 func (a Actor) mayMutateRole(r *role.Role, newLevel int) error {
 	if !a.valid {
 		return ErrNoAuthority
+	}
+	if !a.mayManageRoles {
+		return fmt.Errorf("%w: changing a role is LeadKart platform authority", ErrNoAuthority)
 	}
 	if r == nil {
 		return fmt.Errorf("%w: role required", ErrNoAuthority)

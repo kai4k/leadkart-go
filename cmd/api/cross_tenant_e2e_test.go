@@ -346,7 +346,6 @@ func (f e2eFixture) do(t *testing.T, method, path, token string, body any) httpR
 // the ADR 0039 X-Tenant-Id operator scope header).
 func (f e2eFixture) doWithHeaders(t *testing.T, method, path, token string, body any, headers map[string]string) httpResp {
 	t.Helper()
-	token, headers = f.asPlatformForRoleWrite(t, method, path, token, headers)
 	r, err := f.tryDo(t.Context(), method, path, token, body, headers)
 	if err != nil {
 		t.Fatalf("%s %s: %v", method, path, err)
@@ -541,7 +540,7 @@ func TestE2E_CrossTenant_RoleRouteHiddenAsNotFound(t *testing.T) {
 	tenantB := f.registerAndLogin(t, "globex")
 
 	// Tenant B creates a custom role.
-	createInB := f.authedJSON(t, http.MethodPost, "/api/v1/roles", tenantB.AccessToken,
+	createInB := f.roleWrite(t, http.MethodPost, "/api/v1/roles", tenantB.AccessToken,
 		ports.CreateRoleRequest{Name: "B Custom Role", HierarchyLevel: 50})
 	if createInB.status != http.StatusCreated {
 		t.Fatalf("create role in B: status %d body %s", createInB.status, createInB.body)
@@ -558,12 +557,20 @@ func TestE2E_CrossTenant_RoleRouteHiddenAsNotFound(t *testing.T) {
 		t.Errorf("GET cross-tenant role: status %d, want 404; body=%s", read.status, read.body)
 	}
 
-	// Tenant A tries to deactivate and reactivate it → 404 (a role is never deleted, ADR 0073).
+	// Tenant A's own caller cannot write any role (LeadKart platform authority, ADR 0073 addendum): the
+	// route gate answers 403 before the role is looked up, so there is nothing to hide.
 	for _, verb := range []string{"deactivate", "reactivate"} {
-		res := f.authedJSON(t, http.MethodPost,
-			"/api/v1/roles/"+bRole.RoleID+"/"+verb, tenantA.AccessToken, nil)
+		res := f.doWithHeaders(t, http.MethodPost, "/api/v1/roles/"+bRole.RoleID+"/"+verb, tenantA.AccessToken, nil, asCompanyHdr)
+		if res.status != http.StatusForbidden {
+			t.Errorf("company POST %s cross-tenant role: status %d, want 403 (the gate); body=%s", verb, res.status, res.body)
+		}
+	}
+	// The platform operator scoped to tenant A reaches A's roles only: B's role is a 404 (a role is
+	// never deleted, ADR 0073).
+	for _, verb := range []string{"deactivate", "reactivate"} {
+		res := f.roleWrite(t, http.MethodPost, "/api/v1/roles/"+bRole.RoleID+"/"+verb, tenantA.AccessToken, nil)
 		if res.status != http.StatusNotFound {
-			t.Errorf("POST %s cross-tenant role: status %d, want 404; body=%s", verb, res.status, res.body)
+			t.Errorf("operator scoped to A: POST %s on B's role: status %d, want 404; body=%s", verb, res.status, res.body)
 		}
 	}
 

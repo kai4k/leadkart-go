@@ -186,7 +186,7 @@ func selfTargetApp(t *testing.T) app.Application {
 			t.Fatalf("membership.New: %v", err)
 		}
 		if id == azSelf {
-			// The caller is a rank-Admin member holding only roles.update: the facts the
+			// The caller is a rank-Admin member holding only tasks.work_items.reassign: the facts the
 			// commands re-read for the acting member (rank 10, one permission).
 			if err := m.AssignRole(role.ID(adminLite), bodyNow); err != nil {
 				t.Fatalf("AssignRole: %v", err)
@@ -208,7 +208,7 @@ func selfTargetApp(t *testing.T) app.Application {
 	if err != nil {
 		t.Fatalf("role.New: %v", err)
 	}
-	if err := lite.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Roles.Update), bodyNow); err != nil {
+	if err := lite.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Tasks.WorkItems.Reassign), bodyNow); err != nil {
 		t.Fatalf("GrantPermission: %v", err)
 	}
 	if err := roles.Add(t.Context(), lite); err != nil {

@@ -13,7 +13,6 @@
 package main
 
 import (
-	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -167,19 +166,8 @@ func TestAttack_Operators_ExemptWithoutOwnershipCannotChangeWhoOwns(t *testing.T
 // never an owner, never an approver or requester, never a platform principal.
 func TestAttack_Operators_ImpersonationSessionIsAnAdministratorNotAnOwner(t *testing.T) {
 	w := newAttackWorld(t)
-	f := w.f
 	p := permission.IdentityPermissions
-	opTok := mintOperatorJWTExact(t, f.Issuer, f.persons, "", []string{p.Platform.ImpersonationManage, p.Platform.TenantsView}, false)
-	sess := f.authedJSON(t, http.MethodPost, "/api/v1/platform/impersonation/sessions", opTok,
-		ports.CreateImpersonationSessionRequest{TargetTenantID: w.owner.TenantID, Reason: "attack suite session", DurationMinutes: 30})
-	if sess.status != http.StatusCreated {
-		t.Fatalf("create session: %d %s", sess.status, sess.body)
-	}
-	var out ports.CreateImpersonationSessionResponse
-	if err := json.Unmarshal(sess.body, &out); err != nil {
-		t.Fatalf("decode session: %v", err)
-	}
-	tok := out.AccessToken
+	tok := w.impersonationToken(t)
 	reqID := w.submitFor(t, "exec2", p.Inventory.Catalog.Manage)
 	ownerRole, adminRole := w.roles[role.SystemRoles.Tenant.CompanyOwner], w.roles[role.SystemRoles.Tenant.Administrator]
 	owner2, norole, exec := w.mid(t, "owner2"), w.mid(t, "norole"), w.mid(t, "exec")

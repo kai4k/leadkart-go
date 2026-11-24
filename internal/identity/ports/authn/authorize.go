@@ -92,11 +92,12 @@ func superUserHolds(c *jwt.Claims, required string) bool {
 // counts for c. The admin-tier names need the Administrator tier or above (an impersonation session is
 // Admin-equivalent). Owner ruling 2026-11-25: identity.roles.{create,update,manage} are platform
 // authority, so no company member holds them, the owner and a company super-admin role included; only
-// an impersonation session (a platform operator acting inside the company) and the platform
-// equivalents do.
+// an impersonation session (a platform operator acting inside the company), a slug-anchored platform
+// operator inside the platform tenant (LeadKart staff manage LeadKart's own roles, as before) and the
+// platform equivalents do.
 func tenantPlaneMayHold(c *jwt.Claims, required string) bool {
 	if permission.IsPlatformManagedRole(required) {
-		return c.IsImpersonation()
+		return c.IsImpersonation() || IsPlatformOperator(c)
 	}
 	return authority.MayHoldAt(authority.RankFromClaim(c.Rank), required) || c.IsImpersonation()
 }

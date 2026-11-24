@@ -158,16 +158,16 @@ func TestApprove_ManagerNeedsApproveAndTheHeldPermission(t *testing.T) {
 	c := w.cast(t)
 	tl := actorAs(t, c.tl.ID(), authority.RankTeamLead, p.Roles.Approve, p.Crm.Leads.Read)
 
-	// the chain: the Team Lead does not hold identity.roles.update
-	chain := w.pending(t, c.exec, p.Roles.Update, 0)
+	// the chain: the Team Lead does not hold identity.users.update_permissions
+	chain := w.pending(t, c.exec, p.Users.UpdatePermissions, 0)
 	if err := w.approveAs(tl, chain); !errors.Is(err, authority.ErrGrantExceedsAuthority) {
 		t.Fatalf("approve an unheld permission: %v, want ErrGrantExceedsAuthority", err)
 	}
 	if got, _ := w.reqs.GetByID(t.Context(), awTenant, chain.ID()); got.State() != permissionrequest.StatePending {
 		t.Errorf("a refused approval changed the request to %s", got.State())
 	}
-	if _, ok := grantOf(c.exec, p.Roles.Update); ok {
-		t.Fatal("the requester holds identity.roles.update after a refused approval")
+	if _, ok := grantOf(c.exec, p.Users.UpdatePermissions); ok {
+		t.Fatal("the requester holds identity.users.update_permissions after a refused approval")
 	}
 
 	// a held permission, for a report: approved, exactly that permission, the stored duration
@@ -223,12 +223,12 @@ func TestApprove_WhoMay(t *testing.T) {
 	if err := w.approveAs(admin, r); err != nil {
 		t.Errorf("admin approves a day-to-day permission for a user: %v", err)
 	}
-	if err := w.approveAs(admin, w.pending(t, c.exec, p.Roles.Update, 0)); !errors.Is(err, authority.ErrGrantExceedsAuthority) {
+	if err := w.approveAs(admin, w.pending(t, c.exec, p.Users.UpdatePermissions, 0)); !errors.Is(err, authority.ErrGrantExceedsAuthority) {
 		t.Errorf("admin approves a must-hold permission they lack: %v, want ErrGrantExceedsAuthority", err)
 	}
 	// the owner approves anything requestable
 	owner := actorAs(t, w.member(t, w.owner).ID(), authority.RankOwner, tenantAdminEffective()...)
-	if err := w.approveAs(owner, w.pending(t, c.other, p.Roles.Update, 0)); err != nil {
+	if err := w.approveAs(owner, w.pending(t, c.other, p.Users.UpdatePermissions, 0)); err != nil {
 		t.Errorf("owner approves a must-hold permission: %v", err)
 	}
 	// a read-only platform operator in the platform tenant follows rank like anyone else
@@ -388,7 +388,7 @@ func TestDeny_Authority(t *testing.T) {
 	p := permission.IdentityPermissions
 	w := newPRWorld(t)
 	c := w.cast(t)
-	r := w.pending(t, c.exec, p.Roles.Update, 0)
+	r := w.pending(t, c.exec, p.Users.UpdatePermissions, 0)
 	// denying needs eligibility only, not the permission
 	tl := actorAs(t, c.tl.ID(), authority.RankTeamLead, p.Roles.Approve)
 	mgr := actorAs(t, c.mgr.ID(), authority.RankManager, p.Roles.Approve)

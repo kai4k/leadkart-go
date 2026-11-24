@@ -27,21 +27,21 @@ func TestE2E_RoleName_FreesUpOnDelete_AndReactivateCollides(t *testing.T) {
 	if r, _ := f.createRoleVia(t, tok, ports.CreateRoleRequest{Name: "Area Manager", HierarchyLevel: 60}); r.status != http.StatusConflict || invObj(t, r.body)["error"] != "role_name_taken" {
 		t.Fatalf("active duplicate: %d %s, want 409 role_name_taken", r.status, r.body)
 	}
-	if r := f.authedJSON(t, http.MethodPost, base+"/"+old+"/deactivate", tok, nil); r.status != http.StatusOK {
+	if r := f.roleWrite(t, http.MethodPost, base+"/"+old+"/deactivate", tok, nil); r.status != http.StatusOK {
 		t.Fatalf("deactivate: %d %s", r.status, r.body)
 	}
 	// Deleted: the name is free.
 	fresh := f.customRole(t, tok, "Area Manager", 60)
 	// The old one cannot come back under a taken name.
-	r := f.authedJSON(t, http.MethodPost, base+"/"+old+"/reactivate", tok, nil)
+	r := f.roleWrite(t, http.MethodPost, base+"/"+old+"/reactivate", tok, nil)
 	if r.status != http.StatusConflict || invObj(t, r.body)["error"] != "role_name_taken" {
 		t.Fatalf("reactivate over a taken name: %d %s, want 409 role_name_taken", r.status, r.body)
 	}
 	// Free the name again: now it can.
-	if r := f.authedJSON(t, http.MethodPost, base+"/"+fresh+"/deactivate", tok, nil); r.status != http.StatusOK {
+	if r := f.roleWrite(t, http.MethodPost, base+"/"+fresh+"/deactivate", tok, nil); r.status != http.StatusOK {
 		t.Fatalf("deactivate fresh: %d %s", r.status, r.body)
 	}
-	if r := f.authedJSON(t, http.MethodPost, base+"/"+old+"/reactivate", tok, nil); r.status != http.StatusOK {
+	if r := f.roleWrite(t, http.MethodPost, base+"/"+old+"/reactivate", tok, nil); r.status != http.StatusOK {
 		t.Fatalf("reactivate once free: %d %s", r.status, r.body)
 	}
 }

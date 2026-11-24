@@ -171,7 +171,7 @@ func TestAttack_Races_RolesAgainstTheirHoldersAndLinks(t *testing.T) {
 		for round := range raceRounds {
 			res := w.raceOnce(t,
 				w.call(http.MethodPost, "/api/v1/users/"+norole+"/roles", w.tok(t, "sales"), ports.AssignUserRoleRequest{RoleID: id}),
-				w.call(http.MethodPost, "/api/v1/roles/"+id+"/permissions/grant", ownTok, ports.RolePermissionRequest{Permission: extra}))
+				w.callRoleWrite(t, http.MethodPost, "/api/v1/roles/"+id+"/permissions/grant", ownTok, ports.RolePermissionRequest{Permission: extra}))
 			onlyStatuses(t, "assign", res[0], http.StatusNoContent, http.StatusForbidden)
 			onlyStatuses(t, "grant", res[1], http.StatusNoContent, http.StatusForbidden)
 			u := f.getUser(t, ownTok, norole)
@@ -185,7 +185,7 @@ func TestAttack_Races_RolesAgainstTheirHoldersAndLinks(t *testing.T) {
 					t.Fatalf("round %d: clean up the holder: %d %s", round, r.status, r.body)
 				}
 			}
-			if r := f.authedJSON(t, http.MethodPost, "/api/v1/roles/"+id+"/permissions/revoke", ownTok, ports.RolePermissionRequest{Permission: extra}); r.status != http.StatusNoContent {
+			if r := f.roleWrite(t, http.MethodPost, "/api/v1/roles/"+id+"/permissions/revoke", ownTok, ports.RolePermissionRequest{Permission: extra}); r.status != http.StatusNoContent {
 				t.Fatalf("round %d: take the permission off again: %d %s", round, r.status, r.body)
 			}
 		}
@@ -206,7 +206,7 @@ func TestAttack_Races_RolesAgainstTheirHoldersAndLinks(t *testing.T) {
 			onlyStatuses(t, "manager", res[1], http.StatusNoContent)
 			w.checkInvariants(t, "re-level vs manager") // every manager strictly senior to the report
 			back := 40
-			if r := f.authedJSON(t, http.MethodPatch, "/api/v1/roles/"+lvl40, ownTok, ports.UpdateRoleRequest{HierarchyLevel: &back}); r.status != http.StatusNoContent {
+			if r := f.roleWrite(t, http.MethodPatch, "/api/v1/roles/"+lvl40, ownTok, ports.UpdateRoleRequest{HierarchyLevel: &back}); r.status != http.StatusNoContent {
 				t.Fatalf("round %d: re-level back: %d %s", round, r.status, r.body)
 			}
 			f.setManager(t, ownTok, h.membershipID, w.mid(t, "lead"))

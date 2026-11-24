@@ -150,11 +150,13 @@ func TestAttack_AddUsers_NoWayToObtainItBelowTheTier(t *testing.T) {
 	const refused = "admin_tier_required"
 	shell, custom := w.roles[shellRoleName], w.roles[customRoleName]
 	var rows []attack
-	// role edits, by the owner (who holds everything): a role below the tier cannot contain it
+	// role edits, by a platform actor (an impersonation session: role writes are LeadKart authority, the
+	// company owner is stopped by the gate): a role below the tier cannot contain it
+	session := w.impersonationToken(t)
 	rows = append(rows,
-		attack{who: "owner", what: "grant it to an executive-level role", method: http.MethodPost, path: "/api/v1/roles/" + shell + "/permissions/grant", body: ports.RolePermissionRequest{Permission: create}, status: http.StatusForbidden, code: refused},
-		attack{who: "owner", what: "replace an executive-level role's set with it", method: http.MethodPut, path: "/api/v1/roles/" + shell + "/permissions", body: ports.ReplaceRolePermissionsRequest{Permissions: []string{create}}, status: http.StatusForbidden, code: refused},
-		attack{who: "owner", what: "grant it to the custom level-40 role", method: http.MethodPost, path: "/api/v1/roles/" + custom + "/permissions/grant", body: ports.RolePermissionRequest{Permission: create}, status: http.StatusForbidden, code: refused},
+		attack{tok: session, who: "session", what: "grant it to an executive-level role", method: http.MethodPost, path: "/api/v1/roles/" + shell + "/permissions/grant", body: ports.RolePermissionRequest{Permission: create}, status: http.StatusForbidden, code: refused},
+		attack{tok: session, who: "session", what: "replace an executive-level role's set with it", method: http.MethodPut, path: "/api/v1/roles/" + shell + "/permissions", body: ports.ReplaceRolePermissionsRequest{Permissions: []string{create}}, status: http.StatusForbidden, code: refused},
+		attack{tok: session, who: "session", what: "grant it to the custom level-40 role", method: http.MethodPost, path: "/api/v1/roles/" + custom + "/permissions/grant", body: ports.RolePermissionRequest{Permission: create}, status: http.StatusForbidden, code: refused},
 		attack{who: "owner", what: "assign the stale custom role (it holds it) to a member", method: http.MethodPost, path: "/api/v1/users/" + w.mid(t, "norole") + "/roles", body: ports.AssignUserRoleRequest{RoleID: custom}, status: http.StatusForbidden, code: refused},
 	)
 	// overrides, by the owner and by the Administrator, onto every persona below the tier

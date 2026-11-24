@@ -38,7 +38,7 @@ func TestE2E_ApproverQueue_CanApproveIsWhatApproveAnswers(t *testing.T) {
 	p := permission.IdentityPermissions
 	e, eTok := w.exec(t)
 	// held by the Team Lead (approvable) and not held (listed, but not approvable)
-	for _, perm := range []string{p.Tasks.WorkItems.Reassign, p.Roles.Update, p.Users.Update} { // Users.Update, not Users.Create: owner ruling 2026-11-21 (create is admin-tier-only and cannot be requested below the tier)
+	for _, perm := range []string{p.Tasks.WorkItems.Reassign, p.Users.UpdatePermissions, p.Users.Update} { // Users.Update, not Users.Create: owner ruling 2026-11-21 (create is admin-tier-only and cannot be requested below the tier)
 		if sub, _ := f.requestElevation(t, eTok, perm); sub.status != http.StatusCreated {
 			t.Fatalf("submit %s: %d %s", perm, sub.status, sub.body)
 		}

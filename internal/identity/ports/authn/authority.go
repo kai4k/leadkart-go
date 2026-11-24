@@ -3,6 +3,10 @@ package authn
 import (
 	"context"
 
+	"github.com/leadkart/leadkart-go/internal/common/tenancy"
+	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
+
 	"github.com/leadkart/leadkart-go/internal/identity/domain/authority"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -23,6 +27,7 @@ func AuthorityFrom(ctx context.Context) authority.Actor {
 	if !ok || c == nil {
 		return authority.Actor{}
 	}
+	own := tenancy.ID(c.TenantID)
 	a, err := authority.NewActor(authority.ActorInput{
 		MembershipID:         membership.ID(c.MembershipID),
 		TenantID:             tenant.ID(c.TenantID),
@@ -31,9 +36,18 @@ func AuthorityFrom(ctx context.Context) authority.Actor {
 		IsSuperUser:          c.IsSuperUser,
 		IsPlatformOperator:   IsPlatformOperator(c),
 		IsImpersonation:      c.IsImpersonation(),
+		MayManageRoles:       mayManageRoles(c, own),
 	})
 	if err != nil {
 		return authority.Actor{}
 	}
 	return a
+}
+
+// mayManageRoles is the fact the domain policy carries: the caller satisfies a role-management name
+// in its own tenant through platform authority (ADR 0073 addendum). The three names share one
+// rule (IsPlatformManagedRole), so any of them proves it.
+func mayManageRoles(c *jwt.Claims, own tenancy.ID) bool {
+	p := permission.IdentityPermissions.Roles
+	return satisfiesIn(c, own, p.Update) || satisfiesIn(c, own, p.Create) || satisfiesIn(c, own, p.Manage)
 }

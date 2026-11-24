@@ -339,7 +339,7 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 		SecurityStamp: p.SecurityStamp().String(),
 		IsPlatform:    tn.Slug().String() == tenant.PlatformSlug, // match login.go — platform scope must survive refresh
 		IsSuperUser:   authClaims.IsSuperUser,
-		Permissions:   permissionNames(authClaims.Permissions),
+		Permissions:   claimPermissionNames(authClaims.Permissions, tn.Slug().String()),
 		Rank:          rankClaim(authClaims.Rank),
 		// Minted from the stored Person, like login: the flag survives refresh and
 		// is gone with the first token after the password change.

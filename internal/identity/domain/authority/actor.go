@@ -28,6 +28,11 @@ type ActorInput struct {
 	IsSuperUser          bool
 	IsPlatformOperator   bool // slug-anchored, non-impersonation
 	IsImpersonation      bool
+	// MayManageRoles is the fact that the caller holds LeadKart platform authority over roles
+	// (identity.roles.create/update/manage are platform-managed, ADR 0073 addendum): an exempt
+	// platform operator, an impersonation session, a super user of the platform tenant. authn
+	// computes it with the one decision rule (satisfiesIn); false is the safe default.
+	MayManageRoles bool
 }
 
 // Actor is the authority of the caller performing a write. Carried
@@ -42,6 +47,7 @@ type Actor struct {
 	superUser        bool
 	platformOperator bool
 	impersonation    bool
+	mayManageRoles   bool
 	// holdUntil is, for a permission the actor holds ONLY through a time-bound
 	// override, when that override ends. Set by NarrowedBy from the fresh read;
 	// never present on a token-only actor.
@@ -70,8 +76,9 @@ func NewActor(in ActorInput) (Actor, error) {
 	if in.IsImpersonation {
 		rank = RankAdmin
 	}
-	return Actor{valid: true, membershipID: mid, tenantID: tid, rank: rank, effective: effectiveSet(in.EffectivePermissions),
-		superUser: in.IsSuperUser, platformOperator: in.IsPlatformOperator, impersonation: in.IsImpersonation}, nil
+	return Actor{valid: true, membershipID: mid, tenantID: tid, rank: rank, effective: effectiveSet(in.EffectivePermissions, in.MayManageRoles),
+		mayManageRoles: in.MayManageRoles,
+		superUser:      in.IsSuperUser, platformOperator: in.IsPlatformOperator, impersonation: in.IsImpersonation}, nil
 }
 
 // Valid reports whether a was built by NewActor (the zero Actor is invalid and denies everything).
@@ -88,6 +95,10 @@ func (a Actor) IsSuperUser() bool { return a.valid && a.superUser }
 
 // IsPlatformOperator reports whether the caller is a slug-anchored, non-impersonation platform operator.
 func (a Actor) IsPlatformOperator() bool { return a.valid && a.platformOperator }
+
+// MayManageRoles reports whether the caller holds platform authority over roles
+// (create, edit, delete). Every role-writing decision refuses without it.
+func (a Actor) MayManageRoles() bool { return a.valid && a.mayManageRoles }
 
 // IsImpersonation reports whether the caller is an impersonation session.
 func (a Actor) IsImpersonation() bool { return a.valid && a.impersonation }
@@ -124,16 +135,19 @@ func (a Actor) hasOwn(name string) bool { _, ok := a.effective[name]; return ok 
 // effectiveSet is the set of known permission names in names, with every name
 // tenant.admin implies added when tenant.admin itself is listed. It is the one
 // place the expansion happens (NewActor and NarrowedBy both use it).
-func effectiveSet(names []string) map[string]struct{} {
+//
+// The three role-management names are platform authority: unless mayManageRoles, they are
+// neither listed nor implied (a company member never holds them, whatever the claim says).
+func effectiveSet(names []string, mayManageRoles bool) map[string]struct{} {
 	eff := make(map[string]struct{}, len(names))
 	for _, n := range names {
-		if permission.IsKnown(n) {
+		if permission.IsKnown(n) && (mayManageRoles || !permission.IsPlatformManagedRole(n)) {
 			eff[n] = struct{}{}
 		}
 	}
 	if _, ok := eff[tenantAdminName()]; ok {
 		for _, p := range permission.All() {
-			if permission.ImpliedByTenantAdmin(p.Name()) {
+			if permission.ImpliedByTenantAdmin(p.Name()) && (mayManageRoles || !permission.IsPlatformManagedRole(p.Name())) {
 				eff[p.Name()] = struct{}{}
 			}
 		}
@@ -188,20 +202,20 @@ func (a Actor) NarrowedBy(fresh Member, freshEffective, freshViaRoles []string) 
 	out := a
 	out.rank = max(a.rank, fresh.rank)
 	out.effective = make(map[string]struct{}, len(a.effective))
-	have := effectiveSet(freshEffective)
+	have := effectiveSet(freshEffective, a.mayManageRoles)
 	for n := range a.effective {
 		if _, ok := have[n]; ok {
 			out.effective[n] = struct{}{}
 		}
 	}
-	out.holdUntil = timeBoundHoldings(fresh, out.effective, effectiveSet(freshViaRoles))
+	out.holdUntil = timeBoundHoldings(fresh, out.effective, effectiveSet(freshViaRoles, a.mayManageRoles), a.mayManageRoles)
 	return out
 }
 
 // timeBoundHoldings: for every permission in held that the member does not get
 // from a role or a permanent grant, the latest time-bound grant that confers it
 // (a timed tenant.admin grant confers every name it implies until it ends).
-func timeBoundHoldings(fresh Member, held, viaRoles map[string]struct{}) map[string]time.Time {
+func timeBoundHoldings(fresh Member, held, viaRoles map[string]struct{}, mayManageRoles bool) map[string]time.Time {
 	permanent := make(map[string]struct{})
 	timed := make(map[string]time.Time)
 	for _, g := range fresh.overrides.Granted {
@@ -212,7 +226,7 @@ func timeBoundHoldings(fresh Member, held, viaRoles map[string]struct{}) map[str
 		}
 	}
 	if _, ok := permanent[tenantAdminName()]; ok {
-		for n := range effectiveSet([]string{tenantAdminName()}) {
+		for n := range effectiveSet([]string{tenantAdminName()}, mayManageRoles) {
 			permanent[n] = struct{}{}
 		}
 	}
@@ -231,7 +245,7 @@ func timeBoundHoldings(fresh Member, held, viaRoles map[string]struct{}) map[str
 		set(n, until)
 	}
 	if until, ok := timed[tenantAdminName()]; ok {
-		for n := range effectiveSet([]string{tenantAdminName()}) {
+		for n := range effectiveSet([]string{tenantAdminName()}, mayManageRoles) {
 			set(n, until)
 		}
 	}

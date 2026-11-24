@@ -67,6 +67,9 @@ func adminEffective() []string {
 
 func mkActor(t *testing.T, in authority.ActorInput) authority.Actor {
 	t.Helper()
+	// The decision corpus predates the platform-authority fact: these actors act as platform
+	// authority unless a test builds its own with NewActor (see role_platform_authority_test.go).
+	in.MayManageRoles = true
 	a, err := authority.NewActor(in)
 	if err != nil {
 		t.Fatalf("NewActor: %v", err)

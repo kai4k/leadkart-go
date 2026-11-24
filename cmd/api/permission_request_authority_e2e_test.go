@@ -115,9 +115,9 @@ func TestE2E_PermissionRequests_ApprovalDecidedByPolicy(t *testing.T) {
 	// arch-test:serial — subtests share one fixture and one tenant.
 	t.Run("the chain: a manager cannot approve a permission they do not hold", func(t *testing.T) {
 		_, eTok := w.exec(t)
-		_, id := f.requestElevation(t, eTok, p.Roles.Update)
+		_, id := f.requestElevation(t, eTok, p.Users.UpdatePermissions)
 		r := w.decide(t, "approve", w.tlTok, id)
-		f.wantForbidden(t, "Team Lead approves identity.roles.update", r, http.StatusForbidden, "grant_exceeds_authority")
+		f.wantForbidden(t, "Team Lead approves identity.users.update_permissions", r, http.StatusForbidden, "grant_exceeds_authority")
 		got := f.authedJSON(t, http.MethodGet, "/api/v1/permission-requests/"+id, eTok, nil)
 		var dto ports.PermissionRequestDto
 		if err := json.Unmarshal(got.body, &dto); err != nil || dto.State != "pending" {
@@ -157,9 +157,9 @@ func TestE2E_PermissionRequests_ApprovalDecidedByPolicy(t *testing.T) {
 		}
 		// The approval ended the requester's old token (stamp evicted at commit): sign in again.
 		eTok = f.loginToken(t, e.email, e.password)
-		_, must := f.requestElevation(t, eTok, p.Roles.Update)
+		_, must := f.requestElevation(t, eTok, p.Users.UpdatePermissions)
 		r := w.decide(t, "approve", w.adTok, must)
-		f.wantForbidden(t, "admin approves identity.roles.update it does not hold", r, http.StatusForbidden, "grant_exceeds_authority")
+		f.wantForbidden(t, "admin approves identity.users.update_permissions it does not hold", r, http.StatusForbidden, "grant_exceeds_authority")
 		// denying needs eligibility only
 		if r := w.decide(t, "deny", w.adTok, must); r.status != http.StatusNoContent {
 			t.Errorf("admin denies a must-hold request: %d %s", r.status, r.body)

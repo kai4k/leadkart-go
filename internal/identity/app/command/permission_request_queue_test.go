@@ -52,7 +52,7 @@ func TestApproverQueue_CanApproveIsTheTruth(t *testing.T) {
 			t.Parallel()
 			w := newPRWorld(t)
 			c := w.cast(t)
-			for _, perm := range []string{p.Crm.Leads.Read, p.Crm.Leads.ReadAll, p.Crm.Leads.Assign, p.Roles.Update, p.Users.Create, p.Orders.Payments.Read} {
+			for _, perm := range []string{p.Crm.Leads.Read, p.Crm.Leads.ReadAll, p.Crm.Leads.Assign, p.Users.UpdatePermissions, p.Users.Create, p.Orders.Payments.Read} {
 				w.pending(t, c.exec, perm, 0)
 			}
 			w.pendingForged(t, c.exec.ID(), p.Meta.TenantAdmin) // stored row, not requestable

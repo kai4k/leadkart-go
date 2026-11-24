@@ -61,7 +61,9 @@ const (
 )
 
 // atkRoutePerms are the identity route permissions every non-owner, non-admin persona is
-// given by override, so the route gate never answers before the policy does.
+// given by override, so the route gate never answers before the policy does. The three
+// role-management names are NOT among them: they are LeadKart platform authority (ADR 0073
+// addendum), so a company persona cannot hold them and a role write by a persona is the gate's 403.
 // identity.users.create is NOT among them: the owner ruling of 2026-11-21 makes it
 // admin-tier-only, so the override route refuses it below the tier. The world plants
 // it as STALE DATA instead (plantStaleAddUsers), as an existing tenant holds it.
@@ -69,7 +71,7 @@ func atkRoutePerms() []string {
 	p := permission.IdentityPermissions
 	return []string{
 		p.Users.View, p.Users.Update, p.Users.Deactivate, p.Users.Reactivate, p.Users.UpdatePermissions,
-		p.Roles.View, p.Roles.Create, p.Roles.Update, p.Roles.Manage, p.Roles.Assign, p.Roles.Revoke, p.Roles.Approve,
+		p.Roles.View, p.Roles.Assign, p.Roles.Revoke, p.Roles.Approve,
 	}
 }
 
@@ -443,4 +445,22 @@ func companyRoleWrite(a attack, token string) bool {
 	}
 	tenantID, platform, impersonating := tokenFacts(token)
 	return tenantID != "" && !platform && !impersonating
+}
+
+// impersonationToken opens an impersonation session into the world's tenant and returns its access token:
+// a platform actor acting inside the company, Admin-equivalent whatever rank it claims.
+func (w *attackWorld) impersonationToken(t *testing.T) string {
+	t.Helper()
+	p := permission.IdentityPermissions
+	opTok := mintOperatorJWTExact(t, w.f.Issuer, w.f.persons, "", []string{p.Platform.ImpersonationManage, p.Platform.TenantsView}, false)
+	sess := w.f.authedJSON(t, http.MethodPost, "/api/v1/platform/impersonation/sessions", opTok,
+		ports.CreateImpersonationSessionRequest{TargetTenantID: w.owner.TenantID, Reason: "attack suite session", DurationMinutes: 30})
+	if sess.status != http.StatusCreated {
+		t.Fatalf("create session: %d %s", sess.status, sess.body)
+	}
+	var out ports.CreateImpersonationSessionResponse
+	if err := json.Unmarshal(sess.body, &out); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+	return out.AccessToken
 }

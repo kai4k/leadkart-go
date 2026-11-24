@@ -66,12 +66,6 @@ func TestE2E_RoleCommands_PolicyDecides(t *testing.T) {
 
 	adminM := f.createMember(t, owner, "admin")
 	f.assignRole(t, owner.AccessToken, adminM.membershipID, roleID(role.SystemRoles.Tenant.Administrator))
-	mgrM := f.createMember(t, owner, "mgr")
-	f.assignRole(t, owner.AccessToken, mgrM.membershipID, roleID(role.SystemRoles.Tenant.SalesManager))
-	f.grantOverrides(t, owner.AccessToken, mgrM.membershipID, []string{p.Roles.Create, p.Roles.Update, p.Roles.Manage}, nil)
-	weakM := f.createMember(t, owner, "weakadmin") // an Administrator who lost tenant.admin
-	f.assignRole(t, owner.AccessToken, weakM.membershipID, roleID(role.SystemRoles.Tenant.Administrator))
-	f.grantOverrides(t, owner.AccessToken, weakM.membershipID, []string{p.Roles.Update, p.Roles.Manage}, []string{p.Meta.TenantAdmin})
 	adminTok := f.loginToken(t, adminM.email, adminM.password)
 	superTok := f.mintPlatformTokenWith(t, nil, true)
 
@@ -86,18 +80,18 @@ func TestE2E_RoleCommands_PolicyDecides(t *testing.T) {
 	}
 
 	// arch-test:serial — subtests share one fixture and one tenant.
-	t.Run("system role: an Administrator cannot strip tenant.admin from Company Owner", func(t *testing.T) {
-		r := f.authedJSON(t, http.MethodPost, rolePath(ownerRole, "/permissions/revoke"), adminTok, ports.RolePermissionRequest{Permission: p.Meta.TenantAdmin})
+	t.Run("system role: the platform operator cannot strip tenant.admin from Company Owner", func(t *testing.T) {
+		r := f.roleWrite(t, http.MethodPost, rolePath(ownerRole, "/permissions/revoke"), adminTok, ports.RolePermissionRequest{Permission: p.Meta.TenantAdmin})
 		f.wantForbidden(t, "admin revokes tenant.admin from Company Owner", r, http.StatusConflict, "role_system_default")
 		assertOwnerRoleIntact(t)
 	})
 	// arch-test:serial — subtests share one fixture and one tenant.
 	t.Run("system role: emptying it is refused, with {} and with []", func(t *testing.T) {
-		r := f.authedJSON(t, http.MethodPut, rolePath(ownerRole, "/permissions"), adminTok, map[string]any{})
+		r := f.roleWrite(t, http.MethodPut, rolePath(ownerRole, "/permissions"), adminTok, map[string]any{})
 		f.wantForbidden(t, "PUT {} on Company Owner", r, http.StatusBadRequest, "invalid_body")
-		r = f.authedJSON(t, http.MethodPut, rolePath(ownerRole, "/permissions"), adminTok, map[string]any{"permissions": nil})
+		r = f.roleWrite(t, http.MethodPut, rolePath(ownerRole, "/permissions"), adminTok, map[string]any{"permissions": nil})
 		f.wantForbidden(t, "PUT null on Company Owner", r, http.StatusBadRequest, "invalid_body")
-		r = f.authedJSON(t, http.MethodPut, rolePath(ownerRole, "/permissions"), adminTok, ports.ReplaceRolePermissionsRequest{Permissions: []string{}})
+		r = f.roleWrite(t, http.MethodPut, rolePath(ownerRole, "/permissions"), adminTok, ports.ReplaceRolePermissionsRequest{Permissions: []string{}})
 		f.wantForbidden(t, "PUT [] on Company Owner", r, http.StatusConflict, "role_system_default")
 		assertOwnerRoleIntact(t)
 	})
@@ -129,7 +123,7 @@ func TestE2E_RoleCommands_PolicyDecides(t *testing.T) {
 			t.Fatalf("create %s: %d %s", name, r.status, r.body)
 		}
 		if len(perms) > 0 {
-			if r := f.authedJSON(t, http.MethodPut, rolePath(id, "/permissions"), adminTok, ports.ReplaceRolePermissionsRequest{Permissions: perms}); r.status != http.StatusNoContent {
+			if r := f.roleWrite(t, http.MethodPut, rolePath(id, "/permissions"), adminTok, ports.ReplaceRolePermissionsRequest{Permissions: perms}); r.status != http.StatusNoContent {
 				t.Fatalf("seed permissions of %s: %d %s", name, r.status, r.body)
 			}
 		}
@@ -140,12 +134,12 @@ func TestE2E_RoleCommands_PolicyDecides(t *testing.T) {
 	t.Run("deactivate: a role with an active holder is 409 role_in_use; an inactive role confers nothing (ADR 0073)", func(t *testing.T) {
 		id := custom(t, "Held Role", 60)
 		// The role carries a permission the holder can only get through it.
-		if r := f.authedJSON(t, http.MethodPost, rolePath(id, "/permissions/grant"), owner.AccessToken, ports.RolePermissionRequest{Permission: p.Tasks.WorkItems.Read}); r.status != http.StatusNoContent {
+		if r := f.roleWrite(t, http.MethodPost, rolePath(id, "/permissions/grant"), owner.AccessToken, ports.RolePermissionRequest{Permission: p.Tasks.WorkItems.Read}); r.status != http.StatusNoContent {
 			t.Fatalf("grant the role a permission: %d %s", r.status, r.body)
 		}
 		holder := f.createMember(t, owner, "holder")
 		f.assignRole(t, owner.AccessToken, holder.membershipID, id)
-		r := f.authedJSON(t, http.MethodPost, rolePath(id, "/deactivate"), adminTok, nil)
+		r := f.roleWrite(t, http.MethodPost, rolePath(id, "/deactivate"), adminTok, nil)
 		f.wantForbidden(t, "deactivate a held role", r, http.StatusConflict, "role_in_use")
 		if e := decodeError(t, r.body); e.Errors["active_holders"][0] != "1" {
 			t.Errorf("holder count = %v, want 1", e.Errors)
@@ -158,7 +152,7 @@ func TestE2E_RoleCommands_PolicyDecides(t *testing.T) {
 		}
 		// An INACTIVE holder still holds the role: it is refused too (owner ruling 2026-11-25), and the
 		// refusal says how many hold it and who.
-		r = f.authedJSON(t, http.MethodPost, rolePath(id, "/deactivate"), adminTok, nil)
+		r = f.roleWrite(t, http.MethodPost, rolePath(id, "/deactivate"), adminTok, nil)
 		f.wantForbidden(t, "deactivate a role held by an inactive member", r, http.StatusConflict, "role_in_use")
 		var inUse struct {
 			Holders     *int     `json:"holders"`
@@ -175,7 +169,7 @@ func TestE2E_RoleCommands_PolicyDecides(t *testing.T) {
 			t.Fatalf("revoke the role from the inactive holder: %d %s", r.status, r.body)
 		}
 		for range 2 {
-			r := f.authedJSON(t, http.MethodPost, rolePath(id, "/deactivate"), adminTok, nil)
+			r := f.roleWrite(t, http.MethodPost, rolePath(id, "/deactivate"), adminTok, nil)
 			if r.status != http.StatusOK {
 				t.Fatalf("deactivate with only an inactive holder: %d %s", r.status, r.body)
 			}
@@ -193,11 +187,11 @@ func TestE2E_RoleCommands_PolicyDecides(t *testing.T) {
 		if r := f.authedJSON(t, http.MethodPost, "/api/v1/users/"+other.membershipID+"/roles", adminTok, ports.AssignUserRoleRequest{RoleID: id}); r.status != http.StatusConflict || decodeError(t, r.body).Error != "role_inactive" {
 			t.Errorf("assign an inactive role: %d %s, want 409 role_inactive", r.status, r.body)
 		}
-		if r := f.authedJSON(t, http.MethodPatch, rolePath(id, ""), adminTok, ports.UpdateRoleRequest{Name: "Edited while inactive"}); r.status != http.StatusConflict || decodeError(t, r.body).Error != "role_inactive" {
+		if r := f.roleWrite(t, http.MethodPatch, rolePath(id, ""), adminTok, ports.UpdateRoleRequest{Name: "Edited while inactive"}); r.status != http.StatusConflict || decodeError(t, r.body).Error != "role_inactive" {
 			t.Errorf("edit an inactive role: %d %s, want 409 role_inactive", r.status, r.body)
 		}
 		// A role that nobody holds can come back, and an active role takes holders again.
-		if r := f.authedJSON(t, http.MethodPost, rolePath(id, "/reactivate"), adminTok, nil); r.status != http.StatusOK {
+		if r := f.roleWrite(t, http.MethodPost, rolePath(id, "/reactivate"), adminTok, nil); r.status != http.StatusOK {
 			t.Fatalf("reactivate the role: %d %s", r.status, r.body)
 		}
 		f.assignRole(t, owner.AccessToken, holder.membershipID, id)
@@ -207,20 +201,20 @@ func TestE2E_RoleCommands_PolicyDecides(t *testing.T) {
 		child := custom(t, "Child Role", 60)
 		peer := custom(t, "Peer Role", 60)
 		senior := custom(t, "Senior Role", 40)
-		r := f.authedJSON(t, http.MethodPatch, rolePath(child, "/parent"), adminTok, map[string]any{"parent_role_id": peer})
+		r := f.roleWrite(t, http.MethodPatch, rolePath(child, "/parent"), adminTok, map[string]any{"parent_role_id": peer})
 		f.wantForbidden(t, "equal-level parent", r, http.StatusUnprocessableEntity, "role_parent_not_eligible")
-		r = f.authedJSON(t, http.MethodPatch, rolePath(child, "/parent"), adminTok, map[string]any{"parent_role_id": "01a1f625-2aff-792d-ba5e-4ecb47aeda99"})
+		r = f.roleWrite(t, http.MethodPatch, rolePath(child, "/parent"), adminTok, map[string]any{"parent_role_id": "01a1f625-2aff-792d-ba5e-4ecb47aeda99"})
 		f.wantForbidden(t, "unknown parent", r, http.StatusUnprocessableEntity, "role_parent_not_eligible")
-		r = f.authedJSON(t, http.MethodPatch, rolePath(child, "/parent"), adminTok, map[string]any{"parent_role_id": senior})
+		r = f.roleWrite(t, http.MethodPatch, rolePath(child, "/parent"), adminTok, map[string]any{"parent_role_id": senior})
 		if r.status != http.StatusNoContent {
 			t.Fatalf("senior parent: %d %s", r.status, r.body)
 		}
-		r = f.authedJSON(t, http.MethodPatch, rolePath(child, "/parent"), adminTok, map[string]any{})
+		r = f.roleWrite(t, http.MethodPatch, rolePath(child, "/parent"), adminTok, map[string]any{})
 		f.wantForbidden(t, "PATCH parent {}", r, http.StatusBadRequest, "invalid_body")
 		if got := f.roleDto(t, owner.AccessToken, child).ParentRoleID; got != senior {
 			t.Errorf("parent = %q after a refused {}, want %s", got, senior)
 		}
-		r = f.authedJSON(t, http.MethodPatch, rolePath(child, "/parent"), adminTok, map[string]any{"parent_role_id": nil})
+		r = f.roleWrite(t, http.MethodPatch, rolePath(child, "/parent"), adminTok, map[string]any{"parent_role_id": nil})
 		if r.status != http.StatusNoContent {
 			t.Fatalf("explicit null clears: %d %s", r.status, r.body)
 		}

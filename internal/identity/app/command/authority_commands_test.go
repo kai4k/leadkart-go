@@ -179,7 +179,7 @@ func tenantAdminEffective() []string {
 func actorAs(t *testing.T, id membership.ID, rank authority.Rank, perms ...string) authority.Actor {
 	t.Helper()
 	r := rank.Int()
-	a, err := authority.NewActor(authority.ActorInput{MembershipID: id, TenantID: awTenant, Rank: &r, EffectivePermissions: perms})
+	a, err := authority.NewActor(authority.ActorInput{MembershipID: id, TenantID: awTenant, Rank: &r, EffectivePermissions: perms, MayManageRoles: true})
 	if err != nil {
 		t.Fatalf("NewActor: %v", err)
 	}
@@ -189,7 +189,7 @@ func actorAs(t *testing.T, id membership.ID, rank authority.Rank, perms ...strin
 func superActor(t *testing.T) authority.Actor {
 	t.Helper()
 	r := authority.RankOwner.Int()
-	a, err := authority.NewActor(authority.ActorInput{MembershipID: membership.ID(awID(9999)), TenantID: tenant.ID(awID(9998)), Rank: &r, IsSuperUser: true})
+	a, err := authority.NewActor(authority.ActorInput{MembershipID: membership.ID(awID(9999)), TenantID: tenant.ID(awID(9998)), Rank: &r, IsSuperUser: true, MayManageRoles: true})
 	if err != nil {
 		t.Fatalf("NewActor: %v", err)
 	}

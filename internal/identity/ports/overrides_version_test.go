@@ -43,7 +43,7 @@ func TestUserPermissionOverrides_TheSaveNeedsTheVersionOfTheRead(t *testing.T) {
 		return readUser(t, rec)
 	}
 	save := func(version string) (int, ports.ErrorResponse) {
-		body, err := json.Marshal(ports.ReplaceUserPermissionOverridesRequest{Granted: []string{pm.Roles.Update}, Revoked: []string{}, OverridesVersion: version})
+		body, err := json.Marshal(ports.ReplaceUserPermissionOverridesRequest{Granted: []string{pm.Tasks.WorkItems.Reassign}, Revoked: []string{}, OverridesVersion: version})
 		if err != nil {
 			t.Fatalf("encode: %v", err)
 		}

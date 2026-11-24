@@ -22,7 +22,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 )
@@ -48,28 +47,23 @@ func (f e2eFixture) setManager(t *testing.T, token, memberID, managerID string) 
 	}
 }
 
-// TestE2E_RoleEdits_ReLevelCannotInvertAReportingLine: a Senior Manager re-levels
+// TestE2E_RoleEdits_ReLevelCannotInvertAReportingLine: the platform operator re-levels
 // a custom executive role from 50 to 16; its holders would then outrank their
 // own Sales Manager.
 func TestE2E_RoleEdits_ReLevelCannotInvertAReportingLine(t *testing.T) {
 	f := newE2EFixtureAt(t, time.Now)
 	owner := f.registerAndLogin(t, "relevel")
-	p := permission.IdentityPermissions
 	roleID := func(name string) string { return f.roleIDByName(t, owner.AccessToken, name) }
 
-	senior := f.createMember(t, owner, "senior")
-	f.assignRole(t, owner.AccessToken, senior.membershipID, roleID(role.SystemRoles.Tenant.SeniorManager))
-	f.grantOverrides(t, owner.AccessToken, senior.membershipID, []string{p.Roles.Update}, nil)
 	sm := f.createMember(t, owner, "salesmgr")
 	f.assignRole(t, owner.AccessToken, sm.membershipID, roleID(role.SystemRoles.Tenant.SalesManager))
 	exec := f.createMember(t, owner, "exec")
 	custom := f.customRole(t, owner.AccessToken, "Exec2", 50)
 	f.assignRole(t, owner.AccessToken, exec.membershipID, custom)
 	f.setManager(t, owner.AccessToken, exec.membershipID, sm.membershipID)
-	sTok := f.loginToken(t, senior.email, senior.password)
 
 	lvl := 16
-	r := f.authedJSON(t, http.MethodPatch, "/api/v1/roles/"+custom, sTok, ports.UpdateRoleRequest{HierarchyLevel: &lvl})
+	r := f.roleWrite(t, http.MethodPatch, "/api/v1/roles/"+custom, owner.AccessToken, ports.UpdateRoleRequest{HierarchyLevel: &lvl})
 	f.wantForbidden(t, "re-level 50 -> 16 above the holder's manager (rank 20)", r, http.StatusUnprocessableEntity, "role_level_breaks_reporting")
 	if got := f.roleDto(t, owner.AccessToken, custom).HierarchyLevel; got != 50 {
 		t.Errorf("the level changed to %d although the call was refused", got)
@@ -77,7 +71,7 @@ func TestE2E_RoleEdits_ReLevelCannotInvertAReportingLine(t *testing.T) {
 
 	// A re-level that keeps every reporting line strictly ordered still works.
 	ok := 30
-	if r := f.authedJSON(t, http.MethodPatch, "/api/v1/roles/"+custom, sTok, ports.UpdateRoleRequest{HierarchyLevel: &ok}); r.status != http.StatusNoContent {
+	if r := f.roleWrite(t, http.MethodPatch, "/api/v1/roles/"+custom, owner.AccessToken, ports.UpdateRoleRequest{HierarchyLevel: &ok}); r.status != http.StatusNoContent {
 		t.Errorf("re-level 50 -> 30 (still junior to the manager at 20): %d %s, want 204", r.status, r.body)
 	}
 }
@@ -108,7 +102,7 @@ func TestE2E_RoleEdits_EndHoldersStaleTokens(t *testing.T) {
 	}
 	f.warmStamp(t, pair.AccessToken)
 
-	if r := f.authedJSON(t, http.MethodPost, "/api/v1/roles/"+custom+"/permissions/revoke", owner.AccessToken, ports.RolePermissionRequest{Permission: perm}); r.status != http.StatusNoContent {
+	if r := f.roleWrite(t, http.MethodPost, "/api/v1/roles/"+custom+"/permissions/revoke", owner.AccessToken, ports.RolePermissionRequest{Permission: perm}); r.status != http.StatusNoContent {
 		t.Fatalf("owner revokes %s from the role: %d %s", perm, r.status, r.body)
 	}
 	if s := f.untilStale(t, pair.AccessToken); s.status != http.StatusUnauthorized || decodeError(t, s.body).Error != "stale_token" {
@@ -134,7 +128,7 @@ func TestE2E_RoleEdits_EndHoldersStaleTokens(t *testing.T) {
 	pair = f.loginPair(t, m.email, m.password)
 	f.warmStamp(t, pair.AccessToken)
 	lvl := 55
-	if r := f.authedJSON(t, http.MethodPatch, "/api/v1/roles/"+custom, owner.AccessToken, ports.UpdateRoleRequest{HierarchyLevel: &lvl}); r.status != http.StatusNoContent {
+	if r := f.roleWrite(t, http.MethodPatch, "/api/v1/roles/"+custom, owner.AccessToken, ports.UpdateRoleRequest{HierarchyLevel: &lvl}); r.status != http.StatusNoContent {
 		t.Fatalf("owner re-levels the role: %d %s", r.status, r.body)
 	}
 	if s := f.untilStale(t, pair.AccessToken); s.status != http.StatusUnauthorized {
@@ -145,7 +139,7 @@ func TestE2E_RoleEdits_EndHoldersStaleTokens(t *testing.T) {
 	f.evictStamp(t, m.personID)
 	pair = f.loginPair(t, m.email, m.password)
 	f.warmStamp(t, pair.AccessToken)
-	if r := f.authedJSON(t, http.MethodPatch, "/api/v1/roles/"+custom, owner.AccessToken, ports.UpdateRoleRequest{Name: "Catalogue readers v2"}); r.status != http.StatusNoContent {
+	if r := f.roleWrite(t, http.MethodPatch, "/api/v1/roles/"+custom, owner.AccessToken, ports.UpdateRoleRequest{Name: "Catalogue readers v2"}); r.status != http.StatusNoContent {
 		t.Fatalf("owner renames the role: %d %s", r.status, r.body)
 	}
 	if r := f.authedJSON(t, http.MethodGet, "/api/v1/auth/sessions", pair.AccessToken, nil); r.status != http.StatusOK {

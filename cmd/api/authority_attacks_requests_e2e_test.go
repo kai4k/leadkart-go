@@ -78,7 +78,7 @@ func TestAttack_Requests_ApprovalIsTheCeilingOfTheApprover(t *testing.T) {
 	w := newAttackWorld(t)
 	p := permission.IdentityPermissions
 	notHeld := w.submitFor(t, "exec2", p.Inventory.Catalog.Manage) // the Team Lead does not hold it
-	mustHold := w.submitFor(t, "exec2", p.Roles.Manage)            // an Administrator must HOLD it to approve it
+	mustHold := w.submitFor(t, "exec2", p.Users.UpdatePermissions) // an Administrator must HOLD it to approve it
 	decide := func(verb, id string) (string, any) {
 		path := "/api/v1/permission-requests/" + id + "/" + verb
 		if verb == "deny" {

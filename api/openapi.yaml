@@ -1317,7 +1317,7 @@ paths:
       tags: [roles]
       summary: Create a custom role
       description: |
-        Requires `identity.roles.create` (LeadKart PLATFORM authority only: NO company member satisfies it, not `tenant.admin`, not the Company Owner, not any explicit grant; it is satisfied by `platform.roles.manage` for a platform operator acting on the company, and by an impersonation session; owner ruling 2026-11-25, ADR 0073 addendum).
+        Requires `identity.roles.create` (LeadKart PLATFORM authority only: NO company member satisfies it, not `tenant.admin`, not the Company Owner, not any explicit grant; it is satisfied by `platform.roles.manage` for a platform operator acting on the company, by an impersonation session, and by a LeadKart platform-tenant member who holds it (own tenant); owner ruling 2026-11-25, ADR 0073 addendum).
 
         Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides, or invisible or line-breaking characters (zero-width space, soft hyphen, word joiner and invisible operators, Hangul fillers, line and paragraph separators, annotation, object-replacement and tag characters, BOM; a zero-width joiner or non-joiner is accepted only INSIDE a word, between two letters or marks): 422 `role_invalid` with `errors{<field>: ["invalid_characters"]}` for `name`, and nothing is written.
       x-required-permissions: [identity.roles.create]
@@ -1386,7 +1386,7 @@ paths:
         active holder that is strictly junior to their (active) manager would no longer be, or a direct report that is
         strictly junior to a holder would no longer be. Lines that are already broken, and inactive managers or
         reports, do not block it.
-        Requires `identity.roles.update` (LeadKart PLATFORM authority only: NO company member satisfies it, not `tenant.admin`, not the Company Owner, not any explicit grant; it is satisfied by `platform.roles.manage` for a platform operator acting on the company, and by an impersonation session; owner ruling 2026-11-25, ADR 0073 addendum).
+        Requires `identity.roles.update` (LeadKart PLATFORM authority only: NO company member satisfies it, not `tenant.admin`, not the Company Owner, not any explicit grant; it is satisfied by `platform.roles.manage` for a platform operator acting on the company, by an impersonation session, and by a LeadKart platform-tenant member who holds it (own tenant); owner ruling 2026-11-25, ADR 0073 addendum).
 
         Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides, or invisible or line-breaking characters (zero-width space, soft hyphen, word joiner and invisible operators, Hangul fillers, line and paragraph separators, annotation, object-replacement and tag characters, BOM; a zero-width joiner or non-joiner is accepted only INSIDE a word, between two letters or marks): 422 `role_invalid` with `errors{<field>: ["invalid_characters"]}` for `name`, and nothing is written. A full-replace body that re-sends a stored value UNCHANGED is accepted (a value stored before the rule existed never blocks an untouched save); only a changed value is checked.
       x-required-permissions: [identity.roles.update]
@@ -1426,7 +1426,7 @@ paths:
       tags: [roles]
       summary: Make a role inactive
       description: |
-        Requires `identity.roles.manage` (LeadKart PLATFORM authority only: NO company member satisfies it, not `tenant.admin`, not the Company Owner, not any explicit grant; it is satisfied by `platform.roles.manage` for a platform operator acting on the company, and by an impersonation session; owner ruling 2026-11-25, ADR 0073 addendum). A role is never deleted (ADR 0073): it goes inactive.
+        Requires `identity.roles.manage` (LeadKart PLATFORM authority only: NO company member satisfies it, not `tenant.admin`, not the Company Owner, not any explicit grant; it is satisfied by `platform.roles.manage` for a platform operator acting on the company, by an impersonation session, and by a LeadKart platform-tenant member who holds it (own tenant); owner ruling 2026-11-25, ADR 0073 addendum). A role is never deleted (ADR 0073): it goes inactive.
         The decision is exactly what deleting a role used to ask. The caller must hold every permission the role carries (deactivating removes them from every holder) and must be allowed to act on every holder, active or not (answered before `role_in_use`). A role still held by ANY member, active or inactive, is refused with 409 `role_in_use` (a role is deleted only once nobody holds it, owner ruling 2026-11-25): the body carries `holders` (every holder), `holder_names` (display names of up to 5 of them) and `errors.active_holders` (how many are active). A system-default role is 409 `role_system_default`.
         An inactive role confers nothing (no permission, no rank), takes no new holder (`role_inactive` on assign), cannot be edited or be a parent, and is hidden from the default list. The assignments of its INACTIVE holders are kept (nothing is deleted); a holder reactivated while the role is inactive receives nothing from it. Idempotent: an inactive role answers 200. Answers the updated role.
       x-required-permissions: [identity.roles.manage]
@@ -1471,7 +1471,7 @@ paths:
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: "`role_name_taken` - an active role already has this name (rename or deactivate that one first)"
+          description: "`role_name_taken` - an active role already has this name (rename or deactivate that one first); `role_system_default` - the role is a system-default role, which is never deactivated or reactivated"
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -1501,7 +1501,7 @@ paths:
 
         Optional `reason` (10-1024 chars) is recorded onto the new
         edge OR the cleared edge for audit.
-        Requires `identity.roles.update` (LeadKart PLATFORM authority only: NO company member satisfies it, not `tenant.admin`, not the Company Owner, not any explicit grant; it is satisfied by `platform.roles.manage` for a platform operator acting on the company, and by an impersonation session; owner ruling 2026-11-25, ADR 0073 addendum).
+        Requires `identity.roles.update` (LeadKart PLATFORM authority only: NO company member satisfies it, not `tenant.admin`, not the Company Owner, not any explicit grant; it is satisfied by `platform.roles.manage` for a platform operator acting on the company, by an impersonation session, and by a LeadKart platform-tenant member who holds it (own tenant); owner ruling 2026-11-25, ADR 0073 addendum).
 
         Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides, or invisible or line-breaking characters (zero-width space, soft hyphen, word joiner and invisible operators, Hangul fillers, line and paragraph separators, annotation, object-replacement and tag characters, BOM; a zero-width joiner or non-joiner is accepted only INSIDE a word, between two letters or marks): 422 `role_hierarchy_invalid_reason` with `errors{<field>: ["invalid_characters"]}` for `reason`, and nothing is written.
       x-required-permissions: [identity.roles.update]
@@ -1548,7 +1548,7 @@ paths:
         Permission names MUST match the closed
         `permission.IdentityPermissions` catalogue; unknown names surface
         as 422 (`permission_unknown`).
-        Requires `identity.roles.update` (LeadKart PLATFORM authority only: NO company member satisfies it, not `tenant.admin`, not the Company Owner, not any explicit grant; it is satisfied by `platform.roles.manage` for a platform operator acting on the company, and by an impersonation session; owner ruling 2026-11-25, ADR 0073 addendum). Conferring a permission the caller does not hold is rejected with `grant_exceeds_authority`.
+        Requires `identity.roles.update` (LeadKart PLATFORM authority only: NO company member satisfies it, not `tenant.admin`, not the Company Owner, not any explicit grant; it is satisfied by `platform.roles.manage` for a platform operator acting on the company, by an impersonation session, and by a LeadKart platform-tenant member who holds it (own tenant); owner ruling 2026-11-25, ADR 0073 addendum). Conferring a permission the caller does not hold is rejected with `grant_exceeds_authority`.
         Changing what a role confers, re-levelling it or deleting it is acting on every ACTIVE member who holds it: the
         caller must strictly outrank each active holder (owners may act on owners) and must not hold the role
         themself (`insufficient_rank`, `self_modification_forbidden`); a rename acts on nobody. Every active holder's
@@ -1582,7 +1582,7 @@ paths:
       tags: [roles]
       summary: Grant a single permission to the role
       description: |
-        Requires `identity.roles.update` (LeadKart PLATFORM authority only: NO company member satisfies it, not `tenant.admin`, not the Company Owner, not any explicit grant; it is satisfied by `platform.roles.manage` for a platform operator acting on the company, and by an impersonation session; owner ruling 2026-11-25, ADR 0073 addendum). Conferring a permission the caller does not hold is rejected with `grant_exceeds_authority`.
+        Requires `identity.roles.update` (LeadKart PLATFORM authority only: NO company member satisfies it, not `tenant.admin`, not the Company Owner, not any explicit grant; it is satisfied by `platform.roles.manage` for a platform operator acting on the company, by an impersonation session, and by a LeadKart platform-tenant member who holds it (own tenant); owner ruling 2026-11-25, ADR 0073 addendum). Conferring a permission the caller does not hold is rejected with `grant_exceeds_authority`.
         Changing what a role confers, re-levelling it or deleting it is acting on every ACTIVE member who holds it: the
         caller must strictly outrank each active holder (owners may act on owners) and must not hold the role
         themself (`insufficient_rank`, `self_modification_forbidden`); a rename acts on nobody. Every active holder's
@@ -1616,7 +1616,7 @@ paths:
       tags: [roles]
       summary: Revoke a single permission from the role
       description: |
-        Requires `identity.roles.update` (LeadKart PLATFORM authority only: NO company member satisfies it, not `tenant.admin`, not the Company Owner, not any explicit grant; it is satisfied by `platform.roles.manage` for a platform operator acting on the company, and by an impersonation session; owner ruling 2026-11-25, ADR 0073 addendum).
+        Requires `identity.roles.update` (LeadKart PLATFORM authority only: NO company member satisfies it, not `tenant.admin`, not the Company Owner, not any explicit grant; it is satisfied by `platform.roles.manage` for a platform operator acting on the company, by an impersonation session, and by a LeadKart platform-tenant member who holds it (own tenant); owner ruling 2026-11-25, ADR 0073 addendum).
         Changing what a role confers, re-levelling it or deleting it is acting on every ACTIVE member who holds it: the
         caller must strictly outrank each active holder (owners may act on owners) and must not hold the role
         themself (`insufficient_rank`, `self_modification_forbidden`); a rename acts on nobody. Every active holder's
@@ -1963,7 +1963,7 @@ paths:
         `tenant.admin` implies it): without it the route is 403 `forbidden`. An impersonation session
         cannot submit (403 `impersonation_not_allowed`).
         At most one pending request per (membership, permission) tuple.
-        `tenant.admin`, platform-reserved permissions and names outside the catalogue are not
+        `tenant.admin`, platform-reserved permissions, the three platform-managed role names (`identity.roles.create`, `identity.roles.update`, `identity.roles.manage`) and names outside the catalogue are not
         requestable: they are conferred by role only, and the request is refused with 422
         (`permission_not_requestable`). `identity.users.create` is requested only at the Administrator tier or
         above (403 `admin_tier_required` below it; owner ruling 2026-11-21).

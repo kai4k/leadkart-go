@@ -417,7 +417,7 @@ func (h LoginHandler) Handle(ctx context.Context, cmd LoginCommand) (LoginResult
 		SecurityStamp: stamp,
 		IsPlatform:    tn.Slug().String() == tenant.PlatformSlug,
 		IsSuperUser:   authClaims.IsSuperUser,
-		Permissions:   permissionNames(authClaims.Permissions),
+		Permissions:   claimPermissionNames(authClaims.Permissions, tn.Slug().String()),
 		Rank:          rankClaim(authClaims.Rank),
 		// The flag rides in the token (plan D8): authn answers 403
 		// password_change_required on every non-allowlisted route until it clears.
@@ -530,6 +530,23 @@ func permissionNames(perms []*permission.Permission) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// claimPermissionNames is permissionNames for a token minted for a member of the tenant with slug: the
+// three role-management names are LeadKart platform authority (ADR 0073 addendum), so a company
+// member's claim (and /me.permissions) never lists them, whatever a role or an override carries. The
+// platform tenant's own members keep what they hold.
+func claimPermissionNames(perms []*permission.Permission, slug string) []string {
+	if slug == tenant.PlatformSlug {
+		return permissionNames(perms)
+	}
+	kept := make([]*permission.Permission, 0, len(perms))
+	for _, p := range perms {
+		if p != nil && !permission.IsPlatformManagedRole(p.Name()) {
+			kept = append(kept, p)
+		}
+	}
+	return permissionNames(kept)
 }
 
 // verifiedLogin is what a successful verify hands to the session step.

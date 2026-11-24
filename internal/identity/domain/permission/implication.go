@@ -86,5 +86,8 @@ func PlatformEquivalents(name string) []string {
 
 // IsRequestable reports whether name may be the subject of a permission-
 // elevation request (ADR 0069 H4): exactly the permissions tenant.admin implies.
-// tenant.admin itself and every platform-reserved name are conferred only by role.
-func IsRequestable(name string) bool { return ImpliedByTenantAdmin(name) }
+// tenant.admin itself, every platform-reserved name and the three platform-managed role names
+// (IsPlatformManagedRole) are conferred only by LeadKart or by role, never requested.
+func IsRequestable(name string) bool {
+	return ImpliedByTenantAdmin(name) && !IsPlatformManagedRole(name)
+}

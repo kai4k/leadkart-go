@@ -80,30 +80,37 @@ func TestE2E_Round6_AnAdministratorApprovesTheUserLifecycleWithoutHoldingIt(t *t
 	w.assertRows(t, rows)
 }
 
+// Role writes are LeadKart platform authority (ADR 0073 addendum): the platform operator edits a custom role
+// that people hold, a company owner who holds it is still refused by the gate (the owner self-holder
+// exemption of the policy is only reachable inside the platform tenant, see
+// TestE2E_PlatformTenantOwner_ManagesLeadKartRoles).
 func TestE2E_Round6_AnOwnerEditsACustomRoleTheyHold(t *testing.T) {
 	w := newAttackWorld(t)
 	p := permission.IdentityPermissions
 	custom := w.roles[customRoleName]
 	// The world's custom role holds identity.users.create as stale data (owner ruling 2026-11-21:
 	// a role below the Administrator tier may not contain it). It cannot be assigned, and an edit
-	// that would leave it in the role is refused, until the owner removes it; removing it is allowed.
-	if r := w.f.authedJSON(t, http.MethodPost, "/api/v1/roles/"+custom+"/permissions/grant", w.owner.AccessToken, ports.RolePermissionRequest{Permission: p.Crm.Leads.Read}); r.status != http.StatusForbidden || errCodeOf(r) != "admin_tier_required" {
+	// that would leave it in the role is refused, until it is removed; removing it is allowed.
+	if r := w.f.roleWrite(t, http.MethodPost, "/api/v1/roles/"+custom+"/permissions/grant", w.owner.AccessToken, ports.RolePermissionRequest{Permission: p.Crm.Leads.Read}); r.status != http.StatusForbidden || errCodeOf(r) != "admin_tier_required" {
 		t.Fatalf("grant on a role that still holds the stale permission: %d %s, want 403 admin_tier_required", r.status, r.body)
 	}
-	if r := w.f.authedJSON(t, http.MethodPost, "/api/v1/roles/"+custom+"/permissions/revoke", w.owner.AccessToken, ports.RolePermissionRequest{Permission: p.Users.Create}); r.status != http.StatusNoContent {
+	if r := w.f.roleWrite(t, http.MethodPost, "/api/v1/roles/"+custom+"/permissions/revoke", w.owner.AccessToken, ports.RolePermissionRequest{Permission: p.Users.Create}); r.status != http.StatusNoContent {
 		t.Fatalf("remove the stale permission from the role: %d %s, want 204", r.status, r.body)
 	}
 	w.f.assignRole(t, w.owner.AccessToken, w.mid(t, "owner2"), custom)
 	w.relogin(t, "owner2")
-	r := w.f.authedJSON(t, http.MethodPost, "/api/v1/roles/"+custom+"/permissions/grant", w.tok(t, "owner2"), ports.RolePermissionRequest{Permission: p.Crm.Leads.Read})
-	if r.status != http.StatusNoContent {
-		t.Fatalf("an owner grants on a custom role they hold: %d %s, want 204", r.status, r.body)
+	// The platform operator is not a holder: it edits a role the second owner holds.
+	if r := w.f.roleWrite(t, http.MethodPost, "/api/v1/roles/"+custom+"/permissions/grant", w.tok(t, "owner2"), ports.RolePermissionRequest{Permission: p.Crm.Leads.Read}); r.status != http.StatusNoContent {
+		t.Fatalf("the platform operator grants on a custom role an owner holds: %d %s, want 204", r.status, r.body)
 	}
-	// another administrator who holds a role may not (and since owner ruling 2026-11-25 no company member may: the gate refuses)
+	// The owner and an administrator who hold the role are the company caller: the gate refuses.
 	w.f.assignRole(t, w.owner.AccessToken, w.mid(t, "admin"), custom)
 	w.relogin(t, "admin")
-	r = w.f.doWithHeaders(t, http.MethodPost, "/api/v1/roles/"+custom+"/permissions/grant", w.tok(t, "admin"), ports.RolePermissionRequest{Permission: p.Crm.Leads.ReadAll}, asCompanyHdr)
-	if r.status != http.StatusForbidden {
-		t.Fatalf("an administrator grants on a role they hold: %d %s, want 403", r.status, r.body)
+	w.relogin(t, "owner2") // the operator's edit rotated every holder's stamp
+	for who, tok := range map[string]string{"owner": w.tok(t, "owner2"), "administrator": w.tok(t, "admin")} {
+		r := w.f.doWithHeaders(t, http.MethodPost, "/api/v1/roles/"+custom+"/permissions/grant", tok, ports.RolePermissionRequest{Permission: p.Crm.Leads.ReadAll}, nil)
+		if r.status != http.StatusForbidden || errCodeOf(r) != "forbidden" {
+			t.Fatalf("a company %s who holds the role grants on it: %d %s, want 403 forbidden (the route gate)", who, r.status, r.body)
+		}
 	}
 }

@@ -109,11 +109,11 @@ func TestE2E_HumanText_RoleNamesRefused_NothingWritten(t *testing.T) {
 	tn := f.registerAndLogin(t, "hrole")
 	rolesBefore := f.authedJSON(t, http.MethodGet, "/api/v1/roles", tn.AccessToken, nil)
 
-	r := f.authedJSON(t, http.MethodPost, "/api/v1/roles", tn.AccessToken,
+	r := f.roleWrite(t, http.MethodPost, "/api/v1/roles", tn.AccessToken,
 		ports.CreateRoleRequest{Name: "Sales" + rlo + "Lead", HierarchyLevel: 60})
 	requireInvalidCharacters(t, "create role name", r, "role_invalid", "name")
 
-	ok := f.authedJSON(t, http.MethodPost, "/api/v1/roles", tn.AccessToken, ports.CreateRoleRequest{Name: "Plain Role", HierarchyLevel: 60})
+	ok := f.roleWrite(t, http.MethodPost, "/api/v1/roles", tn.AccessToken, ports.CreateRoleRequest{Name: "Plain Role", HierarchyLevel: 60})
 	if ok.status != http.StatusCreated {
 		t.Fatalf("create a clean role: %d %s", ok.status, ok.body)
 	}
@@ -121,7 +121,7 @@ func TestE2E_HumanText_RoleNamesRefused_NothingWritten(t *testing.T) {
 	if err := json.Unmarshal(ok.body, &created); err != nil {
 		t.Fatal(err)
 	}
-	r = f.authedJSON(t, http.MethodPatch, "/api/v1/roles/"+created.RoleID, tn.AccessToken, ports.UpdateRoleRequest{Name: "Plain" + rlo + "Role"})
+	r = f.roleWrite(t, http.MethodPatch, "/api/v1/roles/"+created.RoleID, tn.AccessToken, ports.UpdateRoleRequest{Name: "Plain" + rlo + "Role"})
 	requireInvalidCharacters(t, "rename role", r, "role_invalid", "name")
 
 	rolesAfter := f.authedJSON(t, http.MethodGet, "/api/v1/roles", tn.AccessToken, nil)

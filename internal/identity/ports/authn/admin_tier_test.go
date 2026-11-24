@@ -134,6 +134,12 @@ func TestSatisfies_RoleManagementIsPlatformAuthority(t *testing.T) {
 		{"a company super-admin role", &jwt.Claims{TenantID: tenantA, TenantSlug: "acme", Rank: &owner, IsSuperUser: true, Permissions: []string{p.Meta.TenantAdmin}}, false},
 		{"impersonation session", &jwt.Claims{TenantID: tenantA, Rank: &admin, Permissions: []string{p.Meta.TenantAdmin}, Act: &jwt.ActClaim{Sub: "op", SessionID: "s", Reason: "support"}}, true},
 		{"platform super user", &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, Rank: &owner, IsSuperUser: true}, true},
+		// S1 (G2l): LeadKart staff manage roles everywhere, LeadKart's own platform tenant included
+		// (what the platform tenant's owner and admins could do before the ruling).
+		{"platform-tenant owner (tenant.admin)", &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true, Rank: &owner, Permissions: []string{p.Meta.TenantAdmin}}, true},
+		{"platform-tenant administrator (explicit grants)", &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true, Rank: &admin, Permissions: managed}, true},
+		{"platform-tenant member without any grant", &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true, Rank: &admin, Permissions: []string{p.Roles.View}}, false},
+		{"is_platform claim on a company slug", &jwt.Claims{TenantID: tenantA, TenantSlug: "acme", IsPlatform: true, Rank: &owner, Permissions: []string{p.Meta.TenantAdmin}}, false},
 	}
 	for _, tc := range cases {
 		ctx := tenancy.WithID(authn.WithClaims(t.Context(), tc.claims), tenancy.ID(tenantA))
@@ -171,5 +177,28 @@ func TestSatisfies_RoleManagementIsPlatformAuthority(t *testing.T) {
 	}
 	if !slices.Contains(eff, p.Roles.Assign) {
 		t.Error("owner effective_permissions lost identity.roles.assign")
+	}
+}
+
+// The domain actor carries the same decision as a fact (S3): AuthorityFrom computes it with the one rule.
+func TestAuthorityFrom_MayManageRolesFollowsPlatformAuthority(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	owner := 0
+	for _, tc := range []struct {
+		name   string
+		claims *jwt.Claims
+		want   bool
+	}{
+		{"company owner", &jwt.Claims{TenantID: tenantA, MembershipID: selfMem, Rank: &owner, Permissions: []string{p.Meta.TenantAdmin}}, false},
+		{"company super-admin role", &jwt.Claims{TenantID: tenantA, MembershipID: selfMem, TenantSlug: "acme", Rank: &owner, IsSuperUser: true}, false},
+		{"impersonation session", &jwt.Claims{TenantID: tenantA, MembershipID: selfMem, Permissions: []string{p.Meta.TenantAdmin}, Act: &jwt.ActClaim{Sub: "op", SessionID: "s", Reason: "support"}}, true},
+		{"platform-tenant owner", &jwt.Claims{TenantID: tenantA, MembershipID: selfMem, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true, Rank: &owner, Permissions: []string{p.Meta.TenantAdmin}}, true},
+		{"operator with platform.roles.manage", &jwt.Claims{TenantID: tenantA, MembershipID: selfMem, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true, Permissions: []string{p.Platform.RolesManage}}, true},
+		{"platform super user", &jwt.Claims{TenantID: tenantA, MembershipID: selfMem, TenantSlug: authn.PlatformTenantSlug, Rank: &owner, IsSuperUser: true}, true},
+	} {
+		if got := authn.AuthorityFrom(authn.WithClaims(t.Context(), tc.claims)).MayManageRoles(); got != tc.want {
+			t.Errorf("%s: MayManageRoles = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

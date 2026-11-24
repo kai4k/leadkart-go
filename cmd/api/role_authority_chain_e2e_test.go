@@ -64,12 +64,12 @@ func (w chainWorld) getRole(t *testing.T, id string) ports.RoleDto {
 func (w chainWorld) walk(t *testing.T) (httpResp, string) {
 	t.Helper()
 	eTok := w.f.loginToken(t, w.exec.email, w.exec.password)
-	sub, reqID := w.f.requestElevation(t, eTok, permission.IdentityPermissions.Roles.Update)
+	sub, reqID := w.f.requestElevation(t, eTok, permission.IdentityPermissions.Users.UpdatePermissions)
 	if sub.status != http.StatusCreated {
-		t.Fatalf("step 2: E requests identity.roles.update: %d %s", sub.status, sub.body)
+		t.Fatalf("step 2: E requests identity.users.update_permissions: %d %s", sub.status, sub.body)
 	}
 	ap := w.f.approveRequest(t, w.tTok, reqID)
-	t.Logf("step 3: Team Lead approves identity.roles.update for their report: %d %s", ap.status, ap.body)
+	t.Logf("step 3: Team Lead approves identity.users.update_permissions for their report: %d %s", ap.status, ap.body)
 	// The approval rotated E's stamp (their old token is stale by design); log in again.
 	w.f.evictStamp(t, w.exec.personID)
 	return ap, w.f.loginToken(t, w.exec.email, w.exec.password)
@@ -91,13 +91,13 @@ func TestE2E_RoleAuthorityChain_ClosedAtBothEnds(t *testing.T) {
 		}
 		// The chain continues only on a vulnerable build; report what it does.
 		before := w.getRole(t, w.ownerRole)
-		r := w.f.authedJSON(t, http.MethodPost, "/api/v1/roles/"+w.ownerRole+"/permissions/revoke", eTok,
+		r := w.f.roleWrite(t, http.MethodPost, "/api/v1/roles/"+w.ownerRole+"/permissions/revoke", eTok,
 			ports.RolePermissionRequest{Permission: permission.IdentityPermissions.Meta.TenantAdmin})
 		after := w.getRole(t, w.ownerRole)
 		t.Errorf("step 4 (revoke tenant.admin from Company Owner): %d %s; Company Owner permissions %d -> %d, tenant.admin kept: %v",
 			r.status, r.body, len(before.Permissions), len(after.Permissions),
 			slices.Contains(after.Permissions, permission.IdentityPermissions.Meta.TenantAdmin))
-		r = w.f.authedJSON(t, http.MethodPut, "/api/v1/roles/"+w.ownerRole+"/permissions", eTok, map[string]any{})
+		r = w.f.roleWrite(t, http.MethodPut, "/api/v1/roles/"+w.ownerRole+"/permissions", eTok, map[string]any{})
 		after = w.getRole(t, w.ownerRole)
 		t.Errorf("variant PUT {}: %d %s; Company Owner permissions now %d", r.status, r.body, len(after.Permissions))
 	})

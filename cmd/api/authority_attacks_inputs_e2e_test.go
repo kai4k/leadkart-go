@@ -82,7 +82,7 @@ func TestAttack_Inputs_IdSpellingsNeverBypassARefusal(t *testing.T) {
 	seniorRole := w.roles[role.SystemRoles.Tenant.SeniorManager]
 	senior := w.mid(t, "senior")
 	// an inactive role to name: deactivate the holder-less Shell role as the owner
-	if r := w.f.authedJSON(t, http.MethodPost, "/api/v1/roles/"+w.roles[shellRoleName]+"/deactivate", w.owner.AccessToken, nil); r.status != http.StatusOK {
+	if r := w.f.roleWrite(t, http.MethodPost, "/api/v1/roles/"+w.roles[shellRoleName]+"/deactivate", w.owner.AccessToken, nil); r.status != http.StatusOK {
 		t.Fatalf("deactivate the shell role: %d %s", r.status, r.body)
 	}
 	inactiveRole := w.roles[shellRoleName]
@@ -134,7 +134,7 @@ func TestAttack_Inputs_IdSpellingsNeverBypassARefusal(t *testing.T) {
 	// edit and no new holder: 409 role_inactive on every edit route and on assign, and deactivating
 	// it again is the idempotent 200. Nothing moves.
 	for _, rt := range roleIDRoutes() {
-		r := w.f.doWithHeaders(t, rt.method, fmt.Sprintf(rt.tmpl, inactiveRole), w.owner.AccessToken, rt.body, nil)
+		r := w.f.roleWrite(t, rt.method, fmt.Sprintf(rt.tmpl, inactiveRole), w.owner.AccessToken, rt.body)
 		if rt.what == "deactivate" {
 			if r.status != http.StatusOK {
 				t.Errorf("[%s / an inactive role] %d %s, want the idempotent 200", rt.what, r.status, r.body)
@@ -242,31 +242,40 @@ func TestAttack_Inputs_BodyGamesAreRefusedAndMoveNothing(t *testing.T) {
 		}
 	}
 	before := w.snapshot(t)
+	// A role write is LeadKart platform authority: the company persona is stopped by the gate, and the
+	// SAME hand-written bodies are then sent as an impersonation session (a platform actor, Admin-equivalent),
+	// which reaches the role handlers: the invalid_body and level games are decided there.
+	session := w.impersonationToken(t)
 	for _, a := range rows {
-		r := w.f.doWithHeaders(t, a.method, a.path, w.tok(t, a.who), a.body, asCompanyHdr)
-		// Several games are legitimate requests in disguise (a duplicate key whose LAST value is fine, a
-		// level at the actor's own, ...): those are refused for another reason or not at all. What must
-		// never happen is a 5xx, or a state change not explained by one of the two known-legal rows.
-		if r.status >= 500 {
-			t.Errorf("[%s] %s %s: %d %s, want a 4xx", a.what, a.method, a.path, r.status, r.body)
+		// check applies what every hand-written body must satisfy, whoever sent it. Several games are
+		// legitimate requests in disguise (a duplicate key whose LAST value is fine, a level at the
+		// actor's own, ...): those are refused for another reason or not at all. What must never happen
+		// is a 5xx, or a state change not explained by one of the two known-legal rows.
+		check := func(r httpResp, as string) {
+			t.Helper()
+			if r.status >= 500 {
+				t.Errorf("[%s] as %s: %s %s: %d %s, want a 4xx", a.what, as, a.method, a.path, r.status, r.body)
+			}
+			// PATCH /roles/{id} is a partial update, but a body that names nothing the route recognises
+			// (an empty object, null, a body followed by garbage) is refused 400 invalid_body (hierarchy
+			// round 6), not accepted as a silent no-op.
+			noFieldBody := strings.HasPrefix(a.what, "edit role: ") && (strings.HasSuffix(a.what, "object missing every key") || strings.HasSuffix(a.what, ": null") || strings.HasSuffix(a.what, "trailing garbage"))
+			if noFieldBody && (r.status != http.StatusBadRequest || errCodeOf(r) != "invalid_body") {
+				t.Errorf("[%s] as %s: %s %s: %d %s, want 400 invalid_body", a.what, as, a.method, a.path, r.status, r.body)
+			}
+			if r.status >= 200 && r.status < 300 {
+				t.Errorf("[%s] as %s: %s %s: %d %s, a hand-written body was accepted", a.what, as, a.method, a.path, r.status, r.body)
+			}
 		}
-		// PATCH /roles/{id} is a partial update, but a body that names nothing the route recognises
-		// (an empty object, null, a body followed by garbage) is refused 400 invalid_body (hierarchy
-		// round 6), not accepted as a silent no-op.
-		noFieldBody := strings.HasPrefix(a.what, "edit role: ") && (strings.HasSuffix(a.what, "object missing every key") || strings.HasSuffix(a.what, ": null") || strings.HasSuffix(a.what, "trailing garbage"))
 		if isPlatformRoleWrite(a.method, a.path) {
-			// The gate answers first: a company persona never reaches the role-write handlers.
+			r := w.f.doWithHeaders(t, a.method, a.path, w.tok(t, a.who), a.body, nil)
 			if r.status != http.StatusForbidden || errCodeOf(r) != "forbidden" {
 				t.Errorf("[%s] %s %s: %d %s, want 403 forbidden (role writes are platform authority)", a.what, a.method, a.path, r.status, r.body)
 			}
+			check(w.f.doWithHeaders(t, a.method, a.path, session, a.body, nil), "an impersonation session")
 			continue
 		}
-		if noFieldBody && (r.status != http.StatusBadRequest || errCodeOf(r) != "invalid_body") {
-			t.Errorf("[%s] %s %s: %d %s, want 400 invalid_body", a.what, a.method, a.path, r.status, r.body)
-		}
-		if r.status >= 200 && r.status < 300 {
-			t.Errorf("[%s] %s %s: %d %s, a hand-written body was accepted", a.what, a.method, a.path, r.status, r.body)
-		}
+		check(w.f.doWithHeaders(t, a.method, a.path, w.tok(t, a.who), a.body, nil), a.who)
 	}
 	if after := w.snapshot(t); after != before {
 		t.Errorf("the body games changed the world: %s", snapshotDiff(before, after))
@@ -288,7 +297,7 @@ func TestAttack_Inputs_ExtraFieldsConferNothing(t *testing.T) {
 	vBefore := w.snapshotOf(t, w.victim)
 
 	// create role with smuggled flags and a foreign tenant
-	r := f.authedJSON(t, http.MethodPost, "/api/v1/roles", adm, rawBody(fmt.Sprintf(
+	r := f.roleWrite(t, http.MethodPost, "/api/v1/roles", adm, rawBody(fmt.Sprintf(
 		`{"name":"Smuggler","hierarchy_level":60,"is_super_admin":true,"is_system_default":true,"tenant_id":%q,"permissions":["tenant.admin"],"hierarchy_level_override":0}`, w.victim.TenantID)))
 	if r.status != http.StatusCreated {
 		t.Fatalf("create role with extra fields: %d %s, want 201 (the extra fields are ignored)", r.status, r.body)

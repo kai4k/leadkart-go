@@ -1,7 +1,6 @@
 package authn_test
 
 import (
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,23 +14,6 @@ import (
 )
 
 func rankPtr(n int) *int { return &n }
-
-// holds proves what the actor's effective set contains through the public
-// policy: creating a level-50 role carrying exactly perm is allowed only when
-// the actor holds perm (the grant ceiling).
-func holds(t *testing.T, a authority.Actor, perm string) bool {
-	t.Helper()
-	err := a.MayCreateRole(a.TenantID(), authority.RankUser.Int(), []string{perm}, nil)
-	switch {
-	case err == nil:
-		return true
-	case errors.Is(err, authority.ErrGrantExceedsAuthority):
-		return false
-	default:
-		t.Fatalf("MayCreateRole(%s) = %v", perm, err)
-		return false
-	}
-}
 
 func TestAuthorityFrom_NoClaims_ZeroActor(t *testing.T) {
 	t.Parallel()
@@ -60,8 +42,11 @@ func TestAuthorityFrom_TenantMember_MapsClaims(t *testing.T) {
 	if a.IsSuperUser() || a.IsPlatformOperator() || a.IsImpersonation() {
 		t.Fatal("plain member must carry no elevated flag")
 	}
-	if !holds(t, a, p.Roles.View) || holds(t, a, p.Users.View) {
-		t.Fatal("effective permissions must be exactly the claims (the gates' source)")
+	if got := authn.EffectivePermissions(c); len(got) != 1 || got[0] != p.Roles.View {
+		t.Fatalf("effective permissions = %v, want exactly the claims (the gates' source)", got)
+	}
+	if a.MayManageRoles() {
+		t.Fatal("a company member never carries platform authority over roles")
 	}
 }
 

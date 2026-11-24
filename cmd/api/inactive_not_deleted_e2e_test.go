@@ -152,13 +152,13 @@ func TestE2E_Role_InactiveNotDeleted(t *testing.T) {
 	member := f.createMember(t, owner, "assignee")
 	base := "/api/v1/roles"
 
-	if r := f.authedJSON(t, http.MethodDelete, base+"/"+off, tok, nil); r.status != http.StatusMethodNotAllowed && r.status != http.StatusNotFound {
+	if r := f.roleWrite(t, http.MethodDelete, base+"/"+off, tok, nil); r.status != http.StatusMethodNotAllowed && r.status != http.StatusNotFound {
 		t.Fatalf("DELETE role: status %d, want the route gone (404/405)", r.status)
 	}
 
 	// Deactivate answers the updated role; repeating answers the same (a no-op).
 	for range 2 {
-		r := f.authedJSON(t, http.MethodPost, base+"/"+off+"/deactivate", tok, nil)
+		r := f.roleWrite(t, http.MethodPost, base+"/"+off+"/deactivate", tok, nil)
 		if r.status != http.StatusOK {
 			t.Fatalf("deactivate: status %d body %s", r.status, r.body)
 		}
@@ -192,7 +192,7 @@ func TestE2E_Role_InactiveNotDeleted(t *testing.T) {
 		t.Fatalf("assign an inactive role: %d %s, want 409 role_inactive", r.status, r.body)
 	}
 	for range 2 {
-		r := f.authedJSON(t, http.MethodPost, base+"/"+off+"/reactivate", tok, nil)
+		r := f.roleWrite(t, http.MethodPost, base+"/"+off+"/reactivate", tok, nil)
 		if r.status != http.StatusOK {
 			t.Fatalf("reactivate: status %d body %s", r.status, r.body)
 		}
@@ -205,11 +205,11 @@ func TestE2E_Role_InactiveNotDeleted(t *testing.T) {
 
 	// A system role cannot be made inactive; an unknown role is 404.
 	system := f.roleIDByName(t, tok, "Company Owner")
-	if r := f.authedJSON(t, http.MethodPost, base+"/"+system+"/deactivate", tok, nil); r.status != http.StatusConflict {
+	if r := f.roleWrite(t, http.MethodPost, base+"/"+system+"/deactivate", tok, nil); r.status != http.StatusConflict {
 		t.Fatalf("deactivate a system role: %d %s, want 409", r.status, r.body)
 	}
 	for _, verb := range []string{"deactivate", "reactivate"} {
-		if r := f.authedJSON(t, http.MethodPost, base+"/019f0000-0000-7000-8000-000000000000/"+verb, tok, nil); r.status != http.StatusNotFound {
+		if r := f.roleWrite(t, http.MethodPost, base+"/019f0000-0000-7000-8000-000000000000/"+verb, tok, nil); r.status != http.StatusNotFound {
 			t.Fatalf("%s unknown role: %d, want 404", verb, r.status)
 		}
 	}
