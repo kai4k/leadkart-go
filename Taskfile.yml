@@ -205,6 +205,12 @@ tasks:
     cmds:
       - go vet ./...
 
+  sqlc:check:
+    desc: Regenerate the sqlc code with the generator pinned in go.mod (go tool sqlc) and fail on any diff, so generated code is never hand-edited or stale
+    cmds:
+      - go tool sqlc generate
+      - git diff --exit-code -- 'internal/*/adapters/db/*.go'
+
   vuln:
     desc: Scan for known vulnerabilities (govulncheck pinned via go.mod tool directive)
     cmds:

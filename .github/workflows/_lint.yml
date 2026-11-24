@@ -31,6 +31,9 @@ jobs:
       - name: Vet (task vet)
         run: task vet
 
+      - name: Generated sqlc code is current (task sqlc:check — regenerate, fail on any diff)
+        run: task sqlc:check
+
       - name: Lint (golangci-lint v2 strict)
         uses: golangci/golangci-lint-action@v9
         with:
