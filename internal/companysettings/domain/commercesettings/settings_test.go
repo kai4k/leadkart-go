@@ -352,3 +352,43 @@ func TestAddGSTRate_ListIsCapped(t *testing.T) {
 		t.Fatalf("the %dst rate: %v", commercesettings.MaxGSTRates+1, err)
 	}
 }
+
+// Owner ruling 2026-11-25 (ADR 0073 addendum): a deleted (inactive) schedule class frees its label.
+func TestScheduleClassLabels_AreUniqueAmongActiveClassesOnly(t *testing.T) {
+	t.Parallel()
+	s := fresh(t)
+	old := uuid.NewString()
+	if err := s.AddScheduleClass(commercesettings.AddScheduleClassInput{ID: old, Label: "Controlled", Reason: "r", Actor: actor, Now: t0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddScheduleClass(commercesettings.AddScheduleClassInput{ID: uuid.NewString(), Label: "controlled", Reason: "r", Actor: actor, Now: t0}); err == nil {
+		t.Fatal("an active duplicate label must be refused")
+	}
+	if err := s.DeactivateScheduleClass(commercesettings.SetScheduleClassActiveInput{ID: old, Reason: "r", Actor: actor, Now: t0}); err != nil {
+		t.Fatal(err)
+	}
+	fresh2 := uuid.NewString()
+	if err := s.AddScheduleClass(commercesettings.AddScheduleClassInput{ID: fresh2, Label: "Controlled", Reason: "r", Actor: actor, Now: t0}); err != nil {
+		t.Fatalf("a deleted class frees its label: %v", err)
+	}
+	if err := s.ReactivateScheduleClass(commercesettings.SetScheduleClassActiveInput{ID: old, Reason: "r", Actor: actor, Now: t0}); !errors.Is(err, commercesettings.ErrScheduleClassNameTaken) {
+		t.Fatalf("reactivate over a taken label: %v, want ErrScheduleClassNameTaken", err)
+	}
+	// A rename onto a deleted class's label is fine; onto an active one is not.
+	third := uuid.NewString()
+	if err := s.AddScheduleClass(commercesettings.AddScheduleClassInput{ID: third, Label: "Other", Reason: "r", Actor: actor, Now: t0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RenameScheduleClass(commercesettings.RenameScheduleClassInput{ID: third, Label: "Controlled", Reason: "r", Actor: actor, Now: t0}); err == nil {
+		t.Fatal("renaming onto an active label must be refused")
+	}
+	if err := s.DeactivateScheduleClass(commercesettings.SetScheduleClassActiveInput{ID: fresh2, Reason: "r", Actor: actor, Now: t0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RenameScheduleClass(commercesettings.RenameScheduleClassInput{ID: third, Label: "Controlled", Reason: "r", Actor: actor, Now: t0}); err != nil {
+		t.Fatalf("renaming onto a deleted class's label: %v", err)
+	}
+	if err := s.ReactivateScheduleClass(commercesettings.SetScheduleClassActiveInput{ID: old, Reason: "r", Actor: actor, Now: t0}); !errors.Is(err, commercesettings.ErrScheduleClassNameTaken) {
+		t.Fatalf("still taken: %v", err)
+	}
+}

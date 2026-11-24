@@ -419,6 +419,8 @@ func writeCommandError(w http.ResponseWriter, r *http.Request, log *slog.Logger,
 		writeError(w, http.StatusForbidden, ErrCodeForbidden, "missing permission company_settings.manage for: "+strings.Join(needManage.Keys, ", "))
 	case errors.Is(err, commercesettings.ErrGSTRateNotFound):
 		writeError(w, http.StatusNotFound, ErrCodeNotFound, "gst rate not found")
+	case errors.Is(err, commercesettings.ErrScheduleClassNameTaken):
+		writeError(w, http.StatusConflict, ErrCodeScheduleClassNameTaken, "an active drug schedule class already has this name; rename one of them first")
 	case errors.Is(err, commercesettings.ErrScheduleClassNotFound):
 		writeError(w, http.StatusNotFound, ErrCodeNotFound, "drug schedule class not found")
 	case commercepolicy.Fields(err) != nil:

@@ -66,12 +66,16 @@ func TestValidate_ClassListRules(t *testing.T) {
 		p.DrugSchedule.Classes = classes
 		return p
 	}
-	a := commercepolicy.ScheduleClass{ID: uuid.NewString(), Label: "Class A"}
+	a := commercepolicy.ScheduleClass{ID: uuid.NewString(), Label: "Class A", Active: true}
 	if errs := commercepolicy.Validate(mk()); len(errs) != 0 {
 		t.Errorf("a company may remove every class: %v", errs)
 	}
-	if errs := commercepolicy.Validate(mk(a, commercepolicy.ScheduleClass{ID: uuid.NewString(), Label: " class a "})); !slices.Contains(errs["drug_schedule.classes"], commercepolicy.CodeDuplicate) {
+	if errs := commercepolicy.Validate(mk(a, commercepolicy.ScheduleClass{ID: uuid.NewString(), Label: " class a ", Active: true})); !slices.Contains(errs["drug_schedule.classes"], commercepolicy.CodeDuplicate) {
 		t.Errorf("a repeated label (any case): %v", errs)
+	}
+	// A deleted (inactive) class frees its label (ADR 0073 addendum).
+	if errs := commercepolicy.Validate(mk(a, commercepolicy.ScheduleClass{ID: uuid.NewString(), Label: "class a"})); slices.Contains(errs["drug_schedule.classes"], commercepolicy.CodeDuplicate) {
+		t.Errorf("an inactive class must not collide with an active label: %v", errs)
 	}
 	if errs := commercepolicy.Validate(mk(commercepolicy.ScheduleClass{ID: "not-a-uuid", Label: "B"})); len(errs["drug_schedule.classes"]) == 0 {
 		t.Error("a class id must be a uuid")

@@ -171,6 +171,7 @@ const (
 	ErrCodeUnauthenticated         = "unauthenticated"
 	ErrCodeForbidden               = "forbidden"
 	ErrCodeSettingsVersionConflict = "settings_version_conflict"
+	ErrCodeScheduleClassNameTaken  = "schedule_class_name_taken"
 	ErrCodeInvalidStatusFilter     = "invalid_status_filter"
 	ErrCodeInternalError           = "internal_error"
 )

@@ -103,7 +103,7 @@ func (d DrugSchedule) ScheduleClassByID(id string) (ScheduleClass, bool) {
 }
 
 // validateScheduleClasses checks the list as stored: each entry valid, no
-// duplicate id or label, within the cap.
+// duplicate id or active label, within the cap.
 func validateScheduleClasses(classes []ScheduleClass) []string {
 	var codes []string
 	if len(classes) > MaxScheduleClasses {
@@ -117,7 +117,8 @@ func validateScheduleClasses(classes []ScheduleClass) []string {
 			codes = append(codes, CodeInvalidFormat)
 		}
 		for _, o := range classes[i+1:] {
-			if o.ID == c.ID || SameScheduleLabel(o.Label, c.Label) {
+			// A label is unique among ACTIVE classes only: a deleted (inactive) class frees it.
+			if o.ID == c.ID || (o.Active && c.Active && SameScheduleLabel(o.Label, c.Label)) {
 				codes = append(codes, CodeDuplicate)
 			}
 		}

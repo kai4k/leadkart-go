@@ -19,6 +19,11 @@ const KeyScheduleClasses = commercepolicy.ScheduleClassesKey
 // list. Map to 404.
 var ErrScheduleClassNotFound = errors.New("commercesettings: drug schedule class not found")
 
+// ErrScheduleClassNameTaken means reactivating a class whose label an ACTIVE class now holds: a label
+// is unique among active classes only (ADR 0073 addendum), so the old class cannot come back under
+// it. Map to 409.
+var ErrScheduleClassNameTaken = errors.New("commercesettings: an active drug schedule class already has this label")
+
 // CodeScheduleInUse is the refusal of turning drug_schedule.mode off while a
 // product still carries a schedule class.
 const CodeScheduleInUse = "schedule_in_use"
@@ -32,8 +37,8 @@ type AddScheduleClassInput struct {
 	Now    time.Time
 }
 
-// AddScheduleClass adds a class. The same label (any case) is refused as a
-// duplicate.
+// AddScheduleClass adds a class. The same label (any case) as an ACTIVE class is refused as a
+// duplicate; an inactive (deleted) class frees its label.
 func (s *Settings) AddScheduleClass(in AddScheduleClassInput) error {
 	if _, err := uuid.Parse(in.ID); err != nil {
 		return fmt.Errorf("%w: drug schedule class id not a valid uuid", ErrInvalid)
@@ -43,7 +48,7 @@ func (s *Settings) AddScheduleClass(in AddScheduleClassInput) error {
 	mergeReasonErr(errs, rerr)
 	label := commercepolicy.NormalizeScheduleLabel(in.Label)
 	if slices.ContainsFunc(s.policy.DrugSchedule.Classes, func(c commercepolicy.ScheduleClass) bool {
-		return commercepolicy.SameScheduleLabel(c.Label, label)
+		return c.Active && commercepolicy.SameScheduleLabel(c.Label, label)
 	}) {
 		errs["label"] = append(errs["label"], commercepolicy.CodeDuplicate)
 	}
@@ -84,7 +89,7 @@ func (s *Settings) RenameScheduleClass(in RenameScheduleClassInput) error {
 	reason, rerr := checkReason(in.Reason, true)
 	mergeReasonErr(errs, rerr)
 	for i, o := range s.policy.DrugSchedule.Classes {
-		if i != idx && commercepolicy.SameScheduleLabel(o.Label, label) {
+		if i != idx && s.policy.DrugSchedule.Classes[idx].Active && o.Active && commercepolicy.SameScheduleLabel(o.Label, label) {
 			errs["label"] = append(errs["label"], commercepolicy.CodeDuplicate)
 		}
 	}
@@ -130,6 +135,13 @@ func (s *Settings) setScheduleClassActive(in SetScheduleClassActiveInput) error 
 	}
 	if s.policy.DrugSchedule.Classes[idx].Active == in.Active {
 		return nil
+	}
+	if in.Active {
+		for i, o := range s.policy.DrugSchedule.Classes {
+			if i != idx && o.Active && commercepolicy.SameScheduleLabel(o.Label, s.policy.DrugSchedule.Classes[idx].Label) {
+				return ErrScheduleClassNameTaken
+			}
+		}
 	}
 	reason, err := checkReason(in.Reason, true)
 	if err != nil {
