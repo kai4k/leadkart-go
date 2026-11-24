@@ -201,7 +201,7 @@ func TestReLevel_TheHoldersOtherLiveRoleDecidesTheirRank(t *testing.T) {
 	mgrR := mkRole(3, tA, role.SystemRoles.Tenant.SalesManager, false, 20, false)
 	execRole := mkRole(31, tA, "Exec2", false, 50, false)
 	other := mkRole(32, tA, "Other", false, 25, false)
-	deleted := role.UnmarshalFromDB(role.Snapshot{ID: role.ID(uid(33)), TenantID: tA, Name: "Gone", HierarchyLevel: 5, IsDeleted: true, CreatedAt: t0})
+	deleted := role.UnmarshalFromDB(role.Snapshot{ID: role.ID(uid(33)), TenantID: tA, Name: "Gone", HierarchyLevel: 5, CreatedAt: t0})
 	mgr := mkMember(t, 40, tA, true, "", mgrR)
 	withOther := mkMember(t, 44, tA, true, mgr.ID(), execRole, other)     // rank 25 under a rank-20 manager
 	withDeleted := mkMember(t, 45, tA, true, mgr.ID(), execRole, deleted) // rank 50: the deleted role does not count

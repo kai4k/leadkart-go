@@ -63,7 +63,7 @@ func TestRoleDecisions_GarbageRoleTenantNeverExempts(t *testing.T) {
 			cases = append(cases,
 				decision{name + " edits a role of tenant " + string(bad), a.MayEditRole(r, authority.NoLevelChange, authority.RoleHolders{}), authority.ErrNoAuthority},
 				decision{name + " replaces permissions of a role of tenant " + string(bad), a.MayReplaceRolePermissions(r, nil, authority.RoleHolders{}), authority.ErrNoAuthority},
-				decision{name + " deletes a role of tenant " + string(bad), a.MayDeleteRole(r, authority.RoleHolders{}), authority.ErrNoAuthority},
+				decision{name + " deletes a role of tenant " + string(bad), a.MayChangeRoleStatus(r, authority.RoleHolders{}), authority.ErrNoAuthority},
 			)
 		}
 	}
@@ -185,7 +185,7 @@ func TestSystemDefaultRolesAreImmutableForEveryActor(t *testing.T) {
 			decision{name + " replaces permissions", a.MayReplaceRolePermissions(ownerR, nil, authority.RoleHolders{}), role.ErrSystemDefault},
 			decision{name + " grants", a.MayGrantRolePermission(ownerR, p.Crm.Leads.Read, authority.RoleHolders{}), role.ErrSystemDefault},
 			decision{name + " revokes tenant.admin", a.MayRevokeRolePermission(ownerR, ta, authority.RoleHolders{}), role.ErrSystemDefault},
-			decision{name + " deletes", a.MayDeleteRole(ownerR, authority.RoleHolders{}), role.ErrSystemDefault},
+			decision{name + " deletes", a.MayChangeRoleStatus(ownerR, authority.RoleHolders{}), role.ErrSystemDefault},
 			decision{name + " sets the parent of a system role", a.MaySetRoleParent(sysChild, mgrR), role.ErrSystemDefault},
 		)
 	}
@@ -299,17 +299,17 @@ func TestDeletedRoles(t *testing.T) {
 	adminR := mkRole(2, tA, role.SystemRoles.Tenant.Administrator, false, 10, false, p.Meta.TenantAdmin)
 	userR := mkRole(5, tA, role.SystemRoles.Tenant.SalesExecutive, false, 50, false)
 	mgrR := mkRole(3, tA, role.SystemRoles.Tenant.SalesManager, false, 20, false)
-	goneLow := role.UnmarshalFromDB(role.Snapshot{ID: role.ID(uid(40)), TenantID: tA, Name: "Gone", HierarchyLevel: 60, IsDeleted: true, CreatedAt: t0,
+	goneLow := role.UnmarshalFromDB(role.Snapshot{ID: role.ID(uid(40)), TenantID: tA, Name: "Gone", HierarchyLevel: 60, CreatedAt: t0,
 		Permissions: []*permission.Permission{permission.FromConstant(p.Meta.TenantAdmin)}})
-	goneHigh := role.UnmarshalFromDB(role.Snapshot{ID: role.ID(uid(41)), TenantID: tA, Name: "Gone Senior", HierarchyLevel: 5, IsDeleted: true, CreatedAt: t0})
-	goneParent := role.UnmarshalFromDB(role.Snapshot{ID: role.ID(uid(42)), TenantID: tA, Name: "Gone Parent", HierarchyLevel: 5, IsDeleted: true, CreatedAt: t0})
+	goneHigh := role.UnmarshalFromDB(role.Snapshot{ID: role.ID(uid(41)), TenantID: tA, Name: "Gone Senior", HierarchyLevel: 5, CreatedAt: t0})
+	goneParent := role.UnmarshalFromDB(role.Snapshot{ID: role.ID(uid(42)), TenantID: tA, Name: "Gone Parent", HierarchyLevel: 5, CreatedAt: t0})
 
 	admin := mkMember(t, 13, tA, true, "", adminR)
 	holder := mkMember(t, 18, tA, true, "", userR, goneLow, goneHigh)
 	aAdmin := actorOf(t, admin, authority.RankAdmin, adminEffective()...)
 
 	cases := []decision{
-		{"assigning a deleted role", aAdmin.MayAssignRole(holder, goneLow), role.ErrDeleted},
+		{"assigning a deleted role", aAdmin.MayAssignRole(holder, goneLow), role.ErrInactive},
 		{"revoking a deleted role needs rank only, not the ceiling (it carries tenant.admin)", aAdmin.MayRevokeRole(holder, goneLow, nil), nil},
 		{"revoking a deleted role above the actor's rank is still refused on rank", aAdmin.MayRevokeRole(holder, goneHigh, nil), authority.ErrInsufficientRank},
 		{"revoking a deleted role from a peer refused on rank", aAdmin.MayRevokeRole(mkMember(t, 19, tA, true, "", adminR), goneLow, nil), authority.ErrInsufficientRank},
@@ -410,7 +410,7 @@ func TestSameTenantIsCanonical(t *testing.T) {
 	cases := []decision{
 		{"operator edits a role of its own tenant spelled in upper case: follows rank", op.MayEditRole(upperOwn, authority.NoLevelChange, authority.RoleHolders{}), authority.ErrInsufficientRank},
 		{"operator edits a role of its own tenant spelled with braces", op.MayEditRole(braced, authority.NoLevelChange, authority.RoleHolders{}), authority.ErrInsufficientRank},
-		{"operator deletes a role of its own tenant in upper case", op.MayDeleteRole(upperOwn, authority.RoleHolders{}), authority.ErrInsufficientRank},
+		{"operator deletes a role of its own tenant in upper case", op.MayChangeRoleStatus(upperOwn, authority.RoleHolders{}), authority.ErrInsufficientRank},
 		{"operator edits another tenant's role", op.MayEditRole(other, authority.NoLevelChange, authority.RoleHolders{}), nil},
 	}
 	for _, m := range mismatches(cases) {
@@ -435,7 +435,7 @@ func TestNilRoleNeverPanics(t *testing.T) {
 		{"replace permissions of nil", aAdmin.MayReplaceRolePermissions(nil, nil, authority.RoleHolders{}), authority.ErrNoAuthority},
 		{"grant on nil", aAdmin.MayGrantRolePermission(nil, "crm.leads.read", authority.RoleHolders{}), authority.ErrNoAuthority},
 		{"revoke on nil", aAdmin.MayRevokeRolePermission(nil, "crm.leads.read", authority.RoleHolders{}), authority.ErrNoAuthority},
-		{"delete nil", aAdmin.MayDeleteRole(nil, authority.RoleHolders{}), authority.ErrNoAuthority},
+		{"delete nil", aAdmin.MayChangeRoleStatus(nil, authority.RoleHolders{}), authority.ErrNoAuthority},
 		{"set parent of nil child", aAdmin.MaySetRoleParent(nil, userR), authority.ErrNoAuthority},
 	}
 	for _, m := range mismatches(cases) {
@@ -463,7 +463,7 @@ func TestLegacyLevelZeroCustomRole(t *testing.T) {
 	cases := []decision{
 		{"owner renames a legacy level-0 role", aOwner.MayEditRole(legacy, authority.NoLevelChange, authority.RoleHolders{}), nil},
 		{"owner re-levels a legacy level-0 role into the ladder", aOwner.MayEditRole(legacy, 5, authority.RoleHolders{}), nil},
-		{"owner deletes a legacy level-0 role", aOwner.MayDeleteRole(legacy, authority.RoleHolders{}), nil},
+		{"owner deletes a legacy level-0 role", aOwner.MayChangeRoleStatus(legacy, authority.RoleHolders{}), nil},
 		{"admin edits a legacy level-0 role (it ranks as the user tier)", aAdmin.MayEditRole(legacy, authority.NoLevelChange, authority.RoleHolders{}), nil},
 		{"a user-tier actor may not touch it", aUser.MayEditRole(legacy, authority.NoLevelChange, authority.RoleHolders{}), authority.ErrInsufficientRank},
 		{"admin may not assign it", aAdmin.MayAssignRole(admin, legacy), authority.ErrSelfTarget},
@@ -554,7 +554,7 @@ func TestNewActor_TenantAdminDoesNotExpandToPlatformNames(t *testing.T) {
 func TestMemberOf_MalformedIdsNeverMatchEachOther(t *testing.T) {
 	t.Parallel()
 	for name, id := range map[string]string{"empty": "", "garbage": "garbage", "nil uuid": "00000000-0000-0000-0000-000000000000"} {
-		r := role.UnmarshalFromDB(role.Snapshot{ID: role.ID(id), TenantID: tA, Name: "Odd", HierarchyLevel: 50, CreatedAt: t0})
+		r := role.UnmarshalFromDB(role.Snapshot{ID: role.ID(id), TenantID: tA, Name: "Odd", HierarchyLevel: 50, CreatedAt: t0, IsActive: true})
 		both := membership.UnmarshalFromDB(membership.Snapshot{ID: membership.ID(uid(11)), PersonID: person.ID(uid(511)), TenantID: tA, Status: membership.StatusActive, JoinedAt: t0, RoleAssignments: []role.ID{role.ID(id)}})
 		if got, err := authority.MemberOf(both, []*role.Role{r}, t0, activePerson()); !errors.Is(err, authority.ErrNoAuthority) || got.Valid() {
 			t.Errorf("%s on both sides: (%+v, %v), want invalid and no authority", name, got, err)

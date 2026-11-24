@@ -30,7 +30,7 @@ func mkRole(n int, tid tenant.ID, name string, sys bool, level int, super bool, 
 		ps = append(ps, permission.FromConstant(p))
 	}
 	return role.UnmarshalFromDB(role.Snapshot{ID: role.ID(uid(n)), TenantID: tid, Name: name,
-		IsSystemDefault: sys, IsSuperAdmin: super, HierarchyLevel: level, Permissions: ps, CreatedAt: t0})
+		IsSystemDefault: sys, IsSuperAdmin: super, HierarchyLevel: level, Permissions: ps, CreatedAt: t0, IsActive: true})
 }
 
 func mkMember(t *testing.T, n int, tid tenant.ID, active bool, reportsTo membership.ID, roles ...*role.Role) authority.Member {
@@ -230,7 +230,7 @@ func TestRank_TierClampAndRankOf(t *testing.T) {
 	if authority.ClampRank(-1) != authority.RankNone || authority.ClampRank(150) != authority.RankNone || authority.ClampRank(20) != authority.RankManager {
 		t.Fatal("ClampRank must fail closed outside [0,99]")
 	}
-	deleted := role.UnmarshalFromDB(role.Snapshot{ID: role.ID(uid(1)), TenantID: tA, Name: "Gone", HierarchyLevel: 1, IsDeleted: true})
+	deleted := role.UnmarshalFromDB(role.Snapshot{ID: role.ID(uid(1)), TenantID: tA, Name: "Gone", HierarchyLevel: 1})
 	if got := authority.RankOf([]*role.Role{mkRole(2, tA, "M", false, 20, false), mkRole(3, tA, "U", false, 50, false), deleted}); got != authority.RankManager {
 		t.Fatalf("RankOf = %d, want 20 (deleted roles ignored)", got)
 	}

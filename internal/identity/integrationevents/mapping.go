@@ -414,11 +414,19 @@ func FromDomainEvent(d any) (Event, error) {
 			OccurredAtUTC: e.At.UTC(),
 		}, nil
 
-	case role.DeletedEvent:
-		return RoleDeletedV1{
+	case role.DeactivatedEvent:
+		return RoleDeactivatedV1{
 			RoleID:        mustParseUUID(e.RoleID.String()),
 			TenantIDClaim: mustParseUUID(e.TenantID.String()),
-			DeletedBy:     e.DeletedBy,
+			DeactivatedBy: e.By,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case role.ActivatedEvent:
+		return RoleReactivatedV1{
+			RoleID:        mustParseUUID(e.RoleID.String()),
+			TenantIDClaim: mustParseUUID(e.TenantID.String()),
+			ReactivatedBy: e.By,
 			OccurredAtUTC: e.At.UTC(),
 		}, nil
 

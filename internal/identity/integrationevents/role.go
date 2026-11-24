@@ -81,23 +81,40 @@ func (e RolePermissionRevokedV1) OccurredAt() time.Time { return e.OccurredAtUTC
 // TenantID satisfies [TenantScoped].
 func (e RolePermissionRevokedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
 
-// RoleDeletedV1 — a non-system-default role was soft-deleted. Downstream
-// modules revoke Membership assignments referencing this RoleID.
-type RoleDeletedV1 struct {
+// RoleDeactivatedV1 — a non-system-default role went inactive (ADR 0073). It confers nothing
+// until it is reactivated; nothing is deleted.
+type RoleDeactivatedV1 struct {
 	RoleID        uuid.UUID `json:"role_id"`
 	TenantIDClaim uuid.UUID `json:"tenant_id"`
-	DeletedBy     string    `json:"deleted_by"`
+	DeactivatedBy string    `json:"deactivated_by"`
 	OccurredAtUTC time.Time `json:"occurred_at_utc"`
 }
 
 // Topic returns the canonical wire alias.
-func (RoleDeletedV1) Topic() string { return "identity.role_deleted.v1" }
+func (RoleDeactivatedV1) Topic() string { return "identity.role_deactivated.v1" }
 
 // OccurredAt returns the domain timestamp.
-func (e RoleDeletedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+func (e RoleDeactivatedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
 
 // TenantID satisfies [TenantScoped].
-func (e RoleDeletedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
+func (e RoleDeactivatedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
+
+// RoleReactivatedV1 — an inactive role became active again.
+type RoleReactivatedV1 struct {
+	RoleID        uuid.UUID `json:"role_id"`
+	TenantIDClaim uuid.UUID `json:"tenant_id"`
+	ReactivatedBy string    `json:"reactivated_by"`
+	OccurredAtUTC time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (RoleReactivatedV1) Topic() string { return "identity.role_reactivated.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e RoleReactivatedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
+// TenantID satisfies [TenantScoped].
+func (e RoleReactivatedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
 
 // RoleParentChangedV1 retired in Wave 9.4 (ADR 0058 supersedes ADR 0054);
 // see role_hierarchy.go.
@@ -108,11 +125,13 @@ var (
 	_ TenantScoped = RoleRenamedV1{}
 	_ TenantScoped = RolePermissionGrantedV1{}
 	_ TenantScoped = RolePermissionRevokedV1{}
-	_ TenantScoped = RoleDeletedV1{}
+	_ TenantScoped = RoleDeactivatedV1{}
+	_ TenantScoped = RoleReactivatedV1{}
 
 	_ = register(RoleCreatedV1{})
 	_ = register(RoleRenamedV1{})
 	_ = register(RolePermissionGrantedV1{})
 	_ = register(RolePermissionRevokedV1{})
-	_ = register(RoleDeletedV1{})
+	_ = register(RoleDeactivatedV1{})
+	_ = register(RoleReactivatedV1{})
 )

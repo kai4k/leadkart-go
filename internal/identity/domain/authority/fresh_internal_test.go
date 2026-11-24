@@ -27,7 +27,7 @@ func freshRole(n int, tid tenant.ID, level int, sys bool) *role.Role {
 		name = role.SystemRoles.Tenant.CompanyOwner
 	}
 	return role.UnmarshalFromDB(role.Snapshot{ID: role.ID(fmt.Sprintf("0190a000-0000-7000-8000-%012d", 900+n)), TenantID: tid,
-		Name: name, IsSystemDefault: sys, HierarchyLevel: level})
+		Name: name, IsSystemDefault: sys, HierarchyLevel: level, IsActive: true})
 }
 
 func freshMemberOf(t *testing.T, id membership.ID, tid tenant.ID, status membership.Status, state PersonState, roles ...*role.Role) Member {
@@ -94,7 +94,7 @@ func TestNarrowedBy_PermissionsAreTheIntersection(t *testing.T) {
 		"in both (second)":          {p.Users.View, true},
 		"token only: revoked since": {p.Crm.Leads.Manage, false},
 		"fresh only: granted since": {p.Crm.Leads.Assign, false},
-		"in neither":                {p.Roles.Delete, false},
+		"in neither":                {p.Roles.Manage, false},
 		"unknown name never held":   {"not.a.permission", false},
 		"empty name never held":     {"", false},
 	} {
@@ -215,7 +215,7 @@ func TestNeedsFreshFacts(t *testing.T) {
 func TestNarrowedBy_ASuperUserMustStillHoldTheSuperAdminRole(t *testing.T) {
 	t.Parallel()
 	superRole := role.UnmarshalFromDB(role.Snapshot{ID: role.ID("0190a000-0000-7000-8000-000000000990"), TenantID: tenantOne,
-		Name: "Super Admin", IsSystemDefault: true, IsSuperAdmin: true, HierarchyLevel: 0})
+		Name: "Super Admin", IsSystemDefault: true, IsSuperAdmin: true, HierarchyLevel: 0, IsActive: true})
 	plain := freshRole(1, tenantOne, 10, false)
 	r := RankOwner.Int()
 	super := newActorT(t, ActorInput{MembershipID: freshMemberID, TenantID: tenantOne, Rank: &r, IsSuperUser: true})
@@ -228,7 +228,7 @@ func TestNarrowedBy_ASuperUserMustStillHoldTheSuperAdminRole(t *testing.T) {
 	if got := super.NarrowedBy(lost, nil, nil); got.Valid() {
 		t.Error("a super user whose super-admin role was removed still acts")
 	}
-	deleted := role.UnmarshalFromDB(role.Snapshot{ID: superRole.ID(), TenantID: tenantOne, Name: "Super Admin", IsSuperAdmin: true, IsDeleted: true})
+	deleted := role.UnmarshalFromDB(role.Snapshot{ID: superRole.ID(), TenantID: tenantOne, Name: "Super Admin", IsSuperAdmin: true})
 	gone := freshMemberOf(t, freshMemberID, tenantOne, membership.StatusActive, canAct(), deleted)
 	if got := super.NarrowedBy(gone, nil, nil); got.Valid() {
 		t.Error("a super user whose super-admin role was deleted still acts")

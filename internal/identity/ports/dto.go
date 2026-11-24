@@ -5,6 +5,7 @@ package ports
 
 import (
 	"encoding/json"
+	"github.com/leadkart/leadkart-go/internal/common/lifecycle"
 	"time"
 )
 
@@ -482,11 +483,17 @@ type RoleDto struct {
 	Permissions     []string  `json:"permissions"`
 	CreatedAt       time.Time `json:"created_at"`
 	ParentRoleID    string    `json:"parent_role_id,omitzero"`
+	// IsActive is false for an inactive role: it confers nothing, takes no new holder and cannot
+	// be edited until it is reactivated (ADR 0073). A role is never deleted.
+	IsActive bool `json:"is_active"`
 }
 
-// ListRolesResponse — GET /api/v1/roles.
+// ListRolesResponse — GET /api/v1/roles. ?status=active|inactive|all (default active).
 type ListRolesResponse struct {
 	Roles []RoleDto `json:"roles"`
+	// StatusCounts is the company's roles per status, whatever ?status= is (the list is not
+	// paginated, so it is always present).
+	StatusCounts *lifecycle.Counts `json:"status_counts,omitzero"`
 }
 
 // CreateRoleRequest — POST /api/v1/roles. name and hierarchy_level are

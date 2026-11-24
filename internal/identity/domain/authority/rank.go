@@ -79,7 +79,7 @@ func levelOf(r *role.Role) Rank {
 func RankOf(roles []*role.Role) Rank {
 	best := RankNone
 	for _, r := range roles {
-		if r == nil || r.IsDeleted() {
+		if r == nil || !r.IsActive() {
 			continue
 		}
 		if lvl := levelOf(r); lvl < best {

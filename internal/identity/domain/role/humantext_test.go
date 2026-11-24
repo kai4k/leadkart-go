@@ -24,7 +24,7 @@ func TestNew_RefusesANameWithDirectionOverride(t *testing.T) {
 func TestRename_RefusesAChangedNameButAcceptsAnUnchangedLegacyOne(t *testing.T) {
 	t.Parallel()
 	legacy := role.UnmarshalFromDB(role.Snapshot{ID: role.ID(ids.NewV7().String()), TenantID: tenant.ID(ids.NewV7().String()),
-		Name: rloName, HierarchyLevel: role.HierarchyLevelDefault, CreatedAt: testNow})
+		Name: rloName, HierarchyLevel: role.HierarchyLevelDefault, CreatedAt: testNow, IsActive: true})
 	if err := legacy.Rename(rloName, testNow); err != nil {
 		t.Fatalf("an unchanged legacy name must be accepted: %v", err)
 	}

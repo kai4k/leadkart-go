@@ -94,13 +94,13 @@ func TestAttack_Roles_EditsFollowTheLadder(t *testing.T) {
 			add("grant a permission", http.MethodPost, base+"/permissions/grant", ports.RolePermissionRequest{Permission: p.Tasks.WorkItems.Read})
 			add("revoke tenant.admin", http.MethodPost, base+"/permissions/revoke", ports.RolePermissionRequest{Permission: p.Meta.TenantAdmin})
 			add("clear the parent", http.MethodPatch, base+"/parent", map[string]any{"parent_role_id": nil})
-			add("delete", http.MethodDelete, base, nil)
+			add("deactivate", http.MethodPost, base+"/deactivate", nil)
 		}
 	}
 	// an Administrator who lost tenant.admin reaches no write route at all.
 	for _, c := range []struct{ what, method, path string }{
 		{"rename a junior role", http.MethodPatch, "/api/v1/roles/" + w.roles[shellRoleName]},
-		{"delete a junior role", http.MethodDelete, "/api/v1/roles/" + w.roles[shellRoleName]},
+		{"deactivate a junior role", http.MethodPost, "/api/v1/roles/" + w.roles[shellRoleName] + "/deactivate"},
 		{"grant on a junior role", http.MethodPost, "/api/v1/roles/" + w.roles[shellRoleName] + "/permissions/grant"},
 	} {
 		rows = append(rows, attack{who: "adminRO", what: c.what, method: c.method, path: c.path, body: map[string]any{"name": "x", "permission": p.Tasks.WorkItems.Read},

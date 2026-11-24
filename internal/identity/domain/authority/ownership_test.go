@@ -121,7 +121,7 @@ func TestOwnership_EverythingElseTheExemptionAllowsStays(t *testing.T) {
 		"create a role without tenant.admin":   w.opRoles.MayCreateRole(tA, 30, []string{p.Crm.Leads.Read}, nil),
 		"grant a day-to-day role permission":   w.opRoles.MayGrantRolePermission(w.leadsR, p.Crm.Leads.Read, authority.RoleHolders{}),
 		"clear a manager":                      w.opManage.MayClearManager(w.exec, nil),
-		"delete a role without tenant.admin":   w.opRoles.MayDeleteRole(w.leadsR, authority.RoleHolders{}),
+		"delete a role without tenant.admin":   w.opRoles.MayChangeRoleStatus(w.leadsR, authority.RoleHolders{}),
 		"approve-class: act on the sole owner": w.opManage.MayActOn(w.owner1),
 	} {
 		if err != nil {

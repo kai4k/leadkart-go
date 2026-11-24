@@ -1290,15 +1290,20 @@ paths:
   # ===== ROLES ==========================================================
   /api/v1/roles:
     get:
-      parameters:
-        - $ref: '#/components/parameters/XTenantId'
       tags: [roles]
       summary: List roles in the caller's tenant
       description: |
         Requires `identity.roles.view` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
+        `?status=active|inactive|all` (default `active`) picks the listing; roles are never deleted (ADR 0073),
+        so an inactive role is listed with `?status=inactive`. `status_counts` carries the company's roles per
+        status, whatever `status` is. Anything else is 400 `invalid_status_filter`.
       x-required-permissions: [identity.roles.view]
+      parameters:
+        - { $ref: '#/components/parameters/StatusFilter' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '429': { $ref: '#/components/responses/TooManyRequests' }
+        '400': { description: "`invalid_status_filter` - `status` is not active, inactive or all", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '200':
           description: Roles
           content:
@@ -1415,32 +1420,57 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
-    delete:
+
+  /api/v1/roles/{roleId}/deactivate:
+    post:
       tags: [roles]
-      summary: Soft-delete a role
+      summary: Make a role inactive
       description: |
-        Requires `identity.roles.delete` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
-        The caller must hold every permission the role carries (deleting removes them from every holder) and must
-        be allowed to act on every holder, active or not (answered before `role_in_use`).
-        A role still held by an ACTIVE member is refused with 409 `role_in_use` (`errors.active_holders` is the
-        count); a role held only by inactive members is deleted and their assignments are removed in the same
-        transaction.
-      x-required-permissions: [identity.roles.delete]
+        Requires `identity.roles.manage` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). A role is never deleted (ADR 0073): it goes inactive.
+        The decision is exactly what deleting a role used to ask. The caller must hold every permission the role carries (deactivating removes them from every holder) and must be allowed to act on every holder, active or not (answered before `role_in_use`). A role still held by an ACTIVE member is refused with 409 `role_in_use` (`errors.active_holders` is the count). A system-default role is 409 `role_system_default`.
+        An inactive role confers nothing (no permission, no rank), takes no new holder (`role_inactive` on assign), cannot be edited or be a parent, and is hidden from the default list. The assignments of its INACTIVE holders are kept (nothing is deleted); a holder reactivated while the role is inactive receives nothing from it. Idempotent: an inactive role answers 200. Answers the updated role.
+      x-required-permissions: [identity.roles.manage]
       parameters:
+        - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/RoleId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
         '429': { $ref: '#/components/responses/TooManyRequests' }
-        '204': { description: Role deleted }
+        '200':
+          description: The role, now inactive
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoleDto' }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: '`role_in_use` (an active member holds the role) or `role_system_default` (system-default roles cannot be deleted)'
+          description: '`role_in_use` (an active member holds the role) or `role_system_default` (system-default roles cannot be made inactive)'
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/roles/{roleId}/reactivate:
+    post:
+      tags: [roles]
+      summary: Make an inactive role active again
+      description: |
+        Requires `identity.roles.manage`. The same authority as deactivating: reactivating gives the role's permissions back to every holder, so the caller must hold every permission the role carries and be allowed to act on every holder. The security stamp of every ACTIVE holder rotates (their tokens are refreshed). Idempotent: an active role answers 200. Answers the updated role.
+      x-required-permissions: [identity.roles.manage]
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { $ref: '#/components/parameters/RoleId' }
+        - $ref: '#/components/parameters/XTenantId'
+      responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '200':
+          description: The role, now active
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoleDto' }
+        '403': { $ref: '#/components/responses/AuthorityForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   /api/v1/roles/{roleId}/parent:
     patch:
@@ -5713,11 +5743,12 @@ components:
     # ===== Roles =======================================================
     RoleDto:
       type: object
-      required: [id, tenant_id, name, is_system_default, is_super_admin, hierarchy_level, permissions, created_at]
+      required: [id, tenant_id, name, is_system_default, is_super_admin, hierarchy_level, permissions, created_at, is_active]
       properties:
         id:               { type: string, format: uuid }
         tenant_id:        { type: string, format: uuid }
         name:             { type: string }
+        is_active:        { type: boolean, description: 'false: the role is inactive (ADR 0073). It confers nothing, takes no new holder and cannot be edited until it is reactivated; it is never deleted.' }
         is_system_default: { type: boolean }
         is_super_admin:   { type: boolean }
         hierarchy_level:  { type: integer }
@@ -5742,6 +5773,7 @@ components:
         roles:
           type: array
           items: { $ref: '#/components/schemas/RoleDto' }
+        status_counts: { $ref: '#/components/schemas/StatusCounts' }
 
     CreateRoleRequest:
       type: object

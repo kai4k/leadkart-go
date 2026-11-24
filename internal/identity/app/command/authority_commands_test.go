@@ -119,7 +119,7 @@ func newAuthzWorld(t *testing.T) *authzWorld {
 
 func (w *authzWorld) addRole(t *testing.T, n int, name string, sys bool, level int, perms ...string) *role.Role {
 	t.Helper()
-	return w.addRoleSnap(t, role.Snapshot{ID: role.ID(awID(n)), TenantID: awTenant, Name: name, IsSystemDefault: sys, HierarchyLevel: level, CreatedAt: testNow}, perms...)
+	return w.addRoleSnap(t, role.Snapshot{ID: role.ID(awID(n)), TenantID: awTenant, Name: name, IsSystemDefault: sys, HierarchyLevel: level, CreatedAt: testNow, IsActive: true}, perms...)
 }
 
 func (w *authzWorld) addRoleSnap(t *testing.T, s role.Snapshot, perms ...string) *role.Role {
@@ -298,9 +298,9 @@ func TestAssignUserRole_RankAndCeiling(t *testing.T) {
 	if err := h.Handle(t.Context(), command.AssignUserRoleCommand{TenantID: awTenant, MembershipID: exec.ID(), RoleID: role.ID(awID(777)), Actor: admin}); !errors.Is(err, command.ErrRoleNotFound) {
 		t.Fatalf("unknown role: %v", err)
 	}
-	gone := w.addRoleSnap(t, role.Snapshot{ID: role.ID(awID(778)), TenantID: awTenant, Name: "Gone", HierarchyLevel: 60, CreatedAt: testNow, IsDeleted: true})
-	if err := h.Handle(t.Context(), command.AssignUserRoleCommand{TenantID: awTenant, MembershipID: exec.ID(), RoleID: gone.ID(), Actor: admin}); !errors.Is(err, command.ErrRoleNotFound) {
-		t.Fatalf("soft-deleted role: %v, want ErrRoleNotFound", err)
+	gone := w.addRoleSnap(t, role.Snapshot{ID: role.ID(awID(778)), TenantID: awTenant, Name: "Gone", HierarchyLevel: 60, CreatedAt: testNow})
+	if err := h.Handle(t.Context(), command.AssignUserRoleCommand{TenantID: awTenant, MembershipID: exec.ID(), RoleID: gone.ID(), Actor: admin}); !errors.Is(err, role.ErrInactive) {
+		t.Fatalf("inactive role: %v, want role.ErrInactive (an inactive role takes no new holder)", err)
 	}
 }
 
@@ -355,7 +355,7 @@ func TestRevokeUserRole_RankAndLastOwner(t *testing.T) {
 func TestRevokeUserRole_DeletedRoleIsRevokedOnRankAlone(t *testing.T) {
 	t.Parallel()
 	w := newAuthzWorld(t)
-	gone := w.addRoleSnap(t, role.Snapshot{ID: role.ID(awID(779)), TenantID: awTenant, Name: "Gone", HierarchyLevel: 60, CreatedAt: testNow, IsDeleted: true},
+	gone := w.addRoleSnap(t, role.Snapshot{ID: role.ID(awID(779)), TenantID: awTenant, Name: "Gone", HierarchyLevel: 60, CreatedAt: testNow},
 		permission.IdentityPermissions.Crm.Leads.Assign)
 	holder := w.member(t, w.exec, gone) // a soft-deleted role in the assigned set must still load
 	h := w.handlers().revoke
@@ -601,7 +601,7 @@ func emptyGuard() command.PersonChangeGuard {
 func seedAdmin(t *testing.T, members *membershiptest.FakeRepository, roles *roletest.FakeRepository) authority.Actor {
 	t.Helper()
 	r := role.UnmarshalFromDB(role.Snapshot{ID: role.ID(awID(8001)), TenantID: awTenant, Name: role.SystemRoles.Tenant.Administrator,
-		HierarchyLevel: role.HierarchyLevelAdmin, Permissions: []*permission.Permission{permission.FromConstant(permission.IdentityPermissions.Meta.TenantAdmin)}, CreatedAt: testNow})
+		HierarchyLevel: role.HierarchyLevelAdmin, Permissions: []*permission.Permission{permission.FromConstant(permission.IdentityPermissions.Meta.TenantAdmin)}, CreatedAt: testNow, IsActive: true})
 	if err := roles.Add(t.Context(), r); err != nil {
 		t.Fatalf("seed admin role: %v", err)
 	}

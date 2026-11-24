@@ -205,8 +205,8 @@ func TestNewListRolesHandler_NilEdgesAllowed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if len(got) != 0 {
-		t.Fatalf("len = %d, want 0", len(got))
+	if len(got.Roles) != 0 {
+		t.Fatalf("len = %d, want 0", len(got.Roles))
 	}
 }
 
@@ -277,14 +277,14 @@ func TestListRoles_HappyPath_OrdersAndPopulatesParent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("len = %d, want 2", len(got))
+	if len(got.Roles) != 2 {
+		t.Fatalf("len = %d, want 2", len(got.Roles))
 	}
 	// Find the manager (child) and verify it carries the parent reference.
 	var mgr *query.RoleView
-	for i := range got {
-		if got[i].Name == "Manager" {
-			mgr = &got[i]
+	for i := range got.Roles {
+		if got.Roles[i].Name == "Manager" {
+			mgr = &got.Roles[i]
 		}
 	}
 	if mgr == nil {
@@ -307,10 +307,10 @@ func TestListRoles_NilEdgesReturnsViewsWithEmptyParent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if len(got) != 1 {
-		t.Fatalf("len = %d, want 1", len(got))
+	if len(got.Roles) != 1 {
+		t.Fatalf("len = %d, want 1", len(got.Roles))
 	}
-	if got[0].ParentRoleID != "" {
-		t.Errorf("ParentRoleID = %q, want empty", got[0].ParentRoleID)
+	if got.Roles[0].ParentRoleID != "" {
+		t.Errorf("ParentRoleID = %q, want empty", got.Roles[0].ParentRoleID)
 	}
 }

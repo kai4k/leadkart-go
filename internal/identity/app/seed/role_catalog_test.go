@@ -269,7 +269,7 @@ func newFakeRoleRepo() *fakeRoleRepo {
 
 func (f *fakeRoleRepo) Add(_ context.Context, r *role.Role) error {
 	for _, existing := range f.roles {
-		if existing.TenantID() == r.TenantID() && existing.Name() == r.Name() && !existing.IsDeleted() {
+		if existing.TenantID() == r.TenantID() && existing.Name() == r.Name() {
 			return role.ErrNameTaken
 		}
 	}
@@ -285,7 +285,7 @@ func (f *fakeRoleRepo) UpdateByID(_ context.Context, _ tenant.ID, _ role.ID, _ f
 
 func (f *fakeRoleRepo) GetByID(_ context.Context, tenantID tenant.ID, id role.ID) (*role.Role, error) {
 	r, ok := f.roles[id]
-	if !ok || r.IsDeleted() || r.TenantID() != tenantID {
+	if !ok || r.TenantID() != tenantID {
 		return nil, role.ErrNotFound
 	}
 	return r, nil
@@ -295,7 +295,7 @@ func (f *fakeRoleRepo) GetByTenantAndName(
 	_ context.Context, tenantID tenant.ID, name string,
 ) (*role.Role, error) {
 	for _, r := range f.roles {
-		if r.TenantID() == tenantID && r.Name() == name && !r.IsDeleted() {
+		if r.TenantID() == tenantID && r.Name() == name {
 			return r, nil
 		}
 	}
@@ -305,14 +305,14 @@ func (f *fakeRoleRepo) GetByTenantAndName(
 func (f *fakeRoleRepo) GetByIDs(_ context.Context, tenantID tenant.ID, ids []role.ID) ([]*role.Role, error) {
 	out := make([]*role.Role, 0, len(ids))
 	for _, id := range ids {
-		if r, ok := f.roles[id]; ok && !r.IsDeleted() && r.TenantID() == tenantID {
+		if r, ok := f.roles[id]; ok && r.IsActive() && r.TenantID() == tenantID {
 			out = append(out, r)
 		}
 	}
 	return out, nil
 }
 
-func (f *fakeRoleRepo) GetByIDsIncludingDeleted(_ context.Context, tenantID tenant.ID, ids []role.ID) ([]*role.Role, error) {
+func (f *fakeRoleRepo) GetByIDsIncludingInactive(_ context.Context, tenantID tenant.ID, ids []role.ID) ([]*role.Role, error) {
 	out := make([]*role.Role, 0, len(ids))
 	for _, id := range ids {
 		if r, ok := f.roles[id]; ok && r.TenantID() == tenantID {
@@ -325,7 +325,7 @@ func (f *fakeRoleRepo) GetByIDsIncludingDeleted(_ context.Context, tenantID tena
 func (f *fakeRoleRepo) ListByTenant(_ context.Context, tenantID tenant.ID) ([]*role.Role, error) {
 	out := []*role.Role{}
 	for _, r := range f.roles {
-		if r.TenantID() == tenantID && !r.IsDeleted() {
+		if r.TenantID() == tenantID {
 			out = append(out, r)
 		}
 	}

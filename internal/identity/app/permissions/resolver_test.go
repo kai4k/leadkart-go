@@ -94,15 +94,15 @@ type fakeRoleRepo struct {
 func (f *fakeRoleRepo) GetByIDs(_ context.Context, tenantID tenant.ID, ids []role.ID) ([]*role.Role, error) {
 	out := make([]*role.Role, 0, len(ids))
 	for _, id := range ids {
-		if r, ok := f.roles[id]; ok && !r.IsDeleted() && r.TenantID() == tenantID {
+		if r, ok := f.roles[id]; ok && r.IsActive() && r.TenantID() == tenantID {
 			out = append(out, r)
 		}
 	}
 	return out, nil
 }
 
-func (f *fakeRoleRepo) GetByIDsIncludingDeleted(context.Context, tenant.ID, []role.ID) ([]*role.Role, error) {
-	return nil, errors.New("fake: GetByIDsIncludingDeleted unused")
+func (f *fakeRoleRepo) GetByIDsIncludingInactive(context.Context, tenant.ID, []role.ID) ([]*role.Role, error) {
+	return nil, errors.New("fake: GetByIDsIncludingInactive unused")
 }
 
 func (f *fakeRoleRepo) Add(context.Context, *role.Role) error {

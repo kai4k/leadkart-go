@@ -36,7 +36,7 @@ func NewRoleRepository(pool *pgxpool.Pool, tx *pg.Transactor) *RoleRepository {
 }
 
 // Add satisfies [role.Repository]. Translates SQLSTATE 23505 from
-// uq_roles_tenant_name (WHERE NOT is_deleted) to [role.ErrNameTaken].
+// uq_roles_tenant_name to [role.ErrNameTaken].
 // GUC bound from ro.TenantID() (ADR 0062).
 func (r *RoleRepository) Add(ctx context.Context, ro *role.Role) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
@@ -82,7 +82,7 @@ func (r *RoleRepository) GetByID(ctx context.Context, tenantID tenant.ID, id rol
 	return out, nil
 }
 
-// GetByTenantAndName satisfies [role.Repository]. Live rows only.
+// GetByTenantAndName satisfies [role.Repository]. Any status: an inactive role still holds its name.
 // GUC bound from tenantID (ADR 0062).
 func (r *RoleRepository) GetByTenantAndName(
 	ctx context.Context,
@@ -156,9 +156,9 @@ func (r *RoleRepository) GetByIDs(ctx context.Context, tenantID tenant.ID, ids [
 	return out, nil
 }
 
-// GetByIDsIncludingDeleted satisfies [role.Repository]. Like GetByIDs but
-// soft-deleted rows are returned too (authority facts only, ADR 0069).
-func (r *RoleRepository) GetByIDsIncludingDeleted(ctx context.Context, tenantID tenant.ID, ids []role.ID) ([]*role.Role, error) {
+// GetByIDsIncludingInactive satisfies [role.Repository]. Like GetByIDs but
+// inactive rows are returned too (authority facts only, ADR 0069).
+func (r *RoleRepository) GetByIDsIncludingInactive(ctx context.Context, tenantID tenant.ID, ids []role.ID) ([]*role.Role, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -172,9 +172,9 @@ func (r *RoleRepository) GetByIDsIncludingDeleted(ctx context.Context, tenantID 
 	}
 	var out []*role.Role
 	err := r.runInTxTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		rows, err := r.q.WithTx(tx).GetRolesByIDsIncludingDeleted(ctx, pgIDs)
+		rows, err := r.q.WithTx(tx).GetRolesByIDsIncludingInactive(ctx, pgIDs)
 		if err != nil {
-			return fmt.Errorf("role repo: get by ids including deleted: %w", err)
+			return fmt.Errorf("role repo: get by ids including inactive: %w", err)
 		}
 		out = make([]*role.Role, 0, len(rows))
 		for _, row := range rows {
@@ -192,7 +192,7 @@ func (r *RoleRepository) GetByIDsIncludingDeleted(ctx context.Context, tenantID 
 	return out, nil
 }
 
-// ListByTenant satisfies [role.Repository]. Returns live roles ordered by
+// ListByTenant satisfies [role.Repository]. Returns every role (active and inactive), ordered by
 // hierarchy_level then name. GUC bound from tenantID.
 func (r *RoleRepository) ListByTenant(
 	ctx context.Context,
@@ -226,7 +226,6 @@ func (r *RoleRepository) ListByTenant(
 }
 
 // UpdateByID satisfies [role.Repository]. TDL UpdateFn pattern.
-// Branches on IsDeleted: true → SoftDeleteRole; false → UpdateRole.
 // Immutable fields (is_system_default, is_super_admin, tenant_id,
 // created_at) are never written.
 func (r *RoleRepository) UpdateByID(
@@ -281,10 +280,6 @@ func loadRole(ctx context.Context, q *db.Queries, id role.ID) (*role.Role, error
 		}
 		return nil, fmt.Errorf("role repo: get by id: %w", err)
 	}
-	if row.IsDeleted {
-		// Soft-deleted rows are forensic-only.
-		return nil, role.ErrNotFound
-	}
 	return rowToRole(row)
 }
 
@@ -322,24 +317,11 @@ func insertRoleRow(ctx context.Context, q *db.Queries, ro *role.Role) error {
 }
 
 // persistRoleState writes mutable Role state (name, hierarchy_level,
-// permissions) or soft-delete flags, depending on aggregate state.
+// permissions, is_active).
 func persistRoleState(ctx context.Context, q *db.Queries, ro *role.Role) error {
 	rid, err := uuid.Parse(ro.ID().String())
 	if err != nil {
 		return fmt.Errorf("role repo: parse id %q: %w", ro.ID(), err)
-	}
-	if ro.IsDeleted() {
-		// Soft-delete: name + permissions stay; AND NOT is_deleted filters them.
-		deletedBy := pgconv.ZeroToNil(ro.DeletedBy())
-		err = q.SoftDeleteRole(ctx, db.SoftDeleteRoleParams{
-			ID:        pgconv.PgUUID(rid),
-			DeletedAt: pgconv.PgRequiredTimestamp(ro.DeletedAt()),
-			DeletedBy: deletedBy,
-		})
-		if err != nil {
-			return fmt.Errorf("role repo: soft-delete: %w", err)
-		}
-		return nil
 	}
 	permsJSON, err := encodePermissions(ro.Permissions())
 	if err != nil {
@@ -351,6 +333,7 @@ func persistRoleState(ctx context.Context, q *db.Queries, ro *role.Role) error {
 		// Bounded [0,99] by aggregate invariants.
 		HierarchyLevel: int32(ro.HierarchyLevel()), //nolint:gosec // G115: bounded [0,99] by aggregate
 		Permissions:    permsJSON,
+		IsActive:       ro.IsActive(),
 	})
 	if err != nil {
 		if isRoleNameUniqueViolation(err) {
@@ -392,10 +375,6 @@ func rowToRole(row db.IdentityRole) (*role.Role, error) {
 	if err != nil {
 		return nil, fmt.Errorf("role repo: hydrate permissions: %w", err)
 	}
-	deletedBy := ""
-	if row.DeletedBy != nil {
-		deletedBy = *row.DeletedBy
-	}
 	return role.UnmarshalFromDB(role.Snapshot{
 		ID:              id,
 		TenantID:        tid,
@@ -405,9 +384,7 @@ func rowToRole(row db.IdentityRole) (*role.Role, error) {
 		HierarchyLevel:  int(row.HierarchyLevel),
 		Permissions:     perms,
 		CreatedAt:       pgconv.TimeFromPg(row.CreatedAt),
-		IsDeleted:       row.IsDeleted,
-		DeletedAt:       pgconv.TimeFromPg(row.DeletedAt),
-		DeletedBy:       deletedBy,
+		IsActive:        row.IsActive,
 	}), nil
 }
 

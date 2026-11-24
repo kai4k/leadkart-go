@@ -82,7 +82,7 @@ func (f authorityFacts) project(ctx context.Context, tenantID tenant.ID, m *memb
 	var roles []*role.Role
 	if ids := m.RoleAssignments(); len(ids) > 0 {
 		var err error
-		if roles, err = f.roles.GetByIDsIncludingDeleted(ctx, tenantID, ids); err != nil {
+		if roles, err = f.roles.GetByIDsIncludingInactive(ctx, tenantID, ids); err != nil {
 			return authority.Member{}, nil, fmt.Errorf("authority facts: load roles: %w", err)
 		}
 	}
@@ -158,7 +158,7 @@ func (f authorityFacts) projectBatch(ctx context.Context, tenantID tenant.ID, ms
 	}
 	byRole := make(map[role.ID]*role.Role, len(roleIDs))
 	if len(roleIDs) > 0 {
-		loaded, err := f.roles.GetByIDsIncludingDeleted(ctx, tenantID, roleIDs)
+		loaded, err := f.roles.GetByIDsIncludingInactive(ctx, tenantID, roleIDs)
 		if err != nil {
 			return nil, fmt.Errorf("authority facts: load roles: %w", err)
 		}
@@ -207,7 +207,7 @@ func (f authorityFacts) memberByID(ctx context.Context, tenantID tenant.ID, id m
 // policy decides what a deleted role may still be used for). role.ErrNotFound
 // when the tenant has no such row.
 func (f authorityFacts) role(ctx context.Context, tenantID tenant.ID, id role.ID) (*role.Role, error) {
-	got, err := f.roles.GetByIDsIncludingDeleted(ctx, tenantID, []role.ID{id})
+	got, err := f.roles.GetByIDsIncludingInactive(ctx, tenantID, []role.ID{id})
 	if err != nil {
 		return nil, fmt.Errorf("authority facts: load role: %w", err)
 	}
@@ -407,7 +407,7 @@ func (f authorityFacts) freshActor(ctx context.Context, tenantID tenant.ID, toke
 	live := make([]*role.Role, 0, len(roles))
 	var viaRoles []string
 	for _, r := range roles {
-		if !r.IsDeleted() {
+		if r.IsActive() {
 			live = append(live, r)
 			viaRoles = append(viaRoles, authority.PermissionNames(r.Permissions())...)
 		}

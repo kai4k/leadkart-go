@@ -63,7 +63,8 @@ type Commands struct {
 	// Role management.
 	CreateRole             command.CreateRoleHandler
 	UpdateRole             command.UpdateRoleHandler
-	DeleteRole             command.DeleteRoleHandler
+	DeactivateRole         command.DeactivateRoleHandler
+	ReactivateRole         command.ReactivateRoleHandler
 	ReplaceRolePermissions command.ReplaceRolePermissionsHandler
 	GrantRolePermission    command.GrantRolePermissionHandler
 	RevokeRolePermission   command.RevokeRolePermissionHandler

@@ -58,7 +58,7 @@ var platformEquivalents = func() map[string][]string {
 	for _, n := range []string{p.Users.Update, p.Users.Deactivate, p.Users.Reactivate, p.Users.Unlock, p.Users.UpdatePermissions} {
 		m[n] = []string{p.Platform.UsersManage}
 	}
-	for _, n := range []string{p.Roles.Create, p.Roles.Update, p.Roles.Delete, p.Roles.Assign, p.Roles.Revoke} {
+	for _, n := range []string{p.Roles.Create, p.Roles.Update, p.Roles.Manage, p.Roles.Assign, p.Roles.Revoke} {
 		m[n] = []string{p.Platform.RolesManage}
 	}
 	return m

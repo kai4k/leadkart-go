@@ -802,7 +802,8 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 
 				CreateRole:             command.NewCreateRoleHandler(tx, authorityLock, memberships, roles, persons, roleHierarchyEdges, now, newRoleID, newRoleHierarchyEdgeID),
 				UpdateRole:             command.NewUpdateRoleHandler(tx, authorityLock, memberships, roles, persons, now),
-				DeleteRole:             command.NewDeleteRoleHandler(tx, authorityLock, memberships, roles, persons, now),
+				DeactivateRole:         command.NewDeactivateRoleHandler(tx, authorityLock, memberships, roles, persons, now),
+				ReactivateRole:         command.NewReactivateRoleHandler(tx, authorityLock, memberships, roles, persons, now),
 				ReplaceRolePermissions: command.NewReplaceRolePermissionsHandler(tx, authorityLock, memberships, roles, persons, now),
 				GrantRolePermission:    command.NewGrantRolePermissionHandler(tx, authorityLock, memberships, roles, persons, now),
 				RevokeRolePermission:   command.NewRevokeRolePermissionHandler(tx, authorityLock, memberships, roles, persons, now),

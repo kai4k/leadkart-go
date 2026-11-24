@@ -14,7 +14,7 @@ import (
 const getRoleByID = `-- name: GetRoleByID :one
 SELECT id, tenant_id, name, is_system_default, is_super_admin,
        hierarchy_level, permissions, created_at,
-       is_deleted, deleted_at, deleted_by, created_by_membership_id
+       created_by_membership_id, is_active
 FROM   identity.roles
 WHERE  id = $1
 `
@@ -31,10 +31,8 @@ func (q *Queries) GetRoleByID(ctx context.Context, id pgtype.UUID) (IdentityRole
 		&i.HierarchyLevel,
 		&i.Permissions,
 		&i.CreatedAt,
-		&i.IsDeleted,
-		&i.DeletedAt,
-		&i.DeletedBy,
 		&i.CreatedByMembershipID,
+		&i.IsActive,
 	)
 	return i, err
 }
@@ -42,11 +40,10 @@ func (q *Queries) GetRoleByID(ctx context.Context, id pgtype.UUID) (IdentityRole
 const getRoleByTenantAndName = `-- name: GetRoleByTenantAndName :one
 SELECT id, tenant_id, name, is_system_default, is_super_admin,
        hierarchy_level, permissions, created_at,
-       is_deleted, deleted_at, deleted_by, created_by_membership_id
+       created_by_membership_id, is_active
 FROM   identity.roles
 WHERE  tenant_id = $1
   AND  name      = $2
-  AND  NOT is_deleted
 `
 
 type GetRoleByTenantAndNameParams struct {
@@ -55,7 +52,8 @@ type GetRoleByTenantAndNameParams struct {
 }
 
 // Used by DefaultRoleCatalog seeding (Task 19) to detect re-seeds and
-// by RoleRepository for "lookup-by-name" admin flows. Live rows only.
+// by RoleRepository for "lookup-by-name" admin flows. Any status: a role name is held by
+// inactive roles too (ADR 0073).
 func (q *Queries) GetRoleByTenantAndName(ctx context.Context, arg GetRoleByTenantAndNameParams) (IdentityRole, error) {
 	row := q.db.QueryRow(ctx, getRoleByTenantAndName, arg.TenantID, arg.Name)
 	var i IdentityRole
@@ -68,10 +66,8 @@ func (q *Queries) GetRoleByTenantAndName(ctx context.Context, arg GetRoleByTenan
 		&i.HierarchyLevel,
 		&i.Permissions,
 		&i.CreatedAt,
-		&i.IsDeleted,
-		&i.DeletedAt,
-		&i.DeletedBy,
 		&i.CreatedByMembershipID,
+		&i.IsActive,
 	)
 	return i, err
 }
@@ -79,15 +75,16 @@ func (q *Queries) GetRoleByTenantAndName(ctx context.Context, arg GetRoleByTenan
 const getRolesByIDs = `-- name: GetRolesByIDs :many
 SELECT id, tenant_id, name, is_system_default, is_super_admin,
        hierarchy_level, permissions, created_at,
-       is_deleted, deleted_at, deleted_by, created_by_membership_id
+       created_by_membership_id, is_active
 FROM   identity.roles
 WHERE  id = ANY($1::uuid[])
-  AND  NOT is_deleted
+  AND  is_active
 `
 
 // Bulk load for the PermissionResolver (Task 21) — given a Membership's
 // RoleAssignments, hydrate each Role's permission set in one query.
-// RLS still applies; cross-tenant lookups must run under platform.
+// ACTIVE roles only: an inactive role confers nothing. RLS still applies; cross-tenant
+// lookups must run under platform.
 func (q *Queries) GetRolesByIDs(ctx context.Context, dollar_1 []pgtype.UUID) ([]IdentityRole, error) {
 	rows, err := q.db.Query(ctx, getRolesByIDs, dollar_1)
 	if err != nil {
@@ -106,10 +103,8 @@ func (q *Queries) GetRolesByIDs(ctx context.Context, dollar_1 []pgtype.UUID) ([]
 			&i.HierarchyLevel,
 			&i.Permissions,
 			&i.CreatedAt,
-			&i.IsDeleted,
-			&i.DeletedAt,
-			&i.DeletedBy,
 			&i.CreatedByMembershipID,
+			&i.IsActive,
 		); err != nil {
 			return nil, err
 		}
@@ -121,20 +116,20 @@ func (q *Queries) GetRolesByIDs(ctx context.Context, dollar_1 []pgtype.UUID) ([]
 	return items, nil
 }
 
-const getRolesByIDsIncludingDeleted = `-- name: GetRolesByIDsIncludingDeleted :many
+const getRolesByIDsIncludingInactive = `-- name: GetRolesByIDsIncludingInactive :many
 SELECT id, tenant_id, name, is_system_default, is_super_admin,
        hierarchy_level, permissions, created_at,
-       is_deleted, deleted_at, deleted_by, created_by_membership_id
+       created_by_membership_id, is_active
 FROM   identity.roles
 WHERE  id = ANY($1::uuid[])
 `
 
 // Authority facts (ADR 0069): the roles a membership is assigned INCLUDING
-// soft-deleted ones. A deleted role confers nothing but must still be present
+// inactive ones. An inactive role confers nothing but must still be present
 // in the loaded set, so a partial load cannot make a member look weaker than
 // it is. Authority use only; every other reader uses GetRolesByIDs.
-func (q *Queries) GetRolesByIDsIncludingDeleted(ctx context.Context, dollar_1 []pgtype.UUID) ([]IdentityRole, error) {
-	rows, err := q.db.Query(ctx, getRolesByIDsIncludingDeleted, dollar_1)
+func (q *Queries) GetRolesByIDsIncludingInactive(ctx context.Context, dollar_1 []pgtype.UUID) ([]IdentityRole, error) {
+	rows, err := q.db.Query(ctx, getRolesByIDsIncludingInactive, dollar_1)
 	if err != nil {
 		return nil, err
 	}
@@ -151,10 +146,8 @@ func (q *Queries) GetRolesByIDsIncludingDeleted(ctx context.Context, dollar_1 []
 			&i.HierarchyLevel,
 			&i.Permissions,
 			&i.CreatedAt,
-			&i.IsDeleted,
-			&i.DeletedAt,
-			&i.DeletedBy,
 			&i.CreatedByMembershipID,
+			&i.IsActive,
 		); err != nil {
 			return nil, err
 		}
@@ -212,14 +205,14 @@ func (q *Queries) InsertRole(ctx context.Context, arg InsertRoleParams) error {
 const listRolesByTenant = `-- name: ListRolesByTenant :many
 SELECT id, tenant_id, name, is_system_default, is_super_admin,
        hierarchy_level, permissions, created_at,
-       is_deleted, deleted_at, deleted_by, created_by_membership_id
+       created_by_membership_id, is_active
 FROM   identity.roles
 WHERE  tenant_id  = $1
-  AND  NOT is_deleted
 ORDER  BY hierarchy_level, name
 `
 
-// Live (non-deleted) catalog for the current tenant. RLS scopes to the
+// The whole catalog of the current tenant, active and inactive roles (the query handler
+// filters by status and counts). Nothing is deleted (ADR 0073). RLS scopes to the
 // bound tenant_id GUC; passing $1 is belt-and-suspenders for explicit
 // intent + platform-bypass paths that want a specific tenant.
 func (q *Queries) ListRolesByTenant(ctx context.Context, tenantID pgtype.UUID) ([]IdentityRole, error) {
@@ -240,10 +233,8 @@ func (q *Queries) ListRolesByTenant(ctx context.Context, tenantID pgtype.UUID) (
 			&i.HierarchyLevel,
 			&i.Permissions,
 			&i.CreatedAt,
-			&i.IsDeleted,
-			&i.DeletedAt,
-			&i.DeletedBy,
 			&i.CreatedByMembershipID,
+			&i.IsActive,
 		); err != nil {
 			return nil, err
 		}
@@ -255,33 +246,12 @@ func (q *Queries) ListRolesByTenant(ctx context.Context, tenantID pgtype.UUID) (
 	return items, nil
 }
 
-const softDeleteRole = `-- name: SoftDeleteRole :exec
-UPDATE identity.roles
-SET    is_deleted = true,
-       deleted_at = $2,
-       deleted_by = $3
-WHERE  id = $1
-`
-
-type SoftDeleteRoleParams struct {
-	ID        pgtype.UUID
-	DeletedAt pgtype.Timestamptz
-	DeletedBy *string
-}
-
-// One-way soft-delete. Filtered out by every other query via
-// "AND NOT is_deleted" predicate; the partial unique index on
-// (tenant_id, name) WHERE NOT is_deleted releases the name for reuse.
-func (q *Queries) SoftDeleteRole(ctx context.Context, arg SoftDeleteRoleParams) error {
-	_, err := q.db.Exec(ctx, softDeleteRole, arg.ID, arg.DeletedAt, arg.DeletedBy)
-	return err
-}
-
 const updateRole = `-- name: UpdateRole :exec
 UPDATE identity.roles
 SET    name            = $2,
        hierarchy_level = $3,
-       permissions     = $4
+       permissions     = $4,
+       is_active       = $5
 WHERE  id = $1
 `
 
@@ -290,18 +260,19 @@ type UpdateRoleParams struct {
 	Name           string
 	HierarchyLevel int32
 	Permissions    []byte
+	IsActive       bool
 }
 
-// Persists the mutable Role state — name, hierarchy_level, permissions
+// Persists the mutable Role state — name, hierarchy_level, permissions, is_active
 // — under the UpdateFn pattern (Task 17). is_system_default +
-// is_super_admin + tenant_id + created_at are aggregate-immutable;
-// soft-delete uses SoftDeleteRole below.
+// is_super_admin + tenant_id + created_at are aggregate-immutable.
 func (q *Queries) UpdateRole(ctx context.Context, arg UpdateRoleParams) error {
 	_, err := q.db.Exec(ctx, updateRole,
 		arg.ID,
 		arg.Name,
 		arg.HierarchyLevel,
 		arg.Permissions,
+		arg.IsActive,
 	)
 	return err
 }

@@ -113,7 +113,6 @@ var authorityWritePins = map[string]writePin{
 	"membership.UpdateByID user_authz.go:RevokeUserRoleHandler.Handle":                       {"revokes a role: same shape as assign; decided by MayRevokeRole under the lock", true},
 	"membership.UpdateByID user_authz.go:AssignUserManagerHandler.Handle":                    {"sets a manager: loads the proposed manager and walks its chain before the row; decided by MayReplaceManager under the lock", true},
 	"membership.UpdateByID permission_request.go:ApprovePermissionRequestHandler.Handle":     {"writes the approved grant on the requester's row inside the approval's locked transaction", true},
-	"membership.UpdateByID role_management.go:DeleteRoleHandler.Handle":                      {"removes a deleted role from its INACTIVE holders inside updateRole (an active holder refuses the delete)", true},
 	"membership.UpdateByID register_tenant.go:RegisterTenantHandler.seedRolesAndAssignOwner": {"the first Company Owner of a brand-new tenant: no other member, no actor, nothing to decide", false},
 	"unresolved register_tenant.go:RegisterTenantHandler.seedRolesAndAssignOwner":            {"passes the roles repository to seed.ApplyDefaultRoles (identity/app/seed), whose own write is the pinned seeding of a brand-new tenant's default roles", false},
 	"membership.Add register_tenant.go:RegisterTenantHandler.createMembership":               {"the first member of a brand-new tenant: no actor, carries no roles (the owner role is assigned in seedRolesAndAssignOwner)", false},

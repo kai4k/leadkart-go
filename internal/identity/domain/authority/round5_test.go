@@ -73,7 +73,7 @@ func TestRoleEdits_ActOnEveryActiveHolder(t *testing.T) {
 			"grant":   a.MayGrantRolePermission(w.c, perm, h),
 			"revoke":  a.MayRevokeRolePermission(w.c, perm, h),
 			"replace": a.MayReplaceRolePermissions(w.c, nil, h),
-			"delete":  a.MayDeleteRole(w.c, h),
+			"delete":  a.MayChangeRoleStatus(w.c, h),
 			"relevel": a.MayEditRole(w.c, 40, h),
 		}
 	}
@@ -284,7 +284,7 @@ func TestApprove_AdminMustHoldList(t *testing.T) {
 	requester := mkMember(t, 18, tA, true, "", userR)
 	admin := mkMember(t, 13, tA, true, "", adminR)
 	mustHold := []string{
-		p.Roles.Create, p.Roles.Update, p.Roles.Delete, p.Roles.Assign, p.Roles.Revoke, p.Roles.Approve,
+		p.Roles.Create, p.Roles.Update, p.Roles.Manage, p.Roles.Assign, p.Roles.Revoke, p.Roles.Approve,
 		p.Users.UpdatePermissions,
 		p.Tenants.Update, p.Tenants.UpdateSettings, p.PlatformMarketplace.Purchase, p.Orders.Payments.Record,
 		p.Meta.RequestPermissionElevation, p.Users.View, p.Roles.View, p.Tenants.View,

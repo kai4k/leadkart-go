@@ -336,7 +336,7 @@ func (h GetUserOverridesHandler) Handle(ctx context.Context, q GetUserOverridesQ
 	}
 	var roles []*role.Role
 	if ids := m.RoleAssignments(); len(ids) > 0 {
-		if roles, err = h.roles.GetByIDsIncludingDeleted(ctx, q.TenantID, ids); err != nil {
+		if roles, err = h.roles.GetByIDsIncludingInactive(ctx, q.TenantID, ids); err != nil {
 			return UserOverridesView{}, fmt.Errorf("get_user_overrides: load roles: %w", err)
 		}
 	}

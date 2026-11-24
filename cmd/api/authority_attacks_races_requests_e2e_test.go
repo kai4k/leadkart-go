@@ -141,18 +141,18 @@ func TestAttack_Races_RolesAgainstTheirHoldersAndLinks(t *testing.T) {
 	norole := w.mid(t, "norole")
 
 	// arch-test:serial — the races share one world; each runs its rounds to completion first.
-	t.Run("delete a role vs assign it", func(t *testing.T) {
+	t.Run("deactivate a role vs assign it", func(t *testing.T) {
 		for round := range raceRounds {
 			id := f.customRole(t, ownTok, "Delete Race "+string(rune('a'+round)), 60)
 			res := w.raceOnce(t,
-				w.call(http.MethodDelete, "/api/v1/roles/"+id, ownTok, nil),
+				w.call(http.MethodPost, "/api/v1/roles/"+id+"/deactivate", ownTok, nil),
 				w.call(http.MethodPost, "/api/v1/users/"+norole+"/roles", w.tok(t, "admin"), ports.AssignUserRoleRequest{RoleID: id}))
-			onlyStatuses(t, "delete", res[0], http.StatusNoContent, http.StatusConflict)
+			onlyStatuses(t, "deactivate", res[0], http.StatusOK, http.StatusConflict)
 			onlyStatuses(t, "assign", res[1], http.StatusNoContent, http.StatusNotFound, http.StatusConflict)
-			if res[0].status == http.StatusNoContent && res[1].status == http.StatusNoContent {
-				t.Errorf("round %d: the role was deleted AND assigned", round)
+			if res[0].status == http.StatusOK && res[1].status == http.StatusNoContent {
+				t.Errorf("round %d: the role was deactivated AND assigned", round)
 			}
-			w.checkInvariants(t, "delete vs assign") // no member may hold a role that no longer exists
+			w.checkInvariants(t, "deactivate vs assign") // no active member may hold an inactive role
 			if u := f.getUser(t, ownTok, norole); slices.Contains(u.RoleIDs, id) {
 				if r := f.authedJSON(t, http.MethodDelete, "/api/v1/users/"+norole+"/roles/"+id, ownTok, nil); r.status != http.StatusNoContent {
 					t.Fatalf("round %d: clean up the holder: %d %s", round, r.status, r.body)

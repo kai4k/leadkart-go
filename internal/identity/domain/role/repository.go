@@ -11,12 +11,12 @@ import (
 // ----- Sentinel errors ------------------------------------------------------
 
 // ErrNotFound is returned by [Repository.GetByID] / [Repository.GetByTenantAndName]
-// when no live (non-deleted) row matches the supplied identifier.
+// when no row of the tenant matches the supplied identifier.
 var ErrNotFound = errs.New(errs.KindNotFound, "role", "role not found")
 
 // ErrNameTaken is returned by [Repository.Add] when a Role with the
-// same (tenant_id, name) already exists. The DB-level partial unique
-// index `uq_roles_tenant_name WHERE NOT is_deleted` raises 23505;
+// same (tenant_id, name) already exists, inactive or not. The DB-level unique
+// index `uq_roles_tenant_name` raises 23505;
 // repos translate via [pg.SQLStateUniqueViolation] mapping.
 var ErrNameTaken = errs.New(errs.KindAlreadyExists, "role", "role name already taken in this tenant")
 
@@ -41,7 +41,7 @@ type Repository interface {
 	// aggregate's PullEvents are drained inside the same transaction
 	// and appended to the outbox table per ADR 0004 + ADR 0008.
 	//
-	// Returns [ErrNameTaken] if a live Role with the same (tenant_id,
+	// Returns [ErrNameTaken] if a Role (active or inactive) with the same (tenant_id,
 	// name) already exists. SQLSTATE 23505 from the partial unique
 	// index is translated by the adapter.
 	Add(ctx context.Context, r *Role) error
@@ -53,33 +53,33 @@ type Repository interface {
 	// updateFn returns (true, nil) to commit; (false, nil) to abort
 	// without changes; (_, err) to roll back.
 	//
-	// Returns [ErrNotFound] if the role doesn't exist in the tenant
-	// or is soft-deleted.
+	// Returns [ErrNotFound] if the role doesn't exist in the tenant. An INACTIVE
+	// role is loaded too (it can be reactivated; its mutators refuse, ADR 0073).
 	UpdateByID(ctx context.Context, tenantID tenant.ID, id ID, updateFn func(*Role) (bool, error)) error
 
-	// GetByID returns the role from the supplied tenant or [ErrNotFound].
-	// Soft-deleted roles are NOT returned.
+	// GetByID returns the role from the supplied tenant, active or inactive,
+	// or [ErrNotFound].
 	GetByID(ctx context.Context, tenantID tenant.ID, id ID) (*Role, error)
 
-	// GetByTenantAndName returns the live role with the given name
+	// GetByTenantAndName returns the role (any status) with the given name
 	// in the given tenant, or [ErrNotFound]. Used by [DefaultRoleCatalog]
 	// seeding (Task 19) for re-seed detection + admin "lookup-by-name".
 	GetByTenantAndName(ctx context.Context, tenantID tenant.ID, name string) (*Role, error)
 
 	// GetByIDs hydrates a batch of roles in one query, scoped to the
 	// supplied tenant. Used by the PermissionResolver when computing a
-	// Membership's effective permission set. Soft-deleted roles + IDs
-	// outside the tenant are silently dropped.
+	// Membership's effective permission set. INACTIVE roles + IDs
+	// outside the tenant are silently dropped: an inactive role confers nothing.
 	GetByIDs(ctx context.Context, tenantID tenant.ID, ids []ID) ([]*Role, error)
 
-	// GetByIDsIncludingDeleted is GetByIDs without the soft-delete filter.
+	// GetByIDsIncludingInactive is GetByIDs without the active filter.
 	// Authority decisions only (ADR 0069): a membership's assigned roles must
-	// be loaded COMPLETE, deleted ones included, because a deleted role
+	// be loaded COMPLETE, inactive ones included, because an inactive role
 	// confers nothing but a partial set would make the member look weaker
 	// than it is. IDs outside the tenant are still silently dropped.
-	GetByIDsIncludingDeleted(ctx context.Context, tenantID tenant.ID, ids []ID) ([]*Role, error)
+	GetByIDsIncludingInactive(ctx context.Context, tenantID tenant.ID, ids []ID) ([]*Role, error)
 
-	// ListByTenant returns every live role for the supplied tenant,
+	// ListByTenant returns every role (active and inactive) for the supplied tenant,
 	// ordered by hierarchy_level, name.
 	ListByTenant(ctx context.Context, tenantID tenant.ID) ([]*Role, error)
 }

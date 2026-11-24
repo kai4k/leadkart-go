@@ -186,7 +186,7 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		rolesView := authn.RequirePermission(verifier, stampValidator, p.Roles.View)
 		rolesCreate := authn.RequirePermission(verifier, stampValidator, p.Roles.Create)
 		rolesUpdate := authn.RequirePermission(verifier, stampValidator, p.Roles.Update)
-		rolesDelete := authn.RequirePermission(verifier, stampValidator, p.Roles.Delete)
+		rolesManage := authn.RequirePermission(verifier, stampValidator, p.Roles.Manage)
 		mux.Handle("GET /api/v1/roles", rolesView(handleListRoles(log, a)))
 		mux.Handle("GET /api/v1/roles/{roleId}", rolesView(handleGetRole(log, a)))
 		mux.Handle("POST /api/v1/roles", writable(rolesCreate(handleCreateRole(log, a))))
@@ -201,7 +201,8 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		// in the body clears the parent (role becomes a root).
 		mux.Handle("PATCH /api/v1/roles/{roleId}/parent",
 			writable(rolesUpdate(handleSetRoleParent(log, a))))
-		mux.Handle("DELETE /api/v1/roles/{roleId}", writable(rolesDelete(handleDeleteRole(log, a))))
+		mux.Handle("POST /api/v1/roles/{roleId}/deactivate", writable(rolesManage(handleChangeRoleStatus(log, a, false))))
+		mux.Handle("POST /api/v1/roles/{roleId}/reactivate", writable(rolesManage(handleChangeRoleStatus(log, a, true))))
 
 		// Platform admin — all under /api/v1/platform/... gated on
 		// RequirePlatform per multi-tenancy.md "Platform admin endpoints"

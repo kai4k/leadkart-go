@@ -95,7 +95,9 @@ type rolesPermissions struct {
 	// elevation requests submitted by their direct reports. Platform
 	// operators ALSO satisfy this gate via is_platform=true so they
 	// can approve requests for orphan / root memberships with no manager.
-	View, Create, Update, Delete, Assign, Revoke, Approve string
+	// Manage gates deactivating and reactivating a role (ADR 0073: roles are never deleted); it is
+	// held exactly where identity.roles.manage was.
+	View, Create, Update, Manage, Assign, Revoke, Approve string
 }
 
 // crmLeadsPermissions cover the CRM lead-management surface introduced
@@ -297,7 +299,7 @@ var IdentityPermissions = struct {
 		View:    "identity.roles.view",
 		Create:  "identity.roles.create",
 		Update:  "identity.roles.update",
-		Delete:  "identity.roles.delete",
+		Manage:  "identity.roles.manage",
 		Assign:  "identity.roles.assign",
 		Revoke:  "identity.roles.revoke",
 		Approve: "identity.roles.approve",
@@ -394,7 +396,7 @@ func allNames() []string {
 		p.Users.View, p.Users.Create, p.Users.Update,
 		p.Users.Deactivate, p.Users.Reactivate, p.Users.Unlock,
 		p.Users.UpdatePermissions,
-		p.Roles.View, p.Roles.Create, p.Roles.Update, p.Roles.Delete,
+		p.Roles.View, p.Roles.Create, p.Roles.Update, p.Roles.Manage,
 		p.Roles.Assign, p.Roles.Revoke, p.Roles.Approve,
 
 		// CRM bounded context (ADR 0060).

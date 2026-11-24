@@ -66,17 +66,25 @@ type PermissionRevokedEvent struct {
 
 func (PermissionRevokedEvent) isRoleEvent() {}
 
-// DeletedEvent fires on soft-delete. Subscribers cascade-revoke any
-// active Membership assignments and emit the integration-event V1
-// payload for cross-module reactions (CRM lead-reassignment, etc.).
-type DeletedEvent struct {
-	RoleID    ID
-	TenantID  tenant.ID
-	DeletedBy string
-	At        time.Time
+// DeactivatedEvent fires when a role goes inactive (ADR 0073). By is the caller's person id.
+type DeactivatedEvent struct {
+	RoleID   ID
+	TenantID tenant.ID
+	By       string
+	At       time.Time
 }
 
-func (DeletedEvent) isRoleEvent() {}
+func (DeactivatedEvent) isRoleEvent() {}
+
+// ActivatedEvent fires when an inactive role becomes active again.
+type ActivatedEvent struct {
+	RoleID   ID
+	TenantID tenant.ID
+	By       string
+	At       time.Time
+}
+
+func (ActivatedEvent) isRoleEvent() {}
 
 // Note: ParentChangedEvent was retired in Wave 9.4 (ADR 0058). The
 // rolehierarchy aggregate now owns parent→child relationships +

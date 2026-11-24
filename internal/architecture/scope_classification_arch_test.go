@@ -19,7 +19,6 @@ import (
 // tenant_scope_read_only under a foreign header, which is what keeps an
 // operator's own membership id out of another tenant's rows.
 var scopeWritableRoutes = []string{
-	"DELETE /api/v1/roles/{roleId}",
 	"DELETE /api/v1/users/{userId}/manager",
 	"DELETE /api/v1/users/{userId}/roles/{roleId}",
 	"PATCH /api/v1/roles/{roleId}",
@@ -27,8 +26,10 @@ var scopeWritableRoutes = []string{
 	"PATCH /api/v1/users/{userId}/permission-overrides",
 	"PATCH /api/v1/users/{userId}/profile",
 	"POST /api/v1/roles",
+	"POST /api/v1/roles/{roleId}/deactivate",
 	"POST /api/v1/roles/{roleId}/permissions/grant",
 	"POST /api/v1/roles/{roleId}/permissions/revoke",
+	"POST /api/v1/roles/{roleId}/reactivate",
 	"POST /api/v1/users",
 	"POST /api/v1/users/{userId}/deactivate",
 	"POST /api/v1/users/{userId}/reactivate",

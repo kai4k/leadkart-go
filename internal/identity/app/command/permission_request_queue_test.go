@@ -181,7 +181,7 @@ func TestApproverQueue_RunsInOneTransactionWithBoundedReads(t *testing.T) {
 	if small["members.GetByID"] != 1 || many["members.GetByID"] != 1 || small["members.GetByIDs"] != 1 || many["members.GetByIDs"] != 1 {
 		t.Errorf("membership reads = %d single + %d batch and %d single + %d batch, want the caller once and ONE batch for all requesters", small["members.GetByID"], small["members.GetByIDs"], many["members.GetByID"], many["members.GetByIDs"])
 	}
-	for name, want := range map[string]int{"roles.GetByIDsIncludingDeleted": 2, "persons.GetByIDs": 1, "persons.GetByID": 1} {
+	for name, want := range map[string]int{"roles.GetByIDsIncludingInactive": 2, "persons.GetByIDs": 1, "persons.GetByID": 1} {
 		if small[name] != want || many[name] != want {
 			t.Errorf("%s = %d and %d, want %d (a fixed number: the caller's own read, and one batch read for all requesters)", name, small[name], many[name], want)
 		}

@@ -56,19 +56,19 @@ func TestZeroActorDeniesEveryDecision(t *testing.T) {
 	user := mkMember(t, 18, tA, true, "", userR)
 	var zero authority.Actor
 	for name, err := range map[string]error{
-		"MayActOn":           zero.MayActOn(user),
-		"MayChangeOverrides": zero.MayChangeOverrides(user, authority.Overrides{}),
-		"MayDeactivate":      zero.MayDeactivate(user, nil),
-		"MayDeleteRole":      zero.MayDeleteRole(userR, authority.RoleHolders{}),
-		"MayReplaceManager":  zero.MayReplaceManager(user, owner, nil),
-		"MayClearManager":    zero.MayClearManager(user, nil),
-		"MayAssignRole":      zero.MayAssignRole(user, userR),
-		"MayRevokeRole":      zero.MayRevokeRole(user, userR, nil),
-		"MayCreateRole":      zero.MayCreateRole(tA, 60, nil, nil),
-		"MayEditRole":        zero.MayEditRole(userR, authority.NoLevelChange, authority.RoleHolders{}),
-		"MaySetRoleParent":   zero.MaySetRoleParent(userR, nil),
-		"MayApprove":         zero.MayApprove(user, p.Crm.Leads.Read),
-		"MayDeny":            zero.MayDeny(user),
+		"MayActOn":            zero.MayActOn(user),
+		"MayChangeOverrides":  zero.MayChangeOverrides(user, authority.Overrides{}),
+		"MayDeactivate":       zero.MayDeactivate(user, nil),
+		"MayChangeRoleStatus": zero.MayChangeRoleStatus(userR, authority.RoleHolders{}),
+		"MayReplaceManager":   zero.MayReplaceManager(user, owner, nil),
+		"MayClearManager":     zero.MayClearManager(user, nil),
+		"MayAssignRole":       zero.MayAssignRole(user, userR),
+		"MayRevokeRole":       zero.MayRevokeRole(user, userR, nil),
+		"MayCreateRole":       zero.MayCreateRole(tA, 60, nil, nil),
+		"MayEditRole":         zero.MayEditRole(userR, authority.NoLevelChange, authority.RoleHolders{}),
+		"MaySetRoleParent":    zero.MaySetRoleParent(userR, nil),
+		"MayApprove":          zero.MayApprove(user, p.Crm.Leads.Read),
+		"MayDeny":             zero.MayDeny(user),
 	} {
 		if !errors.Is(err, authority.ErrNoAuthority) {
 			t.Errorf("zero Actor %s = %v, want no authority", name, err)
@@ -126,7 +126,7 @@ func TestMemberOf_RequiresTheFullTenantLocalRoleSet(t *testing.T) {
 	ownerR := mkRole(1, tA, role.SystemRoles.Tenant.CompanyOwner, true, 0, false, p.Meta.TenantAdmin)
 	userR := mkRole(5, tA, role.SystemRoles.Tenant.SalesExecutive, false, 50, false)
 	foreignR := mkRole(6, tB, "Foreign", false, 50, false)
-	deleted := role.UnmarshalFromDB(role.Snapshot{ID: role.ID(uid(7)), TenantID: tA, Name: "Gone", HierarchyLevel: 1, IsDeleted: true, CreatedAt: t0})
+	deleted := role.UnmarshalFromDB(role.Snapshot{ID: role.ID(uid(7)), TenantID: tA, Name: "Gone", HierarchyLevel: 1, CreatedAt: t0})
 	stray := mkRole(8, tA, "Stray", false, 40, false)
 
 	m := mkMembership(11, tA, true, "", ownerR, userR, deleted)

@@ -345,11 +345,9 @@ type IdentityRole struct {
 	HierarchyLevel  int32
 	Permissions     []byte
 	CreatedAt       pgtype.Timestamptz
-	IsDeleted       bool
-	DeletedAt       pgtype.Timestamptz
-	DeletedBy       *string
 	// Audit chain — Membership that created this role. NULL = system-bootstrapped (DefaultRoleCatalog seed, SuperAdmin seed). Wave 1.5 ADR 0027.
 	CreatedByMembershipID pgtype.UUID
+	IsActive              bool
 }
 
 // Membership ↔ Role junction with denormalised tenant_id. Composite FK ensures no cross-tenant role assignment.

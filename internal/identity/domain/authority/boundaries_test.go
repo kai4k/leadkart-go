@@ -190,8 +190,8 @@ func TestMemberOf_IgnoresDeletedRolesForFlagsAndRank(t *testing.T) {
 	p := permission.IdentityPermissions
 	userR := mkRole(1, tA, role.SystemRoles.Tenant.SalesExecutive, false, 50, false)
 	goneOwner := role.UnmarshalFromDB(role.Snapshot{ID: role.ID(uid(2)), TenantID: tA, Name: role.SystemRoles.Tenant.CompanyOwner, IsSystemDefault: true,
-		HierarchyLevel: 0, IsDeleted: true, Permissions: []*permission.Permission{permission.FromConstant(p.Meta.TenantAdmin)}, CreatedAt: t0})
-	goneSuper := role.UnmarshalFromDB(role.Snapshot{ID: role.ID(uid(3)), TenantID: tA, Name: "SuperAdmin", IsSuperAdmin: true, IsDeleted: true, CreatedAt: t0})
+		HierarchyLevel: 0, Permissions: []*permission.Permission{permission.FromConstant(p.Meta.TenantAdmin)}, CreatedAt: t0})
+	goneSuper := role.UnmarshalFromDB(role.Snapshot{ID: role.ID(uid(3)), TenantID: tA, Name: "SuperAdmin", IsSuperAdmin: true, CreatedAt: t0})
 	stray := mkRole(4, tA, "Stray", false, 40, false)
 
 	m := mkMembership(11, tA, true, "", userR, goneOwner, goneSuper)

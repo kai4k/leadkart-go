@@ -59,7 +59,7 @@ type holderScope int
 const (
 	// holdersNone: the edit does not act on holders (a rename).
 	holdersNone holderScope = iota
-	// holdersOnly: the holders (permission changes, delete).
+	// holdersOnly: the holders (permission changes, deactivate, reactivate).
 	holdersOnly
 	// holdersAndReporting: the holders and the members linked to them by
 	// reports_to (a re-level).
@@ -69,22 +69,22 @@ const (
 // roleDefinition is what a role confers and where it stands: the part of a role
 // whose change reaches every holder's tokens.
 type roleDefinition struct {
-	level   int
-	perms   string
-	deleted bool
+	level    int
+	perms    string
+	inactive bool
 }
 
 func definitionOf(r *role.Role) roleDefinition {
 	names := authority.PermissionNames(r.Permissions())
 	slices.Sort(names)
-	return roleDefinition{level: r.HierarchyLevel(), perms: strings.Join(names, ","), deleted: r.IsDeleted()}
+	return roleDefinition{level: r.HierarchyLevel(), perms: strings.Join(names, ","), inactive: !r.IsActive()}
 }
 
-// updateRole runs fn (decide, then mutate) on the live role under the lock; a
-// soft-deleted or foreign role is role.ErrNotFound. It is the one path every
+// updateRole runs fn (decide, then mutate) on the role under the lock; a
+// foreign role is role.ErrNotFound (an inactive role is loaded: reactivating it is an edit). It is the one path every
 // role-definition edit takes, so it is also the one place the holders are
 // loaded (once, per scope) and the one place their stamps end: when fn changed
-// what the role confers, its level or its deleted state, every ACTIVE holder's
+// what the role confers, its level or its active state, every ACTIVE holder's
 // security stamp is rotated in the same transaction, so their tokens carrying the
 // old permissions and rank answer 401 stale_token on the next request in any
 // module. A rename-only edit loads no holders and rotates nothing. Cost: the
@@ -409,41 +409,45 @@ func (h RevokeRolePermissionHandler) Handle(ctx context.Context, cmd RevokeRoleP
 	return translateAuthorityWrite("revoke_role_permission", upErr)
 }
 
-// ----- DeleteRole ----------------------------------------------------------
+// ----- Deactivate / Reactivate role (ADR 0073: a role is never deleted) -----
 
-// DeleteRoleCommand soft-deletes a role. DeletedBy is the caller's PersonID
-// (from the JWT Subject claim) — recorded for audit.
-type DeleteRoleCommand struct {
+// ChangeRoleStatusCommand moves a role between active and inactive. ChangedBy is the caller's
+// PersonID (from the JWT Subject claim), recorded for audit.
+type ChangeRoleStatusCommand struct {
 	TenantID  tenant.ID
 	RoleID    role.ID
-	DeletedBy string
+	ChangedBy string
 	// Actor is built once by the port via authn.AuthorityFrom; the zero value denies.
 	Actor authority.Actor
 }
 
-// DeleteRoleHandler runs the delete flow.
-type DeleteRoleHandler struct{ roleWriter }
+// DeactivateRoleHandler runs the deactivate flow.
+type DeactivateRoleHandler struct{ roleWriter }
 
-// NewDeleteRoleHandler wires the handler.
-func NewDeleteRoleHandler(uow pg.UnitOfWork, lock AuthorityLocker, m membership.Repository, r role.Repository, p person.Repository, now func() time.Time) DeleteRoleHandler {
-	return DeleteRoleHandler{roleWriter{newAuthorityWriter("NewDeleteRoleHandler", uow, lock, m, r, p, now)}}
+// NewDeactivateRoleHandler wires the handler.
+func NewDeactivateRoleHandler(uow pg.UnitOfWork, lock AuthorityLocker, m membership.Repository, r role.Repository, p person.Repository, now func() time.Time) DeactivateRoleHandler {
+	return DeactivateRoleHandler{roleWriter{newAuthorityWriter("NewDeactivateRoleHandler", uow, lock, m, r, p, now)}}
 }
 
-// Handle decides [authority.Actor.MayDeleteRole] (authority first), then
-// applies the role-in-use rule: an ACTIVE holder refuses the delete
-// ([RoleInUseError], nothing changes); otherwise the role is deleted and the
-// remaining (inactive members') assignments are revoked in the same
-// transaction, so no membership is left pointing at a deleted role. The
-// authority-facts loader tolerates soft-deleted roles on assigned members
-// only as a backstop for rows that predate this rule.
-func (h DeleteRoleHandler) Handle(ctx context.Context, cmd DeleteRoleCommand) error {
-	if err := validateRoleCommand("delete_role", cmd.TenantID, cmd.RoleID, true, cmd.Actor); err != nil {
+// Handle decides [authority.Actor.MayChangeRoleStatus] (authority first), then applies the
+// role-in-use rule, which is exactly what deleting a role used to enforce: an ACTIVE holder
+// refuses it ([RoleInUseError], nothing changes). Otherwise the role goes inactive. An inactive
+// role confers nothing (every authority read skips it), so deactivating can never leave a member
+// with more than deleting did. The assignments of the INACTIVE holders are kept (nothing is deleted,
+// ADR 0073): if such a member is reactivated while the role is inactive, the role still confers
+// nothing; reactivating the role gives it back (and the actor needed authority over every holder
+// to do it). An inactive role is a no-op (idempotent).
+func (h DeactivateRoleHandler) Handle(ctx context.Context, cmd ChangeRoleStatusCommand) error {
+	if err := validateRoleCommand("deactivate_role", cmd.TenantID, cmd.RoleID, true, cmd.Actor); err != nil {
 		return err
 	}
 	now := h.now()
 	err := h.updateRole(ctx, cmd.TenantID, cmd.RoleID, cmd.Actor, now, holdersOnly, func(actor authority.Actor, r *role.Role, holders loadedHolders) error {
-		if err := actor.MayDeleteRole(r, holders.set); err != nil {
+		if err := actor.MayChangeRoleStatus(r, holders.set); err != nil {
 			return err
+		}
+		if !r.IsActive() {
+			return nil
 		}
 		active := 0
 		for _, m := range holders.memberships {
@@ -454,16 +458,36 @@ func (h DeleteRoleHandler) Handle(ctx context.Context, cmd DeleteRoleCommand) er
 		if active > 0 {
 			return &RoleInUseError{ActiveHolders: active}
 		}
-		for _, m := range holders.memberships {
-			if err := h.facts.memberships.UpdateByID(ctx, cmd.TenantID, m.ID(), func(held *membership.Membership) (bool, error) {
-				return true, held.RevokeRole(cmd.RoleID, now)
-			}); err != nil {
-				return fmt.Errorf("revoke deleted role from %s: %w", m.ID(), err)
-			}
-		}
-		return r.Delete(cmd.DeletedBy, now)
+		return r.Deactivate(cmd.ChangedBy, now)
 	})
-	return translateAuthorityWrite("delete_role", err)
+	return translateAuthorityWrite("deactivate_role", err)
+}
+
+// ReactivateRoleHandler runs the reactivate flow.
+type ReactivateRoleHandler struct{ roleWriter }
+
+// NewReactivateRoleHandler wires the handler.
+func NewReactivateRoleHandler(uow pg.UnitOfWork, lock AuthorityLocker, m membership.Repository, r role.Repository, p person.Repository, now func() time.Time) ReactivateRoleHandler {
+	return ReactivateRoleHandler{roleWriter{newAuthorityWriter("NewReactivateRoleHandler", uow, lock, m, r, p, now)}}
+}
+
+// Handle decides [authority.Actor.MayChangeRoleStatus] over the role and every holder it has
+// (reactivating gives the role's permissions back to all of them, so it needs the same authority
+// as deactivating), then makes the role active. Every ACTIVE holder's security stamp rotates in the
+// same transaction (the role definition changed), so their tokens are refreshed. An active role is
+// a no-op (idempotent).
+func (h ReactivateRoleHandler) Handle(ctx context.Context, cmd ChangeRoleStatusCommand) error {
+	if err := validateRoleCommand("reactivate_role", cmd.TenantID, cmd.RoleID, true, cmd.Actor); err != nil {
+		return err
+	}
+	now := h.now()
+	err := h.updateRole(ctx, cmd.TenantID, cmd.RoleID, cmd.Actor, now, holdersOnly, func(actor authority.Actor, r *role.Role, holders loadedHolders) error {
+		if err := actor.MayChangeRoleStatus(r, holders.set); err != nil {
+			return err
+		}
+		return r.Activate(cmd.ChangedBy, now)
+	})
+	return translateAuthorityWrite("reactivate_role", err)
 }
 
 // ----- SetRoleParent (ADR 0058 — Wave 9.4) ----------------------------------
@@ -522,8 +546,8 @@ func (h SetRoleParentHandler) Handle(ctx context.Context, cmd SetRoleParentComma
 		if err != nil {
 			return err
 		}
-		if child.IsDeleted() {
-			return role.ErrNotFound
+		if !child.IsActive() {
+			return role.ErrInactive
 		}
 		var parent *role.Role
 		if !cmd.NewParentID.IsZero() {

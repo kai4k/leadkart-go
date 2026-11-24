@@ -69,7 +69,7 @@ func atkRoutePerms() []string {
 	p := permission.IdentityPermissions
 	return []string{
 		p.Users.View, p.Users.Update, p.Users.Deactivate, p.Users.Reactivate, p.Users.UpdatePermissions,
-		p.Roles.View, p.Roles.Create, p.Roles.Update, p.Roles.Delete, p.Roles.Assign, p.Roles.Revoke, p.Roles.Approve,
+		p.Roles.View, p.Roles.Create, p.Roles.Update, p.Roles.Manage, p.Roles.Assign, p.Roles.Revoke, p.Roles.Approve,
 	}
 }
 

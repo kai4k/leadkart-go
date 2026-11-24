@@ -19,18 +19,19 @@
 //   - JSONB permission-list round-trip via Postgres driver (Add → GetByID
 //     hydrates Permissions intact).
 //   - SQLSTATE 23505 → role.ErrNameTaken translation via the partial
-//     unique index uq_roles_tenant_name WHERE NOT is_deleted.
+//     unique index uq_roles_tenant_name (inactive roles keep their name).
 //   - RLS policy enforcement — cross-tenant reads return ErrNotFound
 //     even when the row exists; GetByIDs filters cross-tenant IDs.
-//   - Soft-delete partial-index semantics — soft-deleted roles vanish
-//     from GetByID under the live `WHERE NOT is_deleted` filter.
+//   - Inactive-not-deleted semantics (ADR 0073) — an inactive role stays
+//     readable (GetByID, ListByTenant, GetByIDsIncludingInactive) but the
+//     resolver read GetByIDs drops it (`AND is_active`): it confers nothing.
 //   - pgx ROLLBACK on UpdateByID closure error (real tx rollback, not
 //     fake in-memory revert).
 //
-// arch-test:raw-sql-justified — TestRoleRepository_UpdateByID_Delete_
-//   PersistsSoftDeleteAndHidesFromGetByID intentionally bypasses the
+// arch-test:raw-sql-justified — TestRoleRepository_UpdateByID_Deactivate_
+//   KeepsTheRowAndDropsItFromTheResolverRead intentionally bypasses the
 //   adapter with a direct SELECT to assert the PHYSICAL row state
-//   (`is_deleted=true`) after Delete, proving soft-vs-hard delete at
+//   (`is_active=false`) after Deactivate, proving nothing is deleted at
 //   the SQL layer. Per ADR 0062 §6 canonical SQL-contract test shape
 //   (matches the rolehierarchy soft-delete sharpening in commit
 //   85bb585).
@@ -106,8 +107,8 @@ func TestRoleRepository_Add_PersistsPermissionsJSONBRoundTrip(t *testing.T) {
 	}
 }
 
-// SQL-contract: SQLSTATE 23505 from uq_roles_tenant_name (WHERE NOT
-// is_deleted) is translated to role.ErrNameTaken.
+// SQL-contract: SQLSTATE 23505 from uq_roles_tenant_name is translated to
+// role.ErrNameTaken.
 func TestRoleRepository_Add_ReturnsErrNameTaken_OnDuplicateLiveName(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -188,13 +189,10 @@ func TestRoleRepository_GetByIDs_FiltersCrossTenant(t *testing.T) {
 	}
 }
 
-// SQL-contract: Delete is SOFT-delete (is_deleted flips true); the
-// WHERE NOT is_deleted predicate hides the row from the live read path.
-// Two halves:
-//
-//  1. Physical row survives: adapter-bypass SELECT confirms is_deleted=true.
-//  2. GetByID returns ErrNotFound.
-func TestRoleRepository_UpdateByID_Delete_PersistsSoftDeleteAndHidesFromGetByID(t *testing.T) {
+// SQL-contract (ADR 0073): a role is never deleted. Deactivate flips is_active; the physical row
+// survives and stays readable, but the resolver read (GetByIDs) drops it because an inactive role
+// confers nothing, and its name stays taken. Reactivate undoes all of it.
+func TestRoleRepository_UpdateByID_Deactivate_KeepsTheRowAndDropsItFromTheResolverRead(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
 	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
@@ -208,33 +206,55 @@ func TestRoleRepository_UpdateByID_Delete_PersistsSoftDeleteAndHidesFromGetByID(
 	}
 
 	err := roles.UpdateByID(ctx, tn.ID(), r.ID(), func(loaded *role.Role) (bool, error) {
-		return true, loaded.Delete("admin@example.test", time.Now().UTC())
+		return true, loaded.Deactivate("admin@example.test", time.Now().UTC())
 	})
 	if err != nil {
-		t.Fatalf("UpdateByID delete: %v", err)
+		t.Fatalf("UpdateByID deactivate: %v", err)
 	}
 
-	// Part 1: direct SELECT via OWNER DSN confirms is_deleted=true.
+	// The physical row survives with is_active=false (an owner-DSN read, outside the adapter).
 	ownerDB, openErr := sql.Open("pgx", sharedPG.OwnerDSN())
 	if openErr != nil {
 		t.Fatalf("open owner DB: %v", openErr)
 	}
 	defer func() { _ = ownerDB.Close() }()
-	var isDeleted bool
+	var isActive bool
 	if err := ownerDB.QueryRowContext(t.Context(),
-		`SELECT is_deleted FROM identity.roles WHERE id = $1`,
+		`SELECT is_active FROM identity.roles WHERE id = $1`,
 		r.ID().String(),
-	).Scan(&isDeleted); err != nil {
+	).Scan(&isActive); err != nil {
 		t.Fatalf("direct SELECT for physical row: %v", err)
 	}
-	if !isDeleted {
-		t.Fatal("physical row's is_deleted is false — Delete behaved as hard-delete, contract broken")
+	if isActive {
+		t.Fatal("physical row's is_active is true after Deactivate")
 	}
 
-	// Part 2: WHERE NOT is_deleted hides the row from GetByID.
-	_, err = roles.GetByID(ctx, tn.ID(), r.ID())
-	if !errors.Is(err, role.ErrNotFound) {
-		t.Fatalf("GetByID after delete: got %v want ErrNotFound (partial-index filter)", err)
+	got, err := roles.GetByID(ctx, tn.ID(), r.ID())
+	if err != nil || got.IsActive() {
+		t.Fatalf("GetByID of an inactive role: %v active=%v, want it returned inactive", err, got != nil && got.IsActive())
+	}
+	if all, err := roles.ListByTenant(ctx, tn.ID()); err != nil || len(all) != 1 || all[0].IsActive() {
+		t.Fatalf("ListByTenant: %v %d rows, want the inactive role listed", err, len(all))
+	}
+	if kept, err := roles.GetByIDsIncludingInactive(ctx, tn.ID(), []role.ID{r.ID()}); err != nil || len(kept) != 1 {
+		t.Fatalf("GetByIDsIncludingInactive: %v %d rows, want 1", err, len(kept))
+	}
+	// SECURITY: the resolver read never returns an inactive role, so it confers nothing.
+	if live, err := roles.GetByIDs(ctx, tn.ID(), []role.ID{r.ID()}); err != nil || len(live) != 0 {
+		t.Fatalf("GetByIDs of an inactive role: %v %d rows, want 0", err, len(live))
+	}
+	// The name stays taken: a role is never deleted, so its name is not freed.
+	if err := roles.Add(ctx, newRole(t, tn.ID(), "Sales")); !errors.Is(err, role.ErrNameTaken) {
+		t.Fatalf("Add with an inactive role's name: %v, want ErrNameTaken", err)
+	}
+
+	if err := roles.UpdateByID(ctx, tn.ID(), r.ID(), func(loaded *role.Role) (bool, error) {
+		return true, loaded.Activate("admin@example.test", time.Now().UTC())
+	}); err != nil {
+		t.Fatalf("UpdateByID activate: %v", err)
+	}
+	if live, err := roles.GetByIDs(ctx, tn.ID(), []role.ID{r.ID()}); err != nil || len(live) != 1 {
+		t.Fatalf("GetByIDs after reactivation: %v %d rows, want 1", err, len(live))
 	}
 }
 

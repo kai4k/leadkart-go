@@ -49,10 +49,10 @@ func writeAuthorityError(w http.ResponseWriter, err error) bool {
 		writeError(w, http.StatusUnprocessableEntity, ErrCodeRoleParentNotEligible, "a parent role must be more senior than its child")
 	case errors.Is(err, role.ErrSystemDefault):
 		writeError(w, http.StatusConflict, ErrCodeRoleSystemDefault, "system-default roles cannot be changed")
-	case errors.Is(err, role.ErrDeleted):
-		// Every command answers a deleted role with role.ErrNotFound before the policy sees it;
-		// this is the same 404 for a deleted role that gets through anyway.
-		writeError(w, http.StatusNotFound, ErrCodeRoleNotFound, "")
+	case errors.Is(err, role.ErrInactive):
+		// An inactive role is readable but confers nothing, takes no holder and cannot be edited
+		// (ADR 0073); reactivate it first.
+		writeError(w, http.StatusConflict, ErrCodeRoleInactive, "the role is inactive; reactivate it first")
 	default:
 		return false
 	}

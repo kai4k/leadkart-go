@@ -13,7 +13,7 @@ JOIN   identity.role_assignments ra
    AND ra.tenant_id     = m.tenant_id
 JOIN   identity.roles r
     ON r.id = ra.role_id
-   AND NOT r.is_deleted
+   AND r.is_active
 WHERE  m.tenant_id = $1
 AND    m.status    = 'active'
 AND    (r.is_super_admin OR jsonb_exists_any(r.permissions, sqlc.arg(permissions)::text[]))

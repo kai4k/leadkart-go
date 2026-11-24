@@ -95,14 +95,16 @@ func userByID(users []ports.UserDto, id string) (ports.UserDto, bool) {
 func (w *attackWorld) checkInvariants(t *testing.T, when string) {
 	t.Helper()
 	users := w.listUsers(t, w.tok(t, "office"))
-	rr := w.f.authedJSON(t, http.MethodGet, "/api/v1/roles", w.tok(t, "office"), nil)
+	rr := w.f.authedJSON(t, http.MethodGet, "/api/v1/roles?status=all", w.tok(t, "office"), nil)
 	var roles ports.ListRolesResponse
 	if rr.status != http.StatusOK || json.Unmarshal(rr.body, &roles) != nil {
 		t.Fatalf("%s: list roles: %d %s", when, rr.status, rr.body)
 	}
 	level := map[string]int{}
+	inactive := map[string]bool{}
 	for _, r := range roles.Roles {
 		level[r.ID] = r.HierarchyLevel
+		inactive[r.ID] = !r.IsActive
 	}
 	rank := func(u ports.UserDto) int {
 		best := 99
@@ -118,6 +120,11 @@ func (w *attackWorld) checkInvariants(t *testing.T, when string) {
 		for _, id := range u.RoleIDs {
 			if _, ok := level[id]; !ok {
 				t.Errorf("%s: member %s holds role %s, which no longer exists", when, u.MembershipID, id)
+			}
+			// ADR 0073: a role goes inactive only with no active holder, and an inactive role takes
+			// no new holder, so an ACTIVE member never holds an inactive role through a race.
+			if inactive[id] && u.Status == "active" {
+				t.Errorf("%s: active member %s holds the inactive role %s", when, u.MembershipID, id)
 			}
 		}
 		if u.Status == "active" && slices.Contains(u.RoleIDs, w.roles[role.SystemRoles.Tenant.CompanyOwner]) {

@@ -179,8 +179,8 @@ func (a Actor) MayAssignRole(t Member, r *role.Role) error {
 	if err := a.mayTouchRole(t, r); err != nil {
 		return err
 	}
-	if r.IsDeleted() {
-		return fmt.Errorf("%w: %s", role.ErrDeleted, r.Name())
+	if !r.IsActive() {
+		return fmt.Errorf("%w: %s", role.ErrInactive, r.Name())
 	}
 	names := PermissionNames(r.Permissions())
 	if err := roleMayContain(r, names); err != nil {
@@ -200,7 +200,7 @@ func (a Actor) MayRevokeRole(t Member, r *role.Role, owners []Member) error {
 	if err := a.mayTouchRole(t, r); err != nil {
 		return err
 	}
-	if !r.IsDeleted() {
+	if r.IsActive() {
 		if err := a.mayChangePermissions(t.tenantID, PermissionNames(r.Permissions())); err != nil {
 			return err
 		}
@@ -501,7 +501,7 @@ func (a Actor) MayCreateRole(tenantID tenant.ID, level int, perms []string, pare
 
 // parentEligible: a parent role is live and strictly more senior than the child level.
 func parentEligible(parent *role.Role, childLevel Rank) error {
-	if parent.IsDeleted() {
+	if !parent.IsActive() {
 		return fmt.Errorf("%w: parent role %q is deleted", ErrRoleParentNotEligible, parent.Name())
 	}
 	if levelOf(parent) >= childLevel {
@@ -719,11 +719,13 @@ func (a Actor) MayRevokeRolePermission(r *role.Role, name string, holders RoleHo
 	return a.mayChangeRoleFor(holders)
 }
 
-// MayDeleteRole — H3/H6: mayMutateRole + the ceiling over the role's own
-// permissions, because deleting removes every one of them from every holder, +
-// the holders rule (answered before the role-in-use rule, so a caller who may
-// not act on the holders learns nothing about them).
-func (a Actor) MayDeleteRole(r *role.Role, holders RoleHolders) error {
+// MayChangeRoleStatus — H3/H6: mayMutateRole + the ceiling over the role's own
+// permissions, because deactivating removes every one of them from every holder and
+// reactivating gives every one of them back, + the holders rule (answered before the
+// role-in-use rule, so a caller who may not act on the holders learns nothing about
+// them). The one decision for deactivate and reactivate: a role is never deleted
+// (ADR 0073), and this is exactly what deleting one used to ask.
+func (a Actor) MayChangeRoleStatus(r *role.Role, holders RoleHolders) error {
 	if err := a.mayMutateRole(r, NoLevelChange); err != nil {
 		return err
 	}
@@ -844,7 +846,7 @@ func (a Actor) mayUnlinkManager(sub, current Member) error {
 var adminMustHold = func() map[string]struct{} {
 	p := permission.IdentityPermissions
 	names := []string{
-		p.Roles.Create, p.Roles.Update, p.Roles.Delete, p.Roles.Assign, p.Roles.Revoke, p.Roles.Approve,
+		p.Roles.Create, p.Roles.Update, p.Roles.Manage, p.Roles.Assign, p.Roles.Revoke, p.Roles.Approve,
 		p.Users.UpdatePermissions,
 		p.Tenants.Update, p.Tenants.UpdateSettings,
 		p.PlatformMarketplace.Purchase, p.Orders.Payments.Record,

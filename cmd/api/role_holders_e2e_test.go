@@ -61,7 +61,7 @@ func TestE2E_RoleEdits_ActOnEveryHolder(t *testing.T) {
 
 	m1 := f.createMember(t, owner, "m1")
 	f.assignRole(t, owner.AccessToken, m1.membershipID, roleID(role.SystemRoles.Tenant.SalesManager))
-	f.grantOverrides(t, owner.AccessToken, m1.membershipID, []string{p.Roles.Update, p.Roles.Delete, perm}, nil)
+	f.grantOverrides(t, owner.AccessToken, m1.membershipID, []string{p.Roles.Update, p.Roles.Manage, perm}, nil)
 	m2 := f.createMember(t, owner, "m2")
 	f.assignRole(t, owner.AccessToken, m2.membershipID, roleID(role.SystemRoles.Tenant.SalesManager))
 	custom := f.customRole(t, owner.AccessToken, "Shared custom", 30)
@@ -93,9 +93,9 @@ func TestE2E_RoleEdits_ActOnEveryHolder(t *testing.T) {
 		}
 	})
 	// arch-test:serial — subtests share one fixture and one tenant.
-	t.Run("delete: authority is answered before role_in_use", func(t *testing.T) {
-		r := f.authedJSON(t, http.MethodDelete, "/api/v1/roles/"+custom, m1Tok, nil)
-		f.wantForbidden(t, "delete a role a peer holds", r, http.StatusForbidden, "insufficient_rank")
+	t.Run("deactivate: authority is answered before role_in_use", func(t *testing.T) {
+		r := f.authedJSON(t, http.MethodPost, "/api/v1/roles/"+custom+"/deactivate", m1Tok, nil)
+		f.wantForbidden(t, "deactivate a role a peer holds", r, http.StatusForbidden, "insufficient_rank")
 	})
 	// arch-test:serial — subtests share one fixture and one tenant.
 	t.Run("re-level: a role a peer holds cannot be re-levelled either", func(t *testing.T) {

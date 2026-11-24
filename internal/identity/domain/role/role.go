@@ -69,9 +69,10 @@ var ErrInvalid = errs.New(errs.KindInvalidInput, "role", "invalid role")
 // are immutable — tenants must clone them to a custom role to mutate.
 var ErrSystemDefault = errors.New("role: cannot mutate system-default role")
 
-// ErrDeleted is returned when a mutation targets an already-deleted
-// role.
-var ErrDeleted = errors.New("role: cannot mutate deleted role")
+// ErrInactive is returned when a mutation (or an assignment) targets an inactive role. A role is
+// made inactive, never deleted (ADR 0073): it stays readable and can be reactivated, but it
+// confers nothing, takes no new holder and cannot be edited while inactive.
+var ErrInactive = errors.New("role: the role is inactive")
 
 // ID is the Role primary key (UUIDv7 string form).
 type ID string
@@ -91,7 +92,7 @@ func (i ID) String() string { return string(i) }
 //   - isSuperAdmin set only by trusted seed code (Platform tenant
 //     SuperAdmin role) — drives JWT `is_super_user` claim per
 //     `multi-tenancy.md` "SuperUser god-mode."
-//   - deleted is one-way; UpdateByID rejects mutations after delete.
+//   - an inactive role confers nothing and rejects mutations; it can be reactivated (ADR 0073).
 //
 // Hierarchy/parent links live in the [rolehierarchy] aggregate per
 // ADR 0058 — they're NOT a property of Role.
@@ -104,9 +105,7 @@ type Role struct {
 	hierarchyLevel  int
 	permissions     []*permission.Permission
 	createdAt       time.Time
-	deleted         bool
-	deletedAt       time.Time
-	deletedBy       string
+	active          bool
 
 	events []Event
 }
@@ -184,6 +183,7 @@ func NewWithPermissions(
 		isSuperAdmin:    isSuperAdmin,
 		hierarchyLevel:  hierarchyLevel,
 		createdAt:       now,
+		active:          true,
 	}
 	r.recordEvent(CreatedEvent{
 		RoleID:          id,
@@ -234,17 +234,10 @@ func (r *Role) HierarchyLevel() int { return r.hierarchyLevel }
 // CreatedAt returns the immutable creation timestamp.
 func (r *Role) CreatedAt() time.Time { return r.createdAt }
 
-// IsDeleted reports whether the Role has been soft-deleted.
-// Live read paths (GetByID / ListByTenant / GetByIDs) filter
-// deleted rows; this getter is for forensic / admin tooling.
-func (r *Role) IsDeleted() bool { return r.deleted }
-
-// DeletedAt returns the soft-delete timestamp; zero if live.
-func (r *Role) DeletedAt() time.Time { return r.deletedAt }
-
-// DeletedBy returns the user identifier that performed the
-// soft-delete; empty if live.
-func (r *Role) DeletedBy() string { return r.deletedBy }
+// IsActive reports whether the Role is active. An INACTIVE role confers nothing (no permission,
+// no rank), cannot be assigned, cannot be a parent and cannot be edited; it stays readable and can
+// be reactivated. Roles are never deleted (ADR 0073).
+func (r *Role) IsActive() bool { return r.active }
 
 // Permissions returns a defensive copy of the role's permission set.
 // Callers that mutate the returned slice will not affect the role
@@ -458,34 +451,37 @@ func (r *Role) ReplacePermissions(target []*permission.Permission, now time.Time
 	return nil
 }
 
-// Delete soft-deletes the role. System-default roles refuse delete.
-// Idempotent — calling Delete on an already-deleted role is a no-op
-// (no event).
+// Deactivate makes the role inactive. System-default roles refuse it. Idempotent: an inactive
+// role is a no-op (no event).
 //
-// CALLER INVARIANT: the application service MUST verify NO Membership
-// holds an active assignment to this role before calling Delete (or
-// must mass-revoke first via the role-assignment subscriber). The
-// domain doesn't reach across aggregates — that's an application-tier
-// concern per Vernon ch.10.
+// CALLER INVARIANT: the application service MUST verify NO active Membership holds this role
+// before calling Deactivate (the domain doesn't reach across aggregates, Vernon ch.10); an
+// inactive role would otherwise strip its holders' permissions.
 //
-// `now` is the explicit soft-delete instant.
-func (r *Role) Delete(deletedBy string, now time.Time) error {
-	if r.deleted {
+// by is the person id recorded for audit; now is the explicit instant.
+func (r *Role) Deactivate(by string, now time.Time) error {
+	if !r.active {
 		return nil
 	}
 	if r.isSystemDefault {
 		return fmt.Errorf("%w: %s", ErrSystemDefault, r.name)
 	}
 	now = now.UTC()
-	r.deleted = true
-	r.deletedAt = now
-	r.deletedBy = deletedBy
-	r.recordEvent(DeletedEvent{
-		RoleID:    r.id,
-		TenantID:  r.tenantID,
-		DeletedBy: deletedBy,
-		At:        now,
-	})
+	r.active = false
+	r.recordEvent(DeactivatedEvent{RoleID: r.id, TenantID: r.tenantID, By: by, At: now})
+	return nil
+}
+
+// Activate makes an inactive role active again. Idempotent: an active role is a no-op (no
+// event). The application service decides who may do it (it gives every holder the role's
+// permissions back).
+func (r *Role) Activate(by string, now time.Time) error {
+	if r.active {
+		return nil
+	}
+	now = now.UTC()
+	r.active = true
+	r.recordEvent(ActivatedEvent{RoleID: r.id, TenantID: r.tenantID, By: by, At: now})
 	return nil
 }
 
@@ -504,9 +500,7 @@ type Snapshot struct {
 	HierarchyLevel  int
 	Permissions     []*permission.Permission
 	CreatedAt       time.Time
-	IsDeleted       bool
-	DeletedAt       time.Time
-	DeletedBy       string
+	IsActive        bool
 }
 
 // UnmarshalFromDB rehydrates a Role from persistence. Repository-only
@@ -524,9 +518,7 @@ func UnmarshalFromDB(s Snapshot) *Role {
 		hierarchyLevel:  s.HierarchyLevel,
 		permissions:     append([]*permission.Permission(nil), s.Permissions...),
 		createdAt:       s.CreatedAt,
-		deleted:         s.IsDeleted,
-		deletedAt:       s.DeletedAt,
-		deletedBy:       s.DeletedBy,
+		active:          s.IsActive,
 	}
 }
 
@@ -543,12 +535,12 @@ func (r *Role) ensureEditable() error {
 	return nil
 }
 
-// ensureMutable rejects mutations on a deleted role. Internal helper
+// ensureMutable rejects mutations on an inactive role. Internal helper
 // for the state-transition methods (Rename / ChangeHierarchyLevel /
 // GrantPermission / etc.).
 func (r *Role) ensureMutable() error {
-	if r.deleted {
-		return fmt.Errorf("%w: %s", ErrDeleted, r.name)
+	if !r.active {
+		return fmt.Errorf("%w: %s", ErrInactive, r.name)
 	}
 	return nil
 }

@@ -51,7 +51,7 @@ func TestAttack_Operators_OneNarrowPermissionReachesNothingInATenant(t *testing.
 		{"edit a profile", http.MethodPatch, "/api/v1/users/" + exec + "/profile", ports.UpdateUserProfileRequest{Designation: "pwned"}},
 		{"create a role", http.MethodPost, "/api/v1/roles", ports.CreateRoleRequest{Name: "Operator Attack", HierarchyLevel: 60}},
 		{"grant tenant.admin to a role", http.MethodPost, "/api/v1/roles/" + shell + "/permissions/grant", ports.RolePermissionRequest{Permission: p.Meta.TenantAdmin}},
-		{"delete a role", http.MethodDelete, "/api/v1/roles/" + shell, nil},
+		{"deactivate a role", http.MethodPost, "/api/v1/roles/" + shell + "/deactivate", nil},
 		{"submit a permission request", http.MethodPost, "/api/v1/permission-requests", ports.CreatePermissionRequestRequest{Permission: p.Users.View, Reason: elevationReason}},
 		{"write a product (business module)", http.MethodPost, "/api/v1/inventory/products", invports.CreateProductRequest{SKU: "ATK-001", Name: "Attack", DosageForm: "tablet", PackSize: "10x10", HSNCode: "30049099", GSTRateID: "00000000-0000-4000-8000-000000000001"}},
 		{"read the catalogue (business module)", http.MethodGet, "/api/v1/inventory/products", nil},

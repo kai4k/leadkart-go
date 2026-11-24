@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/leadkart/leadkart-go/internal/common/lifecycle"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
@@ -24,6 +25,8 @@ type RoleView struct {
 	Permissions     []string
 	CreatedAt       time.Time
 	ParentRoleID    string
+	// IsActive is false for an inactive role (ADR 0073).
+	IsActive bool
 }
 
 // ----- GetRoleQuery --------------------------------------------------------
@@ -86,9 +89,17 @@ func (h GetRoleHandler) lookupParent(ctx context.Context, tenantID tenant.ID, id
 
 // ----- ListRolesQuery ------------------------------------------------------
 
-// ListRolesQuery lists every live role in the supplied tenant.
+// ListRolesQuery lists the roles of the supplied tenant by status. A role is never deleted
+// (ADR 0073): Status picks active (the zero value and the default), inactive or all.
 type ListRolesQuery struct {
 	TenantID tenant.ID
+	Status   lifecycle.StatusFilter
+}
+
+// ListRolesResult is the listed roles plus the whole tenant's roles per status.
+type ListRolesResult struct {
+	Roles  []RoleView
+	Counts lifecycle.Counts
 }
 
 // ListRolesHandler runs the list.
@@ -108,23 +119,31 @@ func NewListRolesHandler(r role.Repository, edges rolehierarchy.Repository) List
 // Handle returns [RoleView]s ordered by hierarchy_level, name.
 // Per-role parent lookup is N small indexed queries; acceptable for
 // the ≤30-role catalogs BRD §241 implies. Bulk if catalogs grow.
-func (h ListRolesHandler) Handle(ctx context.Context, q ListRolesQuery) ([]RoleView, error) {
+func (h ListRolesHandler) Handle(ctx context.Context, q ListRolesQuery) (ListRolesResult, error) {
 	if q.TenantID.IsZero() {
-		return nil, errors.New("list_roles: tenant id required")
+		return ListRolesResult{}, errors.New("list_roles: tenant id required")
 	}
 	roles, err := h.roles.ListByTenant(ctx, q.TenantID)
 	if err != nil {
-		return nil, fmt.Errorf("list_roles: %w", err)
+		return ListRolesResult{}, fmt.Errorf("list_roles: %w", err)
 	}
-	out := make([]RoleView, 0, len(roles))
+	res := ListRolesResult{Roles: make([]RoleView, 0, len(roles))}
 	for _, r := range roles {
+		if r.IsActive() {
+			res.Counts.Active++
+		} else {
+			res.Counts.Inactive++
+		}
+		if (r.IsActive() && !q.Status.IncludesActive()) || (!r.IsActive() && !q.Status.IncludesInactive()) {
+			continue
+		}
 		parentID, perr := h.lookupParent(ctx, q.TenantID, r.ID())
 		if perr != nil {
-			return nil, fmt.Errorf("list_roles: lookup parent for %s: %w", r.ID(), perr)
+			return ListRolesResult{}, fmt.Errorf("list_roles: lookup parent for %s: %w", r.ID(), perr)
 		}
-		out = append(out, projectRole(r, parentID))
+		res.Roles = append(res.Roles, projectRole(r, parentID))
 	}
-	return out, nil
+	return res, nil
 }
 
 func (h ListRolesHandler) lookupParent(ctx context.Context, tenantID tenant.ID, id role.ID) (string, error) {
@@ -159,5 +178,6 @@ func projectRole(r *role.Role, parentID string) RoleView {
 		Permissions:     names,
 		CreatedAt:       r.CreatedAt().UTC(),
 		ParentRoleID:    parentID,
+		IsActive:        r.IsActive(),
 	}
 }

@@ -67,7 +67,7 @@ func roleIDRoutes() []idRoute {
 		{"grant", http.MethodPost, "/api/v1/roles/%s/permissions/grant", ports.RolePermissionRequest{Permission: p.Tasks.WorkItems.Read}},
 		{"revoke", http.MethodPost, "/api/v1/roles/%s/permissions/revoke", ports.RolePermissionRequest{Permission: p.Tasks.WorkItems.Read}},
 		{"parent", http.MethodPatch, "/api/v1/roles/%s/parent", map[string]any{"parent_role_id": nil}},
-		{"delete", http.MethodDelete, "/api/v1/roles/%s", nil},
+		{"deactivate", http.MethodPost, "/api/v1/roles/%s/deactivate", nil},
 	}
 }
 
@@ -75,17 +75,17 @@ func roleIDRoutes() []idRoute {
 // bodies. "sales" (rank 20) is refused on the Senior Manager (15) and on the Senior
 // Manager ROLE in their canonical spelling; no other spelling may turn the refusal
 // into anything but a 4xx, and nothing may change. Ids that name nothing (nil UUID,
-// a random UUID, another tenant's id, a deleted role) are 4xx too.
+// a random UUID, another tenant's id) are 4xx too; an inactive role is 409 role_inactive.
 func TestAttack_Inputs_IdSpellingsNeverBypassARefusal(t *testing.T) {
 	w := newAttackWorld(t)
 	execRole := w.roles[role.SystemRoles.Tenant.SalesExecutive]
 	seniorRole := w.roles[role.SystemRoles.Tenant.SeniorManager]
 	senior := w.mid(t, "senior")
-	// a deleted role to name: delete the holder-less Shell role as the owner
-	if r := w.f.authedJSON(t, http.MethodDelete, "/api/v1/roles/"+w.roles[shellRoleName], w.owner.AccessToken, nil); r.status != http.StatusNoContent {
-		t.Fatalf("delete the shell role: %d %s", r.status, r.body)
+	// an inactive role to name: deactivate the holder-less Shell role as the owner
+	if r := w.f.authedJSON(t, http.MethodPost, "/api/v1/roles/"+w.roles[shellRoleName]+"/deactivate", w.owner.AccessToken, nil); r.status != http.StatusOK {
+		t.Fatalf("deactivate the shell role: %d %s", r.status, r.body)
 	}
-	deletedRole := w.roles[shellRoleName]
+	inactiveRole := w.roles[shellRoleName]
 	foreignMember, foreignRole := w.vExec.membershipID, w.f.roleIDByName(t, w.victim.AccessToken, role.SystemRoles.Tenant.SalesExecutive)
 
 	var rows []attack
@@ -108,7 +108,7 @@ func TestAttack_Inputs_IdSpellingsNeverBypassARefusal(t *testing.T) {
 			add(rt.what+" / "+what, rt.method, fmt.Sprintf(rt.tmpl, id), rt.body, http.StatusNotFound)
 		}
 	}
-	for what, id := range map[string]string{"nil uuid": nilUUID, "random uuid": ids.NewV7().String(), "another tenant's role": foreignRole, "a deleted role": deletedRole} {
+	for what, id := range map[string]string{"nil uuid": nilUUID, "random uuid": ids.NewV7().String(), "another tenant's role": foreignRole} {
 		for _, rt := range roleIDRoutes() {
 			add(rt.what+" / "+what, rt.method, fmt.Sprintf(rt.tmpl, id), rt.body, http.StatusNotFound)
 		}
@@ -117,7 +117,7 @@ func TestAttack_Inputs_IdSpellingsNeverBypassARefusal(t *testing.T) {
 	for name, spelt := range idSpellings(seniorRole) {
 		add("assign Senior Manager role / body role_id "+name, http.MethodPost, "/api/v1/users/"+w.mid(t, "norole")+"/roles", ports.AssignUserRoleRequest{RoleID: spelt}, http.StatusForbidden)
 	}
-	for what, id := range map[string]string{"nil uuid": nilUUID, "random uuid": ids.NewV7().String(), "another tenant's role": foreignRole, "a deleted role": deletedRole} {
+	for what, id := range map[string]string{"nil uuid": nilUUID, "random uuid": ids.NewV7().String(), "another tenant's role": foreignRole} {
 		add("assign / body role_id "+what, http.MethodPost, "/api/v1/users/"+w.mid(t, "norole")+"/roles", ports.AssignUserRoleRequest{RoleID: id}, http.StatusNotFound)
 	}
 	for name, spelt := range idSpellings(w.mid(t, "sales")) {
@@ -129,6 +129,25 @@ func TestAttack_Inputs_IdSpellingsNeverBypassARefusal(t *testing.T) {
 	}
 	// every refusal above is a 4xx and moved nothing; the 4xx class is checked row by row
 	w.assertIdRows(t, rows)
+
+	// An INACTIVE role (a role is never deleted, ADR 0073) is a real, readable role that takes no
+	// edit and no new holder: 409 role_inactive on every edit route and on assign, and deactivating
+	// it again is the idempotent 200. Nothing moves.
+	for _, rt := range roleIDRoutes() {
+		r := w.f.doWithHeaders(t, rt.method, fmt.Sprintf(rt.tmpl, inactiveRole), w.owner.AccessToken, rt.body, nil)
+		if rt.what == "deactivate" {
+			if r.status != http.StatusOK {
+				t.Errorf("[%s / an inactive role] %d %s, want the idempotent 200", rt.what, r.status, r.body)
+			}
+			continue
+		}
+		if r.status != http.StatusConflict || decodeError(t, r.body).Error != "role_inactive" {
+			t.Errorf("[%s / an inactive role] %d %s, want 409 role_inactive", rt.what, r.status, r.body)
+		}
+	}
+	if r := w.f.doWithHeaders(t, http.MethodPost, "/api/v1/users/"+w.mid(t, "norole")+"/roles", w.owner.AccessToken, ports.AssignUserRoleRequest{RoleID: inactiveRole}, nil); r.status != http.StatusConflict || decodeError(t, r.body).Error != "role_inactive" {
+		t.Errorf("[assign / an inactive role] %d %s, want 409 role_inactive", r.status, r.body)
+	}
 }
 
 // assertIdRows runs rows whose acceptable statuses are a family: status is the

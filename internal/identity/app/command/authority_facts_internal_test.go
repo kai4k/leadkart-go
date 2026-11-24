@@ -51,11 +51,11 @@ func TestOwnersLoader_OnlyTheCompanyOwnerSystemRoleCountsAsOwnership(t *testing.
 	}{
 		"no role of that name": {nil, 0},
 		"custom role with the owner name": {&role.Snapshot{ID: role.ID(factsID(1)), TenantID: factsTenant, Name: ownerName, HierarchyLevel: 50,
-			Permissions: admin, CreatedAt: now}, 0},
+			Permissions: admin, CreatedAt: now, IsActive: true}, 0},
 		"system role flagged super-admin with the owner name": {&role.Snapshot{ID: role.ID(factsID(1)), TenantID: factsTenant, Name: ownerName,
-			IsSystemDefault: true, IsSuperAdmin: true, HierarchyLevel: 0, CreatedAt: now}, 0},
+			IsSystemDefault: true, IsSuperAdmin: true, HierarchyLevel: 0, CreatedAt: now, IsActive: true}, 0},
 		"the Company Owner system role": {&role.Snapshot{ID: role.ID(factsID(1)), TenantID: factsTenant, Name: ownerName,
-			IsSystemDefault: true, HierarchyLevel: 0, Permissions: admin, CreatedAt: now}, 2},
+			IsSystemDefault: true, HierarchyLevel: 0, Permissions: admin, CreatedAt: now, IsActive: true}, 2},
 	} {
 		roles, members := roletest.NewFakeRepository(), membershiptest.NewFakeRepository()
 		var holders []role.ID
@@ -98,7 +98,7 @@ func TestMemberFrom_AFailedLoginLockDoesNotRemoveAuthority(t *testing.T) {
 	now := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)
 	ownerRole := role.UnmarshalFromDB(role.Snapshot{ID: role.ID(factsID(1)), TenantID: factsTenant, Name: role.SystemRoles.Tenant.CompanyOwner,
 		IsSystemDefault: true, HierarchyLevel: 0, CreatedAt: now,
-		Permissions: []*permission.Permission{permission.FromConstant(permission.IdentityPermissions.Meta.TenantAdmin)}})
+		Permissions: []*permission.Permission{permission.FromConstant(permission.IdentityPermissions.Meta.TenantAdmin)}, IsActive: true})
 	m := membership.UnmarshalFromDB(membership.Snapshot{ID: membership.ID(factsID(2)), PersonID: person.ID(factsID(3)), TenantID: factsTenant,
 		Status: membership.StatusActive, JoinedAt: now, RoleAssignments: []role.ID{ownerRole.ID()}})
 

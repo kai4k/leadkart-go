@@ -44,15 +44,12 @@ import (
 // internal maps are initialised. Single-test-owner: do NOT share one
 // instance across tests; each test creates its own.
 type FakeRepository struct {
-	// rows is the live + soft-deleted role index by ID. Soft-deleted
-	// rows stay in the map so re-create-with-same-ID flows work; reads
-	// (GetByID / ListByTenant) filter them.
+	// rows is the role index by ID, active and inactive (a role is never deleted, ADR 0073).
 	rows map[role.ID]*role.Role
 
 	// names is the (tenant_id|name) → role.ID index for ErrNameTaken
-	// enforcement. Mirrors the partial unique index
-	// `uq_roles_tenant_name WHERE NOT is_deleted` — a soft-deleted role
-	// frees its name for reuse.
+	// enforcement. Mirrors the unique index `uq_roles_tenant_name`: an inactive
+	// role still holds its name.
 	names map[string]role.ID
 }
 
@@ -71,16 +68,13 @@ func NewFakeRepository() *FakeRepository {
 // any test runs.
 var _ role.Repository = (*FakeRepository)(nil)
 
-// Add persists a brand-new role. Returns [role.ErrNameTaken] if a
-// LIVE row with the same (tenant_id, name) already exists. Mirrors
-// the partial unique index semantics — a soft-deleted homonym does
-// NOT block.
+// Add persists a brand-new role. Returns [role.ErrNameTaken] if a row (active or
+// inactive) with the same (tenant_id, name) already exists.
 func (f *FakeRepository) Add(_ context.Context, r *role.Role) error {
 
 	k := nameKey(r.TenantID(), r.Name())
 	if existingID, taken := f.names[k]; taken {
-		// Live conflict only — soft-deleted role frees its name.
-		if existing, ok := f.rows[existingID]; ok && !existing.IsDeleted() {
+		if _, ok := f.rows[existingID]; ok {
 			return role.ErrNameTaken
 		}
 	}
@@ -90,9 +84,8 @@ func (f *FakeRepository) Add(_ context.Context, r *role.Role) error {
 }
 
 // UpdateByID loads (scoped to tenantID), mutates via fn, then persists
-// (commit=true) or rolls back (commit=false / err). Soft-deleted roles
-// return [role.ErrNotFound]. Roles outside the supplied tenant also
-// return ErrNotFound — mirrors the SQL adapter's RLS-bound behavior.
+// (commit=true) or rolls back (commit=false / err). Inactive roles are
+// loaded too. Roles outside the supplied tenant return ErrNotFound — mirrors the SQL adapter's RLS-bound behavior.
 //
 // The fake doesn't deep-copy the role before passing to fn; the caller
 // observes mutations even if it returns (false, nil). This mirrors
@@ -101,7 +94,7 @@ func (f *FakeRepository) Add(_ context.Context, r *role.Role) error {
 func (f *FakeRepository) UpdateByID(_ context.Context, tenantID tenant.ID, id role.ID, fn func(*role.Role) (bool, error)) error {
 
 	r, ok := f.rows[id]
-	if !ok || r.IsDeleted() {
+	if !ok {
 		return role.ErrNotFound
 	}
 	if r.TenantID() != tenantID {
@@ -114,32 +107,24 @@ func (f *FakeRepository) UpdateByID(_ context.Context, tenantID tenant.ID, id ro
 	if !commit {
 		return nil
 	}
-	// Re-key in names index if the name changed (rename flow) — drop
-	// the old name and reserve the new one, accounting for soft-delete
-	// transitions.
-	if r.IsDeleted() {
-		// Mutator soft-deleted the role; free its name for re-use.
-		delete(f.names, nameKey(r.TenantID(), r.Name()))
-	} else {
-		// Refresh the name index in case rename happened.
-		for k, kID := range f.names {
-			if kID == id {
-				delete(f.names, k)
-				break
-			}
+	// Re-key in names index if the name changed (rename flow).
+	for k, kID := range f.names {
+		if kID == id {
+			delete(f.names, k)
+			break
 		}
-		f.names[nameKey(r.TenantID(), r.Name())] = id
 	}
+	f.names[nameKey(r.TenantID(), r.Name())] = id
 	return nil
 }
 
-// GetByID returns the live role (scoped to tenantID) or
-// [role.ErrNotFound]. Soft-deleted rows + roles in other tenants are
-// hidden — mirrors the SQL adapter's RLS-bound behavior.
+// GetByID returns the role (scoped to tenantID, active or inactive) or
+// [role.ErrNotFound]. Roles in other tenants are hidden — mirrors the SQL
+// adapter's RLS-bound behavior.
 func (f *FakeRepository) GetByID(_ context.Context, tenantID tenant.ID, id role.ID) (*role.Role, error) {
 
 	r, ok := f.rows[id]
-	if !ok || r.IsDeleted() {
+	if !ok {
 		return nil, role.ErrNotFound
 	}
 	if r.TenantID() != tenantID {
@@ -148,7 +133,7 @@ func (f *FakeRepository) GetByID(_ context.Context, tenantID tenant.ID, id role.
 	return r, nil
 }
 
-// GetByTenantAndName returns the live role with the supplied
+// GetByTenantAndName returns the role (any status) with the supplied
 // (tenant, name) or [role.ErrNotFound].
 func (f *FakeRepository) GetByTenantAndName(_ context.Context, tid tenant.ID, name string) (*role.Role, error) {
 
@@ -157,22 +142,22 @@ func (f *FakeRepository) GetByTenantAndName(_ context.Context, tid tenant.ID, na
 		return nil, role.ErrNotFound
 	}
 	r, ok := f.rows[id]
-	if !ok || r.IsDeleted() {
+	if !ok {
 		return nil, role.ErrNotFound
 	}
 	return r, nil
 }
 
-// GetByIDs hydrates the supplied IDs scoped to tenantID. Soft-deleted
+// GetByIDs hydrates the supplied IDs scoped to tenantID. Inactive
 // roles + roles outside the tenant are silently dropped — mirrors the
-// SQL adapter's `WHERE NOT is_deleted` filter under RLS. Order of the
+// SQL adapter's `AND is_active` filter under RLS. Order of the
 // result is unspecified.
 func (f *FakeRepository) GetByIDs(_ context.Context, tenantID tenant.ID, ids []role.ID) ([]*role.Role, error) {
 
 	out := make([]*role.Role, 0, len(ids))
 	for _, id := range ids {
 		r, ok := f.rows[id]
-		if !ok || r.IsDeleted() {
+		if !ok || !r.IsActive() {
 			continue
 		}
 		if r.TenantID() != tenantID {
@@ -183,8 +168,8 @@ func (f *FakeRepository) GetByIDs(_ context.Context, tenantID tenant.ID, ids []r
 	return out, nil
 }
 
-// GetByIDsIncludingDeleted is GetByIDs without the soft-delete filter.
-func (f *FakeRepository) GetByIDsIncludingDeleted(_ context.Context, tenantID tenant.ID, ids []role.ID) ([]*role.Role, error) {
+// GetByIDsIncludingInactive is GetByIDs without the active filter.
+func (f *FakeRepository) GetByIDsIncludingInactive(_ context.Context, tenantID tenant.ID, ids []role.ID) ([]*role.Role, error) {
 	out := make([]*role.Role, 0, len(ids))
 	for _, id := range ids {
 		r, ok := f.rows[id]
@@ -196,14 +181,14 @@ func (f *FakeRepository) GetByIDsIncludingDeleted(_ context.Context, tenantID te
 	return out, nil
 }
 
-// ListByTenant returns every live role for the tenant, ordered by
+// ListByTenant returns every role (active and inactive) for the tenant, ordered by
 // (hierarchy_level, name) — same order as the SQL adapter so callers
 // can rely on stable ordering.
 func (f *FakeRepository) ListByTenant(_ context.Context, tid tenant.ID) ([]*role.Role, error) {
 
 	var out []*role.Role
 	for _, r := range f.rows {
-		if r.TenantID() != tid || r.IsDeleted() {
+		if r.TenantID() != tid {
 			continue
 		}
 		out = append(out, r)
@@ -218,7 +203,7 @@ func (f *FakeRepository) ListByTenant(_ context.Context, tid tenant.ID) ([]*role
 }
 
 // nameKey is the (tenant_id, name) composite used for ErrNameTaken
-// enforcement. Mirrors the partial unique index keyspace.
+// enforcement. Mirrors the unique index keyspace.
 func nameKey(tid tenant.ID, name string) string {
 	return tid.String() + "|" + name
 }

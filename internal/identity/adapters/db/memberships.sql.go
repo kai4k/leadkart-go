@@ -823,7 +823,7 @@ JOIN   identity.roles             r  ON r.id = ra.role_id
 WHERE  m.tenant_id     = $1
   AND  m.status        = 'active'
   AND  r.is_super_admin = true
-  AND  NOT r.is_deleted
+  AND  r.is_active
 `
 
 // Returns the active Memberships in the supplied tenant that hold a

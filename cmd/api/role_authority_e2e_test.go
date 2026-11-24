@@ -67,10 +67,10 @@ func TestE2E_RoleCommands_PolicyDecides(t *testing.T) {
 	f.assignRole(t, owner.AccessToken, adminM.membershipID, roleID(role.SystemRoles.Tenant.Administrator))
 	mgrM := f.createMember(t, owner, "mgr")
 	f.assignRole(t, owner.AccessToken, mgrM.membershipID, roleID(role.SystemRoles.Tenant.SalesManager))
-	f.grantOverrides(t, owner.AccessToken, mgrM.membershipID, []string{p.Roles.Create, p.Roles.Update, p.Roles.Delete}, nil)
+	f.grantOverrides(t, owner.AccessToken, mgrM.membershipID, []string{p.Roles.Create, p.Roles.Update, p.Roles.Manage}, nil)
 	weakM := f.createMember(t, owner, "weakadmin") // an Administrator who lost tenant.admin
 	f.assignRole(t, owner.AccessToken, weakM.membershipID, roleID(role.SystemRoles.Tenant.Administrator))
-	f.grantOverrides(t, owner.AccessToken, weakM.membershipID, []string{p.Roles.Update, p.Roles.Delete}, []string{p.Meta.TenantAdmin})
+	f.grantOverrides(t, owner.AccessToken, weakM.membershipID, []string{p.Roles.Update, p.Roles.Manage}, []string{p.Meta.TenantAdmin})
 	adminTok := f.loginToken(t, adminM.email, adminM.password)
 	mgrTok := f.loginToken(t, mgrM.email, mgrM.password)
 	weakTok := f.loginToken(t, weakM.email, weakM.password)
@@ -103,7 +103,7 @@ func TestE2E_RoleCommands_PolicyDecides(t *testing.T) {
 		assertOwnerRoleIntact(t)
 	})
 	// arch-test:serial — subtests share one fixture and one tenant.
-	t.Run("system role: a super user may not edit, re-level, delete or re-parent it either", func(t *testing.T) {
+	t.Run("system role: a super user may not edit, re-level, deactivate or re-parent it either", func(t *testing.T) {
 		hdr := scopeHdr(owner.TenantID)
 		for name, c := range map[string]struct {
 			method, path string
@@ -111,7 +111,7 @@ func TestE2E_RoleCommands_PolicyDecides(t *testing.T) {
 		}{
 			"rename":     {http.MethodPatch, rolePath(ownerRole, ""), map[string]any{"name": "Renamed Owner"}},
 			"re-level":   {http.MethodPatch, rolePath(ownerRole, ""), map[string]any{"hierarchy_level": 40}},
-			"delete":     {http.MethodDelete, rolePath(ownerRole, ""), nil},
+			"deactivate": {http.MethodPost, rolePath(ownerRole, "/deactivate"), nil},
 			"grant":      {http.MethodPost, rolePath(ownerRole, "/permissions/grant"), ports.RolePermissionRequest{Permission: p.Crm.Leads.Read}},
 			"revoke":     {http.MethodPost, rolePath(ownerRole, "/permissions/revoke"), ports.RolePermissionRequest{Permission: p.Meta.TenantAdmin}},
 			"replace":    {http.MethodPut, rolePath(ownerRole, "/permissions"), ports.ReplaceRolePermissionsRequest{Permissions: []string{}}},
@@ -195,46 +195,88 @@ func TestE2E_RoleCommands_PolicyDecides(t *testing.T) {
 		f.wantForbidden(t, "grant unknown", r, http.StatusUnprocessableEntity, "permission_unknown")
 	})
 	// arch-test:serial — subtests share one fixture and one tenant.
-	t.Run("delete: an Administrator without tenant.admin cannot delete a role carrying it", func(t *testing.T) {
+	t.Run("deactivate: an Administrator without tenant.admin cannot deactivate a role carrying it", func(t *testing.T) {
 		id := custom(t, "Carries Admin", 60)
 		// Only an owner may confer tenant.admin.
 		if r := f.authedJSON(t, http.MethodPost, rolePath(id, "/permissions/grant"), owner.AccessToken, ports.RolePermissionRequest{Permission: p.Meta.TenantAdmin}); r.status != http.StatusNoContent {
 			t.Fatalf("owner grants tenant.admin to a custom role: %d %s", r.status, r.body)
 		}
-		r := f.authedJSON(t, http.MethodDelete, rolePath(id, ""), weakTok, nil)
-		f.wantForbidden(t, "weak admin deletes a tenant.admin role", r, http.StatusForbidden, "grant_exceeds_authority")
+		r := f.authedJSON(t, http.MethodPost, rolePath(id, "/deactivate"), weakTok, nil)
+		f.wantForbidden(t, "weak admin deactivates a tenant.admin role", r, http.StatusForbidden, "grant_exceeds_authority")
 		// tenant.admin is owner-only in both directions, even for an Administrator who holds it.
 		r = f.authedJSON(t, http.MethodPost, rolePath(id, "/permissions/revoke"), adminTok, ports.RolePermissionRequest{Permission: p.Meta.TenantAdmin})
 		f.wantForbidden(t, "admin revokes tenant.admin from a custom role", r, http.StatusForbidden, "grant_exceeds_authority")
-		r = f.authedJSON(t, http.MethodDelete, rolePath(id, ""), adminTok, nil)
-		f.wantForbidden(t, "admin holding tenant.admin deletes the role carrying it", r, http.StatusForbidden, "grant_exceeds_authority")
-		if r := f.authedJSON(t, http.MethodDelete, rolePath(id, ""), owner.AccessToken, nil); r.status != http.StatusNoContent {
-			t.Errorf("owner deletes the role carrying tenant.admin: %d %s", r.status, r.body)
+		r = f.authedJSON(t, http.MethodPost, rolePath(id, "/deactivate"), adminTok, nil)
+		f.wantForbidden(t, "admin holding tenant.admin deactivates the role carrying it", r, http.StatusForbidden, "grant_exceeds_authority")
+		if r := f.authedJSON(t, http.MethodPost, rolePath(id, "/deactivate"), owner.AccessToken, nil); r.status != http.StatusOK {
+			t.Errorf("owner deactivates the role carrying tenant.admin: %d %s", r.status, r.body)
 		}
+		// Reactivating gives tenant.admin back to every holder: the same authority is asked.
+		r = f.authedJSON(t, http.MethodPost, rolePath(id, "/reactivate"), adminTok, nil)
+		f.wantForbidden(t, "admin holding tenant.admin reactivates the role carrying it", r, http.StatusForbidden, "grant_exceeds_authority")
 		return
 	})
 	// arch-test:serial — subtests share one fixture and one tenant.
-	t.Run("delete: a role with an active holder is 409 role_in_use; inactive holders are released", func(t *testing.T) {
+	t.Run("deactivate: a role with an active holder is 409 role_in_use; an inactive role confers nothing (ADR 0073)", func(t *testing.T) {
 		id := custom(t, "Held Role", 60)
+		// The role carries a permission the holder can only get through it.
+		if r := f.authedJSON(t, http.MethodPost, rolePath(id, "/permissions/grant"), owner.AccessToken, ports.RolePermissionRequest{Permission: p.Tasks.WorkItems.Read}); r.status != http.StatusNoContent {
+			t.Fatalf("grant the role a permission: %d %s", r.status, r.body)
+		}
 		holder := f.createMember(t, owner, "holder")
 		f.assignRole(t, owner.AccessToken, holder.membershipID, id)
-		r := f.authedJSON(t, http.MethodDelete, rolePath(id, ""), adminTok, nil)
-		f.wantForbidden(t, "delete a held role", r, http.StatusConflict, "role_in_use")
+		r := f.authedJSON(t, http.MethodPost, rolePath(id, "/deactivate"), adminTok, nil)
+		f.wantForbidden(t, "deactivate a held role", r, http.StatusConflict, "role_in_use")
 		if e := decodeError(t, r.body); e.Errors["active_holders"][0] != "1" {
 			t.Errorf("holder count = %v, want 1", e.Errors)
+		}
+		if got := f.roleDto(t, owner.AccessToken, id); !got.IsActive {
+			t.Fatal("a refused deactivation made the role inactive")
 		}
 		if r := f.authedJSON(t, http.MethodPost, "/api/v1/users/"+holder.membershipID+"/deactivate", owner.AccessToken, ports.DeactivateUserRequest{Reason: "role in use test"}); r.status != http.StatusNoContent {
 			t.Fatalf("deactivate holder: %d %s", r.status, r.body)
 		}
-		if r := f.authedJSON(t, http.MethodDelete, rolePath(id, ""), adminTok, nil); r.status != http.StatusNoContent {
-			t.Fatalf("delete with only an inactive holder: %d %s", r.status, r.body)
+		// Only an inactive holder remains: the role goes inactive, answers the updated role, and repeating is a no-op.
+		for range 2 {
+			r := f.authedJSON(t, http.MethodPost, rolePath(id, "/deactivate"), adminTok, nil)
+			if r.status != http.StatusOK {
+				t.Fatalf("deactivate with only an inactive holder: %d %s", r.status, r.body)
+			}
+			var dto ports.RoleDto
+			if err := json.Unmarshal(r.body, &dto); err != nil || dto.ID != id || dto.IsActive {
+				t.Fatalf("deactivate answers the role, now inactive: %s (%v)", r.body, err)
+			}
 		}
-		if u := f.getUser(t, owner.AccessToken, holder.membershipID); slices.Contains(u.RoleIDs, id) {
-			t.Errorf("the deleted role is still assigned to the inactive holder: %v", u.RoleIDs)
+		// Nothing is deleted: the role is still readable and the holder keeps the assignment.
+		if got := f.roleDto(t, owner.AccessToken, id); got.IsActive {
+			t.Errorf("the role reads as active after deactivation: %+v", got)
 		}
-		// the facts loader never sees a dangling assignment: the holder can be reactivated and acted on
+		if u := f.getUser(t, owner.AccessToken, holder.membershipID); !slices.Contains(u.RoleIDs, id) {
+			t.Errorf("the assignment of the inactive holder was removed: %v", u.RoleIDs)
+		}
+		// An inactive role takes no new holder and cannot be edited.
+		other := f.createMember(t, owner, "other")
+		if r := f.authedJSON(t, http.MethodPost, "/api/v1/users/"+other.membershipID+"/roles", adminTok, ports.AssignUserRoleRequest{RoleID: id}); r.status != http.StatusConflict || decodeError(t, r.body).Error != "role_inactive" {
+			t.Errorf("assign an inactive role: %d %s, want 409 role_inactive", r.status, r.body)
+		}
+		if r := f.authedJSON(t, http.MethodPatch, rolePath(id, ""), adminTok, ports.UpdateRoleRequest{Name: "Edited while inactive"}); r.status != http.StatusConflict || decodeError(t, r.body).Error != "role_inactive" {
+			t.Errorf("edit an inactive role: %d %s, want 409 role_inactive", r.status, r.body)
+		}
+		// SECURITY: the holder is reactivated while the role is inactive and gets NOTHING from it.
 		if r := f.authedJSON(t, http.MethodPost, "/api/v1/users/"+holder.membershipID+"/reactivate", owner.AccessToken, nil); r.status != http.StatusNoContent {
-			t.Errorf("reactivate the released holder: %d %s", r.status, r.body)
+			t.Fatalf("reactivate the holder: %d %s", r.status, r.body)
+		}
+		holderTok := f.loginToken(t, holder.email, holder.password)
+		if perms := f.effectivePermissions(t, holderTok); slices.Contains(perms, p.Tasks.WorkItems.Read) {
+			t.Fatalf("a member reactivated while the role is inactive holds the role's permission: %v", perms)
+		}
+		// Reactivating the role gives it back (an active holder's tokens are refreshed).
+		if r := f.authedJSON(t, http.MethodPost, rolePath(id, "/reactivate"), adminTok, nil); r.status != http.StatusOK {
+			t.Fatalf("reactivate the role: %d %s", r.status, r.body)
+		}
+		holderTok = f.loginToken(t, holder.email, holder.password)
+		if perms := f.effectivePermissions(t, holderTok); !slices.Contains(perms, p.Tasks.WorkItems.Read) {
+			t.Fatalf("after the role is reactivated its holder lacks its permission: %v", perms)
 		}
 	})
 	// arch-test:serial — subtests share one fixture and one tenant.

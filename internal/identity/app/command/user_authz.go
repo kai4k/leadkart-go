@@ -70,8 +70,8 @@ func (h AssignUserRoleHandler) Handle(ctx context.Context, cmd AssignUserRoleCom
 		if err != nil {
 			return err
 		}
-		if r.IsDeleted() {
-			return role.ErrNotFound // a deleted role is not assignable: same answer as a missing one
+		if !r.IsActive() {
+			return role.ErrInactive // an inactive role is not assignable (ADR 0073)
 		}
 		return h.w.facts.memberships.UpdateByID(ctx, cmd.TenantID, cmd.MembershipID, func(m *membership.Membership) (bool, error) {
 			target, err := h.w.facts.member(ctx, cmd.TenantID, m, now)

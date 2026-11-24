@@ -459,7 +459,7 @@ func TestAuthorityCommands_ASuperUserInTheirOwnTenantIsReRead(t *testing.T) {
 	setup := func(t *testing.T) (*authzWorld, *role.Role) {
 		w := newAuthzWorld(t)
 		return w, w.addRoleSnap(t, role.Snapshot{ID: role.ID(awID(60)), TenantID: awTenant, Name: "Super Admin", IsSystemDefault: true, IsSuperAdmin: true,
-			HierarchyLevel: role.HierarchyLevelOwner, CreatedAt: testNow})
+			HierarchyLevel: role.HierarchyLevelOwner, CreatedAt: testNow, IsActive: true})
 	}
 	for name, c := range map[string]struct {
 		member func(w *authzWorld, super *role.Role) *membership.Membership

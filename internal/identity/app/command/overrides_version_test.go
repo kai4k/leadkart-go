@@ -19,7 +19,7 @@ func (w *authzWorld) formVersion(t *testing.T, m *membership.Membership, at time
 	var roles []*role.Role
 	if ids := m.RoleAssignments(); len(ids) > 0 {
 		var err error
-		if roles, err = w.roles.GetByIDsIncludingDeleted(t.Context(), awTenant, ids); err != nil {
+		if roles, err = w.roles.GetByIDsIncludingInactive(t.Context(), awTenant, ids); err != nil {
 			t.Fatalf("form version: load roles: %v", err)
 		}
 	}

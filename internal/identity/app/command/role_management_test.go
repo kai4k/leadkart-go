@@ -42,7 +42,8 @@ type roleHandlers struct {
 	replace command.ReplaceRolePermissionsHandler
 	grant   command.GrantRolePermissionHandler
 	revoke  command.RevokeRolePermissionHandler
-	del     command.DeleteRoleHandler
+	del     command.DeactivateRoleHandler
+	react   command.ReactivateRoleHandler
 	parent  command.SetRoleParentHandler
 	edges   *rolehierarchytest.FakeRepository
 }
@@ -57,7 +58,8 @@ func (w *authzWorld) roleHandlersWith(edges rolehierarchy.Repository, uow pg.Uni
 		replace: command.NewReplaceRolePermissionsHandler(uow, l, w.members, w.roles, p, awClock),
 		grant:   command.NewGrantRolePermissionHandler(uow, l, w.members, w.roles, p, awClock),
 		revoke:  command.NewRevokeRolePermissionHandler(uow, l, w.members, w.roles, p, awClock),
-		del:     command.NewDeleteRoleHandler(uow, l, w.members, w.roles, p, awClock),
+		del:     command.NewDeactivateRoleHandler(uow, l, w.members, w.roles, p, awClock),
+		react:   command.NewReactivateRoleHandler(uow, l, w.members, w.roles, p, awClock),
 		parent:  command.NewSetRoleParentHandler(uow, l, w.members, w.roles, p, edges, awClock, newEdgeID),
 		edges:   fe,
 	}
@@ -71,7 +73,7 @@ func (w *authzWorld) roleHandlers() roleHandlers {
 func (w *authzWorld) customRole(t *testing.T, name string, level int, perms ...string) *role.Role {
 	t.Helper()
 	w.next++
-	return w.addRoleSnap(t, role.Snapshot{ID: role.ID(awID(w.next)), TenantID: awTenant, Name: name, HierarchyLevel: level, CreatedAt: testNow}, perms...)
+	return w.addRoleSnap(t, role.Snapshot{ID: role.ID(awID(w.next)), TenantID: awTenant, Name: name, HierarchyLevel: level, CreatedAt: testNow, IsActive: true}, perms...)
 }
 
 func (w *authzWorld) adminActor(t *testing.T) authority.Actor {
@@ -87,13 +89,13 @@ func TestRoleCommands_ZeroActorDeniedBeforeLock(t *testing.T) {
 	ctx := t.Context()
 	_, createErr := h.create.Handle(ctx, command.CreateRoleCommand{TenantID: awTenant, Name: "X Role", HierarchyLevel: 40})
 	cases := map[string]error{
-		"create":  createErr,
-		"update":  h.update.Handle(ctx, command.UpdateRoleCommand{TenantID: awTenant, RoleID: r.ID(), Name: "Y Role", HierarchyLevel: -1}),
-		"replace": h.replace.Handle(ctx, command.ReplaceRolePermissionsCommand{TenantID: awTenant, RoleID: r.ID(), PermissionNames: []string{}}),
-		"grant":   h.grant.Handle(ctx, command.GrantRolePermissionCommand{TenantID: awTenant, RoleID: r.ID(), PermissionName: permission.IdentityPermissions.Crm.Leads.Read}),
-		"revoke":  h.revoke.Handle(ctx, command.RevokeRolePermissionCommand{TenantID: awTenant, RoleID: r.ID(), PermissionName: permission.IdentityPermissions.Crm.Leads.Read}),
-		"delete":  h.del.Handle(ctx, command.DeleteRoleCommand{TenantID: awTenant, RoleID: r.ID()}),
-		"parent":  h.parent.Handle(ctx, command.SetRoleParentCommand{TenantID: awTenant, RoleID: r.ID()}),
+		"create":     createErr,
+		"update":     h.update.Handle(ctx, command.UpdateRoleCommand{TenantID: awTenant, RoleID: r.ID(), Name: "Y Role", HierarchyLevel: -1}),
+		"replace":    h.replace.Handle(ctx, command.ReplaceRolePermissionsCommand{TenantID: awTenant, RoleID: r.ID(), PermissionNames: []string{}}),
+		"grant":      h.grant.Handle(ctx, command.GrantRolePermissionCommand{TenantID: awTenant, RoleID: r.ID(), PermissionName: permission.IdentityPermissions.Crm.Leads.Read}),
+		"revoke":     h.revoke.Handle(ctx, command.RevokeRolePermissionCommand{TenantID: awTenant, RoleID: r.ID(), PermissionName: permission.IdentityPermissions.Crm.Leads.Read}),
+		"deactivate": h.del.Handle(ctx, command.ChangeRoleStatusCommand{TenantID: awTenant, RoleID: r.ID()}),
+		"parent":     h.parent.Handle(ctx, command.SetRoleParentCommand{TenantID: awTenant, RoleID: r.ID()}),
 	}
 	for name, err := range cases {
 		if !errors.Is(err, authority.ErrNoAuthority) {
@@ -133,7 +135,7 @@ func TestRoleCommands_RunUnderTheTenantLock(t *testing.T) {
 			return h.parent.Handle(ctx, command.SetRoleParentCommand{TenantID: awTenant, RoleID: r.ID(), NewParentID: w.manager.ID(), Actor: admin})
 		},
 		func() error {
-			return h.del.Handle(ctx, command.DeleteRoleCommand{TenantID: awTenant, RoleID: r.ID(), Actor: admin})
+			return h.del.Handle(ctx, command.ChangeRoleStatusCommand{TenantID: awTenant, RoleID: r.ID(), Actor: admin})
 		},
 	}
 	for i, step := range steps {
@@ -144,8 +146,8 @@ func TestRoleCommands_RunUnderTheTenantLock(t *testing.T) {
 			t.Fatalf("after step %d lock calls = %d, want %d", i, w.lock.calls, i+1)
 		}
 	}
-	if !r.IsDeleted() {
-		t.Error("custom role not deleted by the Administrator")
+	if r.IsActive() {
+		t.Error("custom role not deactivated by the Administrator")
 	}
 }
 
@@ -231,7 +233,7 @@ func TestRolePermissions_PolicyDecides(t *testing.T) {
 		"admin PUT []":               h.replace.Handle(ctx, command.ReplaceRolePermissionsCommand{TenantID: awTenant, RoleID: w.owner.ID(), PermissionNames: []string{}, Actor: w.adminActor(t)}),
 		"super PUT []":               h.replace.Handle(ctx, command.ReplaceRolePermissionsCommand{TenantID: awTenant, RoleID: w.owner.ID(), PermissionNames: []string{}, Actor: superActor(t)}),
 		"super grants":               h.grant.Handle(ctx, command.GrantRolePermissionCommand{TenantID: awTenant, RoleID: w.owner.ID(), PermissionName: p.Crm.Leads.Read, Actor: superActor(t)}),
-		"super deletes":              h.del.Handle(ctx, command.DeleteRoleCommand{TenantID: awTenant, RoleID: w.owner.ID(), Actor: superActor(t)}),
+		"super deletes":              h.del.Handle(ctx, command.ChangeRoleStatusCommand{TenantID: awTenant, RoleID: w.owner.ID(), Actor: superActor(t)}),
 	} {
 		if !errors.Is(err, role.ErrSystemDefault) {
 			t.Errorf("%s: %v, want ErrSystemDefault", name, err)
@@ -261,7 +263,10 @@ func TestRolePermissions_PolicyDecides(t *testing.T) {
 	}
 }
 
-func TestDeleteRole_RoleInUseAndCeiling(t *testing.T) {
+// ADR 0073: deactivating asks exactly what deleting asked (authority and ceiling first, then the
+// role-in-use rule), keeps every assignment (nothing is deleted), and reactivating asks the same
+// authority again because it gives the permissions back to every holder.
+func TestDeactivateRole_RoleInUseAndCeiling(t *testing.T) {
 	t.Parallel()
 	p := permission.IdentityPermissions
 	w := newAuthzWorld(t)
@@ -270,24 +275,24 @@ func TestDeleteRole_RoleInUseAndCeiling(t *testing.T) {
 
 	carrier := w.customRole(t, "Carries Admin", 60, p.Meta.TenantAdmin)
 	noAdmin := actorAs(t, w.member(t, w.admin).ID(), authority.RankAdmin, p.Crm.Leads.Read)
-	if err := h.del.Handle(ctx, command.DeleteRoleCommand{TenantID: awTenant, RoleID: carrier.ID(), Actor: noAdmin}); !errors.Is(err, authority.ErrGrantExceedsAuthority) {
+	if err := h.del.Handle(ctx, command.ChangeRoleStatusCommand{TenantID: awTenant, RoleID: carrier.ID(), Actor: noAdmin}); !errors.Is(err, authority.ErrGrantExceedsAuthority) {
 		t.Errorf("Admin without tenant.admin deletes a role carrying it: %v, want ErrGrantExceedsAuthority", err)
 	}
-	if carrier.IsDeleted() {
-		t.Fatal("role deleted by a refused call")
+	if !carrier.IsActive() {
+		t.Fatal("role deactivated by a refused call")
 	}
 
 	custom := w.customRole(t, "Held", 60)
 	active := w.member(t, custom)
 	inactive := w.memberSnap(t, membership.Snapshot{RoleAssignments: []role.ID{custom.ID(), w.exec.ID()}, Status: membership.StatusInactive})
 	admin := w.adminActor(t)
-	err := h.del.Handle(ctx, command.DeleteRoleCommand{TenantID: awTenant, RoleID: custom.ID(), Actor: admin})
+	err := h.del.Handle(ctx, command.ChangeRoleStatusCommand{TenantID: awTenant, RoleID: custom.ID(), Actor: admin})
 	var inUse *command.RoleInUseError
 	if !errors.Is(err, command.ErrRoleInUse) || !errors.As(err, &inUse) || inUse.ActiveHolders != 1 {
-		t.Fatalf("delete with an active holder: %v, want RoleInUseError with 1 holder", err)
+		t.Fatalf("deactivate with an active holder: %v, want RoleInUseError with 1 holder", err)
 	}
-	if custom.IsDeleted() || len(inactive.RoleAssignments()) != 2 {
-		t.Fatalf("a refused delete changed state: deleted=%v inactive roles=%v", custom.IsDeleted(), inactive.RoleAssignments())
+	if !custom.IsActive() || len(inactive.RoleAssignments()) != 2 {
+		t.Fatalf("a refused deactivation changed state: active=%v inactive roles=%v", custom.IsActive(), inactive.RoleAssignments())
 	}
 
 	// the active holder moves on; only an inactive holder remains
@@ -296,14 +301,54 @@ func TestDeleteRole_RoleInUseAndCeiling(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.del.Handle(ctx, command.DeleteRoleCommand{TenantID: awTenant, RoleID: custom.ID(), Actor: admin}); err != nil {
-		t.Fatalf("delete with only an inactive holder: %v", err)
+	if err := h.del.Handle(ctx, command.ChangeRoleStatusCommand{TenantID: awTenant, RoleID: custom.ID(), Actor: admin}); err != nil {
+		t.Fatalf("deactivate with only an inactive holder: %v", err)
 	}
-	if !custom.IsDeleted() {
-		t.Error("role not deleted")
+	if custom.IsActive() {
+		t.Error("role not deactivated")
 	}
-	if got := inactive.RoleAssignments(); len(got) != 1 || got[0] != w.exec.ID() {
-		t.Errorf("inactive holder's assignments = %v, want only the exec role (the deleted role revoked)", got)
+	if got := inactive.RoleAssignments(); len(got) != 2 {
+		t.Errorf("inactive holder's assignments = %v, want both kept (nothing is deleted)", got)
+	}
+	// Idempotent: deactivating an inactive role is a no-op.
+	if err := h.del.Handle(ctx, command.ChangeRoleStatusCommand{TenantID: awTenant, RoleID: custom.ID(), Actor: admin}); err != nil {
+		t.Fatalf("second deactivate: %v", err)
+	}
+
+	// Reactivating asks the same authority (it gives the role's permissions back to every holder).
+	if err := h.react.Handle(ctx, command.ChangeRoleStatusCommand{TenantID: awTenant, RoleID: custom.ID()}); !errors.Is(err, authority.ErrNoAuthority) {
+		t.Errorf("reactivate with a zero actor: %v, want ErrNoAuthority", err)
+	}
+	if custom.IsActive() {
+		t.Fatal("role reactivated by a refused call")
+	}
+	if err := h.react.Handle(ctx, command.ChangeRoleStatusCommand{TenantID: awTenant, RoleID: custom.ID(), Actor: admin}); err != nil {
+		t.Fatalf("reactivate: %v", err)
+	}
+	if !custom.IsActive() {
+		t.Error("role not reactivated")
+	}
+	if err := h.react.Handle(ctx, command.ChangeRoleStatusCommand{TenantID: awTenant, RoleID: custom.ID(), Actor: admin}); err != nil {
+		t.Fatalf("second reactivate: %v", err)
+	}
+}
+
+func TestReactivateRole_CeilingAppliesLikeDeactivate(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	w := newAuthzWorld(t)
+	h := w.roleHandlers()
+	ctx := t.Context()
+	carrier := w.customRole(t, "Carries Admin", 60, p.Meta.TenantAdmin)
+	if err := carrier.Deactivate("p", testNow); err != nil {
+		t.Fatal(err)
+	}
+	noAdmin := actorAs(t, w.member(t, w.admin).ID(), authority.RankAdmin, p.Crm.Leads.Read)
+	if err := h.react.Handle(ctx, command.ChangeRoleStatusCommand{TenantID: awTenant, RoleID: carrier.ID(), Actor: noAdmin}); !errors.Is(err, authority.ErrGrantExceedsAuthority) {
+		t.Errorf("an Administrator without tenant.admin reactivates a role carrying it: %v, want ErrGrantExceedsAuthority", err)
+	}
+	if carrier.IsActive() {
+		t.Fatal("role reactivated by a refused call")
 	}
 }
 
@@ -393,8 +438,9 @@ func TestRoleHandlers_WiringIsRequired(t *testing.T) {
 		"set parent without edges": func() {
 			command.NewSetRoleParentHandler(fakeUoW{}, l, w.members, w.roles, anyPersons{}, nil, awClock, newEdgeID)
 		},
-		"update without the lock":    func() { command.NewUpdateRoleHandler(fakeUoW{}, nil, w.members, w.roles, anyPersons{}, awClock) },
-		"delete without memberships": func() { command.NewDeleteRoleHandler(fakeUoW{}, l, nil, w.roles, anyPersons{}, awClock) },
+		"update without the lock":        func() { command.NewUpdateRoleHandler(fakeUoW{}, nil, w.members, w.roles, anyPersons{}, awClock) },
+		"deactivate without memberships": func() { command.NewDeactivateRoleHandler(fakeUoW{}, l, nil, w.roles, anyPersons{}, awClock) },
+		"reactivate without memberships": func() { command.NewReactivateRoleHandler(fakeUoW{}, l, nil, w.roles, anyPersons{}, awClock) },
 	} {
 		func() {
 			defer func() {

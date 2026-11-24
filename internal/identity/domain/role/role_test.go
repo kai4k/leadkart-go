@@ -340,74 +340,111 @@ func TestReplacePermissions_EmptyTargetRevokesAll(t *testing.T) {
 	}
 }
 
-func TestDelete_TransitionsAndEmits(t *testing.T) {
+// ADR 0073: a role goes inactive and active again, never deleted. Each transition emits its
+// own event once; repeating it is a no-op with no event.
+func TestDeactivate_TransitionsAndEmits(t *testing.T) {
 	t.Parallel()
 	r := newRole(t)
 	_ = r.PullEvents()
-	if err := r.Delete("admin-1", testNow); err != nil {
-		t.Fatalf("Delete: %v", err)
+	if !r.IsActive() {
+		t.Fatal("a new role is active")
 	}
-	if !r.IsDeleted() {
-		t.Fatal("not deleted after Delete")
+	if err := r.Deactivate("admin-1", testNow); err != nil {
+		t.Fatalf("Deactivate: %v", err)
 	}
-	if r.DeletedBy() != "admin-1" {
-		t.Fatalf("DeletedBy: %q", r.DeletedBy())
-	}
-	if r.DeletedAt().IsZero() {
-		t.Fatal("DeletedAt should be set")
+	if r.IsActive() {
+		t.Fatal("still active after Deactivate")
 	}
 	events := r.PullEvents()
 	if len(events) != 1 {
 		t.Fatalf("events: %d", len(events))
 	}
-	if _, ok := events[0].(role.DeletedEvent); !ok {
-		t.Fatalf("event type: %T", events[0])
+	ev, ok := events[0].(role.DeactivatedEvent)
+	if !ok || ev.By != "admin-1" {
+		t.Fatalf("event: %T %+v, want DeactivatedEvent by admin-1", events[0], events[0])
 	}
 }
 
-func TestDelete_RejectsSystemDefault(t *testing.T) {
+func TestDeactivate_RejectsSystemDefault(t *testing.T) {
 	t.Parallel()
 	r, _ := role.New(role.ID(ids.NewV7().String()), tenant.ID(ids.NewV7().String()),
 		"TenantAdmin", true, 10, false, testNow)
-	if err := r.Delete("admin-1", testNow); !errors.Is(err, role.ErrSystemDefault) {
+	if err := r.Deactivate("admin-1", testNow); !errors.Is(err, role.ErrSystemDefault) {
 		t.Fatalf("want ErrSystemDefault got %v", err)
 	}
+	if !r.IsActive() {
+		t.Fatal("a refused deactivation must leave the role active")
+	}
 }
 
-func TestDelete_Idempotent(t *testing.T) {
+func TestDeactivate_Idempotent(t *testing.T) {
 	t.Parallel()
 	r := newRole(t)
-	if err := r.Delete("admin-1", testNow); err != nil {
-		t.Fatalf("first Delete: %v", err)
+	if err := r.Deactivate("admin-1", testNow); err != nil {
+		t.Fatalf("first Deactivate: %v", err)
 	}
 	_ = r.PullEvents()
-	if err := r.Delete("admin-1", testNow); err != nil {
-		t.Fatalf("dup Delete: %v", err)
+	if err := r.Deactivate("admin-1", testNow); err != nil {
+		t.Fatalf("dup Deactivate: %v", err)
 	}
 	if events := r.PullEvents(); len(events) != 0 {
-		t.Fatal("dup Delete should emit 0 events")
+		t.Fatal("dup Deactivate should emit 0 events")
 	}
 }
 
-func TestMutations_RejectAfterDelete(t *testing.T) {
+func TestActivate_RestoresAndIsIdempotent(t *testing.T) {
 	t.Parallel()
 	r := newRole(t)
-	_ = r.Delete("admin-1", testNow) // arch-test:ignore-err - test fixture setup
+	_ = r.PullEvents()
+	if err := r.Activate("admin-1", testNow); err != nil {
+		t.Fatalf("Activate on an active role: %v", err)
+	}
+	if events := r.PullEvents(); len(events) != 0 {
+		t.Fatal("Activate on an active role should emit 0 events")
+	}
+	if err := r.Deactivate("admin-1", testNow); err != nil {
+		t.Fatalf("Deactivate: %v", err)
+	}
+	_ = r.PullEvents()
+	if err := r.Activate("admin-2", testNow); err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	if !r.IsActive() {
+		t.Fatal("still inactive after Activate")
+	}
+	events := r.PullEvents()
+	if len(events) != 1 {
+		t.Fatalf("events: %d", len(events))
+	}
+	if ev, ok := events[0].(role.ActivatedEvent); !ok || ev.By != "admin-2" {
+		t.Fatalf("event: %T %+v, want ActivatedEvent by admin-2", events[0], events[0])
+	}
+}
+
+func TestMutations_RejectWhileInactive(t *testing.T) {
+	t.Parallel()
+	r := newRole(t)
+	_ = r.Deactivate("admin-1", testNow) // arch-test:ignore-err - test fixture setup
 	p := permission.FromConstant(permission.IdentityPermissions.Users.View)
-	if err := r.Rename("X", testNow); !errors.Is(err, role.ErrDeleted) {
-		t.Fatalf("Rename after delete: %v", err)
+	if err := r.Rename("X", testNow); !errors.Is(err, role.ErrInactive) {
+		t.Fatalf("Rename while inactive: %v", err)
 	}
-	if err := r.ChangeHierarchyLevel(20); !errors.Is(err, role.ErrDeleted) {
-		t.Fatalf("ChangeHierarchyLevel after delete: %v", err)
+	if err := r.ChangeHierarchyLevel(20); !errors.Is(err, role.ErrInactive) {
+		t.Fatalf("ChangeHierarchyLevel while inactive: %v", err)
 	}
-	if err := r.GrantPermission(p, testNow); !errors.Is(err, role.ErrDeleted) {
-		t.Fatalf("Grant after delete: %v", err)
+	if err := r.GrantPermission(p, testNow); !errors.Is(err, role.ErrInactive) {
+		t.Fatalf("Grant while inactive: %v", err)
 	}
-	if err := r.RevokePermission(p, testNow); !errors.Is(err, role.ErrDeleted) {
-		t.Fatalf("Revoke after delete: %v", err)
+	if err := r.RevokePermission(p, testNow); !errors.Is(err, role.ErrInactive) {
+		t.Fatalf("Revoke while inactive: %v", err)
 	}
-	if err := r.ReplacePermissions(nil, testNow); !errors.Is(err, role.ErrDeleted) {
-		t.Fatalf("Replace after delete: %v", err)
+	if err := r.ReplacePermissions(nil, testNow); !errors.Is(err, role.ErrInactive) {
+		t.Fatalf("Replace while inactive: %v", err)
+	}
+	// Reactivated, the role is editable again.
+	_ = r.Activate("admin-1", testNow) // arch-test:ignore-err - test fixture setup
+	if err := r.Rename("Renamed", testNow); err != nil {
+		t.Fatalf("Rename after reactivation: %v", err)
 	}
 }
 
@@ -424,7 +461,7 @@ func TestUnmarshalFromDB_RoundTripsAllFields(t *testing.T) {
 		IsSuperAdmin:    false,
 		HierarchyLevel:  25,
 		Permissions:     []*permission.Permission{view},
-		IsDeleted:       false,
+		IsActive:        true,
 	})
 	if r.ID() != rid || r.TenantID() != tid {
 		t.Fatalf("ids: %q / %q", r.ID(), r.TenantID())
@@ -444,7 +481,7 @@ func TestUnmarshalFromDB_DoesNotEmitEvents(t *testing.T) {
 	t.Parallel()
 	r := role.UnmarshalFromDB(role.Snapshot{
 		ID: role.ID(ids.NewV7().String()), TenantID: tenant.ID(ids.NewV7().String()),
-		Name: "Hydrated", HierarchyLevel: 50,
+		Name: "Hydrated", HierarchyLevel: 50, IsActive: true,
 	})
 	if events := r.PullEvents(); len(events) != 0 {
 		t.Fatalf("UnmarshalFromDB emitted %d events (must be 0 — TDL canon)", len(events))

@@ -18,7 +18,7 @@ func adminMustHoldNames() map[string]bool {
 	p := permission.IdentityPermissions
 	out := map[string]bool{}
 	for _, n := range []string{
-		p.Roles.Create, p.Roles.Update, p.Roles.Delete, p.Roles.Assign, p.Roles.Revoke, p.Roles.Approve,
+		p.Roles.Create, p.Roles.Update, p.Roles.Manage, p.Roles.Assign, p.Roles.Revoke, p.Roles.Approve,
 		p.Users.UpdatePermissions,
 		p.Tenants.Update, p.Tenants.UpdateSettings,
 		p.PlatformMarketplace.Purchase, p.Orders.Payments.Record,

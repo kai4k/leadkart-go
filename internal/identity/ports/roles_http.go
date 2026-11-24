@@ -3,6 +3,7 @@ package ports
 import (
 	"encoding/json"
 	"errors"
+	"github.com/leadkart/leadkart-go/internal/common/lifecycle"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -58,16 +59,24 @@ func handleListRoles(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
 			return
 		}
-		views, err := a.Queries.ListRoles.Handle(r.Context(), query.ListRolesQuery{
+		status, ok := lifecycle.ParseStatusFilter(r.URL.Query().Get("status"))
+		if !ok {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidStatusFilter,
+				"status must be one of active, inactive, all")
+			return
+		}
+		res, err := a.Queries.ListRoles.Handle(r.Context(), query.ListRolesQuery{
 			TenantID: tenant.ID(tid),
+			Status:   status,
 		})
 		if err != nil {
 			log.ErrorContext(r.Context(), "list roles failed", "err", err)
 			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
 			return
 		}
-		out := ListRolesResponse{Roles: make([]RoleDto, 0, len(views))}
-		for _, v := range views {
+		counts := res.Counts
+		out := ListRolesResponse{Roles: make([]RoleDto, 0, len(res.Roles)), StatusCounts: &counts}
+		for _, v := range res.Roles {
 			out.Roles = append(out.Roles, projectRoleViewToDto(v))
 		}
 		writeJSON(w, http.StatusOK, out)
@@ -313,15 +322,17 @@ func handleRevokeRolePermission(log *slog.Logger, a app.Application) http.Handle
 	})
 }
 
-// ----- DeleteRole -----------------------------------------------------------
+// ----- Deactivate / reactivate a role (ADR 0073: a role is never deleted) -----
 
-func handleDeleteRole(log *slog.Logger, a app.Application) http.Handler {
+// handleChangeRoleStatus serves POST .../deactivate (reactivate=false) and .../reactivate
+// (reactivate=true): 200 with the updated role, idempotent.
+func handleChangeRoleStatus(log *slog.Logger, a app.Application, reactivate bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id, ok := parseRoleIDPath(w, r)
 		if !ok {
 			return
 		}
-		// DeletedBy comes from the JWT Subject claim — caller's PersonID.
+		// ChangedBy comes from the JWT Subject claim: the caller's PersonID.
 		c, claimsOk := authn.ClaimsFromContext(r.Context())
 		if !claimsOk {
 			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
@@ -332,13 +343,29 @@ func handleDeleteRole(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
 			return
 		}
-		err := a.Commands.DeleteRole.Handle(r.Context(), command.DeleteRoleCommand{
+		cmd := command.ChangeRoleStatusCommand{
 			TenantID:  tenant.ID(tid),
 			RoleID:    id,
-			DeletedBy: c.Subject,
+			ChangedBy: c.Subject,
 			Actor:     authn.AuthorityFrom(r.Context()),
-		})
-		writeRoleMutationResult(w, log, r, err)
+		}
+		var err error
+		if reactivate {
+			err = a.Commands.ReactivateRole.Handle(r.Context(), cmd)
+		} else {
+			err = a.Commands.DeactivateRole.Handle(r.Context(), cmd)
+		}
+		if err != nil {
+			writeRoleMutationResult(w, log, r, err)
+			return
+		}
+		view, err := a.Queries.GetRole.Handle(r.Context(), query.GetRoleQuery{TenantID: cmd.TenantID, RoleID: id})
+		if err != nil {
+			log.ErrorContext(r.Context(), "read role after status change failed", "err", err)
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+			return
+		}
+		writeJSON(w, http.StatusOK, projectRoleViewToDto(view))
 	})
 }
 
@@ -437,5 +464,6 @@ func projectRoleViewToDto(v query.RoleView) RoleDto {
 		Permissions:     v.Permissions,
 		CreatedAt:       v.CreatedAt,
 		ParentRoleID:    v.ParentRoleID,
+		IsActive:        v.IsActive,
 	}
 }

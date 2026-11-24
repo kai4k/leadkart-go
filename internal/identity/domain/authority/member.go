@@ -100,7 +100,7 @@ func MemberOf(m *membership.Membership, roles []*role.Role, now time.Time, perso
 		overrides: liveOverrides(m, now), statusActive: m.Status() == membership.StatusActive,
 		levels: make(map[role.ID]Rank, len(roles))}
 	for _, r := range roles {
-		if r.IsDeleted() {
+		if !r.IsActive() {
 			continue
 		}
 		out.levels[r.ID()] = levelOf(r)

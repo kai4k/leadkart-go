@@ -10,9 +10,12 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/leadkart/leadkart-go/internal/identity/ports"
 )
 
 // lifecycleList lists path with ?status= (empty: no parameter) and returns the ids of the
@@ -125,6 +128,89 @@ func TestE2E_Product_InactiveNotDeleted(t *testing.T) {
 	for _, verb := range []string{"deactivate", "reactivate"} {
 		if r := f.authedJSON(t, http.MethodPost, base+"/"+missing+"/"+verb, tok, nil); r.status != http.StatusNotFound {
 			t.Fatalf("%s unknown product: %d, want 404", verb, r.status)
+		}
+	}
+}
+
+// effectivePermissions is what the caller's token holds right now, from the capabilities read.
+func (f e2eFixture) effectivePermissions(t *testing.T, token string) []string {
+	t.Helper()
+	r := f.authedJSON(t, http.MethodGet, "/api/v1/auth/me/capabilities", token, nil)
+	var c ports.CapabilitiesDto
+	if r.status != http.StatusOK || json.Unmarshal(r.body, &c) != nil {
+		t.Fatalf("capabilities: %d %s", r.status, r.body)
+	}
+	return c.EffectivePermissions
+}
+
+func TestE2E_Role_InactiveNotDeleted(t *testing.T) {
+	f := newE2EFixture(t)
+	owner := f.registerAndLogin(t, "roleinact")
+	tok := owner.AccessToken
+	keep := f.customRole(t, tok, "Keep Role", 60)
+	off := f.customRole(t, tok, "Off Role", 60)
+	member := f.createMember(t, owner, "assignee")
+	base := "/api/v1/roles"
+
+	if r := f.authedJSON(t, http.MethodDelete, base+"/"+off, tok, nil); r.status != http.StatusMethodNotAllowed && r.status != http.StatusNotFound {
+		t.Fatalf("DELETE role: status %d, want the route gone (404/405)", r.status)
+	}
+
+	// Deactivate answers the updated role; repeating answers the same (a no-op).
+	for range 2 {
+		r := f.authedJSON(t, http.MethodPost, base+"/"+off+"/deactivate", tok, nil)
+		if r.status != http.StatusOK {
+			t.Fatalf("deactivate: status %d body %s", r.status, r.body)
+		}
+		invWant(t, invObj(t, r.body), "is_active", false)
+	}
+
+	// Hidden from the default list, shown by status=inactive, both by status=all; counts whatever the filter.
+	ids, counts := lifecycleList(t, f, tok, base, "", "roles", "id")
+	if containsID(ids, off) || !containsID(ids, keep) {
+		t.Fatalf("default list: want the active role and not the inactive one")
+	}
+	if counts == nil || counts["inactive"] != float64(1) || counts["active"].(float64) < 2 {
+		t.Fatalf("status_counts %v, want 1 inactive and the active roles", counts)
+	}
+	if ids, _ = lifecycleList(t, f, tok, base, "inactive", "roles", "id"); len(ids) != 1 || ids[0] != off {
+		t.Fatalf("status=inactive %v, want only the inactive role", ids)
+	}
+	if ids, _ = lifecycleList(t, f, tok, base, "all", "roles", "id"); !containsID(ids, off) || !containsID(ids, keep) {
+		t.Fatalf("status=all %v, want both", ids)
+	}
+	if r := f.authedJSON(t, http.MethodGet, base+"?status=deleted", tok, nil); r.status != http.StatusBadRequest {
+		t.Fatalf("status=deleted: %d, want 400 invalid_status_filter", r.status)
+	}
+
+	// Effect: still readable, takes no new holder; reactivate makes it assignable again.
+	if got := f.roleDto(t, tok, off); got.IsActive {
+		t.Fatal("GET of an inactive role reads as active")
+	}
+	r := f.authedJSON(t, http.MethodPost, "/api/v1/users/"+member.membershipID+"/roles", tok, ports.AssignUserRoleRequest{RoleID: off})
+	if r.status != http.StatusConflict || invObj(t, r.body)["error"] != "role_inactive" {
+		t.Fatalf("assign an inactive role: %d %s, want 409 role_inactive", r.status, r.body)
+	}
+	for range 2 {
+		r := f.authedJSON(t, http.MethodPost, base+"/"+off+"/reactivate", tok, nil)
+		if r.status != http.StatusOK {
+			t.Fatalf("reactivate: status %d body %s", r.status, r.body)
+		}
+		invWant(t, invObj(t, r.body), "is_active", true)
+	}
+	if ids, _ = lifecycleList(t, f, tok, base, "", "roles", "id"); !containsID(ids, off) {
+		t.Fatal("default list after reactivate: the role is not back")
+	}
+	f.assignRole(t, tok, member.membershipID, off)
+
+	// A system role cannot be made inactive; an unknown role is 404.
+	system := f.roleIDByName(t, tok, "Company Owner")
+	if r := f.authedJSON(t, http.MethodPost, base+"/"+system+"/deactivate", tok, nil); r.status != http.StatusConflict {
+		t.Fatalf("deactivate a system role: %d %s, want 409", r.status, r.body)
+	}
+	for _, verb := range []string{"deactivate", "reactivate"} {
+		if r := f.authedJSON(t, http.MethodPost, base+"/019f0000-0000-7000-8000-000000000000/"+verb, tok, nil); r.status != http.StatusNotFound {
+			t.Fatalf("%s unknown role: %d, want 404", verb, r.status)
 		}
 	}
 }

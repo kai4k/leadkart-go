@@ -254,7 +254,7 @@ func TestE2E_Impersonation_IdentityWritesNeverAnswer500(t *testing.T) {
 	}{
 		{"create role", http.MethodPost, "/api/v1/roles", ports.CreateRoleRequest{Name: "Imp Role", HierarchyLevel: 60}},
 		{"update role", http.MethodPatch, "/api/v1/roles/" + otherID, map[string]any{"name": "x"}},
-		{"delete role", http.MethodDelete, "/api/v1/roles/" + otherID, nil},
+		{"deactivate role", http.MethodPost, "/api/v1/roles/" + otherID + "/deactivate", nil},
 		{"update user profile", http.MethodPatch, "/api/v1/users/" + m + "/profile", ports.UpdateUserProfileRequest{Designation: "d", Department: "e", StatusMessage: "s"}},
 		{"deactivate user", http.MethodPost, "/api/v1/users/" + m + "/deactivate", ports.DeactivateUserRequest{Reason: "sweep"}},
 		{"reactivate user", http.MethodPost, "/api/v1/users/" + m + "/reactivate", nil},

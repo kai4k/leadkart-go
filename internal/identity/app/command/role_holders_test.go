@@ -180,9 +180,9 @@ type tallyRoles struct {
 	n tallyCounts
 }
 
-func (c tallyRoles) GetByIDsIncludingDeleted(ctx context.Context, tid tenant.ID, ids []role.ID) ([]*role.Role, error) {
-	c.n["roles.GetByIDsIncludingDeleted"]++
-	return c.Repository.GetByIDsIncludingDeleted(ctx, tid, ids)
+func (c tallyRoles) GetByIDsIncludingInactive(ctx context.Context, tid tenant.ID, ids []role.ID) ([]*role.Role, error) {
+	c.n["roles.GetByIDsIncludingInactive"]++
+	return c.Repository.GetByIDsIncludingInactive(ctx, tid, ids)
 }
 
 type tallyPersons struct {
@@ -255,7 +255,7 @@ func TestRoleEdits_HolderReadsDoNotGrowWithTheNumberOfHolders(t *testing.T) {
 	}
 	for _, relevel := range []bool{false, true} {
 		small, large := run(3, relevel), run(30, relevel)
-		for _, name := range []string{"members.ListHoldingRole", "members.ListForTenant", "members.ListReportingLinks", "members.ListReportingLinks.rows", "members.GetByID", "roles.GetByIDsIncludingDeleted", "persons.GetByID", "persons.GetByIDs"} {
+		for _, name := range []string{"members.ListHoldingRole", "members.ListForTenant", "members.ListReportingLinks", "members.ListReportingLinks.rows", "members.GetByID", "roles.GetByIDsIncludingInactive", "persons.GetByID", "persons.GetByIDs"} {
 			if small[name] != large[name] {
 				t.Errorf("relevel=%v: %s = %d over 3 holders but %d over 30: it must not grow per holder", relevel, name, small[name], large[name])
 			}

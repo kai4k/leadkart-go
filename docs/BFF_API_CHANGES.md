@@ -252,7 +252,8 @@ Generated from `ports.AddRoutes` by `TestArch_BFFRouteGateTable` (the test fails
 | `POST /api/v1/roles/{roleId}/permissions/grant` | `identity.roles.update` | honoured; writes allowed |
 | `POST /api/v1/roles/{roleId}/permissions/revoke` | `identity.roles.update` | honoured; writes allowed |
 | `PATCH /api/v1/roles/{roleId}/parent` | `identity.roles.update` | honoured; writes allowed |
-| `DELETE /api/v1/roles/{roleId}` | `identity.roles.delete` | honoured; writes allowed |
+| `POST /api/v1/roles/{roleId}/deactivate` | `identity.roles.manage` | honoured; writes allowed |
+| `POST /api/v1/roles/{roleId}/reactivate` | `identity.roles.manage` | honoured; writes allowed |
 | `GET /api/v1/platform/tenants` | platform operator and `platform.tenants.view` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
 | `GET /api/v1/platform/persons/{personId}` | platform operator and `platform.users.view` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
 | `GET /api/v1/platform/persons` | platform operator and `platform.users.view` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |

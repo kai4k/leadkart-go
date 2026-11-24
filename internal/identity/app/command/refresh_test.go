@@ -778,7 +778,7 @@ type rolesErrRepo struct {
 func (r *rolesErrRepo) GetByIDs(_ context.Context, _ tenant.ID, _ []role.ID) ([]*role.Role, error) {
 	return nil, r.getByIDsErr
 }
-func (r *rolesErrRepo) GetByIDsIncludingDeleted(context.Context, tenant.ID, []role.ID) ([]*role.Role, error) {
+func (r *rolesErrRepo) GetByIDsIncludingInactive(context.Context, tenant.ID, []role.ID) ([]*role.Role, error) {
 	return nil, r.getByIDsErr
 }
 func (r *rolesErrRepo) Add(context.Context, *role.Role) error { return nil }
