@@ -565,3 +565,40 @@ func TestReplaceOverrides_AnUnchangedSaveWritesNothingAndRotatesNothing(t *testi
 		t.Fatalf("empty save on an empty member: err %v, rotations %d, want no rotation", err, len(w.rotations))
 	}
 }
+
+// A permission held through an INACTIVE role is not a durable hold (review G2j S1): an inactive role
+// confers nothing, so an actor who holds X only through a time-bound override (plus an inactive role
+// that also carries X) cannot confer X by assigning a role. With the same role ACTIVE the hold is durable
+// and the assignment goes through, so the filter in freshActor is what this pins.
+func TestAssignRole_AnInactiveRoleIsNotADurableHold(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	x := p.Crm.Leads.Assign
+	for name, c := range map[string]struct {
+		carrierActive bool
+		wantErr       error
+	}{
+		"the carrier role is active: X is held durably through it":                {true, nil},
+		"the carrier role is inactive: X is held only until the override expires": {false, authority.ErrGrantExceedsAuthority},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			w := newAuthzWorld(t)
+			w.next++
+			carrier := w.addRoleSnap(t, role.Snapshot{ID: role.ID(awID(w.next + 2000)), TenantID: awTenant, Name: "Carries X", HierarchyLevel: 45, CreatedAt: testNow, IsActive: c.carrierActive}, x)
+			actorM := w.memberSnap(t, membership.Snapshot{RoleAssignments: []role.ID{w.manager.ID(), carrier.ID()},
+				GrantedPermissions: []membership.GrantedOverride{{Permission: permission.FromConstant(x), ExpiresAt: testNow.Add(time.Hour)}}})
+			actor := actorAs(t, actorM.ID(), authority.RankManager, p.Roles.Assign, x)
+			giver := w.customRole(t, "Gives X", 50, x)
+			target := w.member(t, w.exec)
+
+			err := w.handlers().assign.Handle(t.Context(), command.AssignUserRoleCommand{TenantID: awTenant, MembershipID: target.ID(), RoleID: giver.ID(), Actor: actor})
+			if c.wantErr == nil && err != nil {
+				t.Fatalf("assign with a durable hold: %v", err)
+			}
+			if c.wantErr != nil && !errors.Is(err, c.wantErr) {
+				t.Fatalf("assign: %v, want %v", err, c.wantErr)
+			}
+		})
+	}
+}
