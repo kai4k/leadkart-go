@@ -11,6 +11,15 @@
 ALTER TABLE identity.roles ADD COLUMN is_active boolean NOT NULL DEFAULT true;
 UPDATE identity.roles SET is_active = false WHERE is_deleted;
 
+-- The old unique index only covered live rows, so a soft-deleted role may share its name with a live
+-- one (or with another deleted one). The new index covers every row: each such deleted row keeps its
+-- data and takes a deterministic new name (its own id appended, within the 100 characters).
+UPDATE identity.roles d
+SET    name = left(d.name, 100 - 37) || '~' || d.id::text
+WHERE  d.is_deleted
+AND    EXISTS (SELECT 1 FROM identity.roles o
+               WHERE o.tenant_id = d.tenant_id AND o.name = d.name AND o.id <> d.id);
+
 DROP INDEX IF EXISTS identity.uq_roles_tenant_name;
 DROP INDEX IF EXISTS identity.idx_roles_super_admin;
 DROP INDEX IF EXISTS identity.idx_roles_tenant_created_keyset;

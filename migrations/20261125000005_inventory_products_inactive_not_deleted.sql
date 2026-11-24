@@ -17,6 +17,15 @@ DROP INDEX IF EXISTS inventory.idx_products_schedule_class;
 -- A product soft-deleted before this migration is INACTIVE afterwards (it never reappears as active).
 UPDATE inventory.products SET is_active = false WHERE is_deleted;
 
+-- The old unique index only covered live rows, so a soft-deleted product may share its SKU with a
+-- live one (or with another deleted one). The new index covers every row: each such deleted row
+-- keeps its data and takes a deterministic new SKU (its own id appended, within the 64 characters).
+UPDATE inventory.products d
+SET    sku = left(d.sku, 64 - 37) || '~' || d.id::text
+WHERE  d.is_deleted
+AND    EXISTS (SELECT 1 FROM inventory.products o
+               WHERE o.tenant_id = d.tenant_id AND o.sku = d.sku AND o.id <> d.id);
+
 ALTER TABLE inventory.products
     DROP COLUMN is_deleted,
     DROP COLUMN deleted_at,
