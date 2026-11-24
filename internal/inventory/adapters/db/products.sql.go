@@ -91,6 +91,41 @@ func (q *Queries) GetProductByID(ctx context.Context, id pgtype.UUID) (Inventory
 	return i, err
 }
 
+const getProductSkuHolderActive = `-- name: GetProductSkuHolderActive :many
+SELECT is_active
+FROM   inventory.products
+WHERE  tenant_id = $1
+  AND  sku       = $2
+LIMIT  1
+`
+
+type GetProductSkuHolderActiveParams struct {
+	TenantID pgtype.UUID
+	Sku      string
+}
+
+// Whether the product holding this SKU in the tenant is active. A SKU is unique over EVERY product,
+// inactive ones included (old invoices print it), so the create path tells the two cases apart.
+func (q *Queries) GetProductSkuHolderActive(ctx context.Context, arg GetProductSkuHolderActiveParams) ([]bool, error) {
+	rows, err := q.db.Query(ctx, getProductSkuHolderActive, arg.TenantID, arg.Sku)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []bool
+	for rows.Next() {
+		var is_active bool
+		if err := rows.Scan(&is_active); err != nil {
+			return nil, err
+		}
+		items = append(items, is_active)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getProductStockByID = `-- name: GetProductStockByID :one
 SELECT p.id, p.tenant_id, p.sku, p.name, p.dosage_form, p.pack_size, p.hsn_code,
        p.gst_rate_bps, p.manufacturer, p.is_active, p.created_at, p.updated_at,

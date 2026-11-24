@@ -310,6 +310,7 @@ const (
 	ErrCodeNotFound            = "not_found"
 	ErrCodeConflict            = "conflict"
 	ErrCodeAlreadyExists       = "already_exists"
+	ErrCodeSKUTakenByInactive  = "product_sku_taken_by_inactive"
 	ErrCodeUnauthenticated     = "unauthenticated"
 	ErrCodeForbidden           = "forbidden"
 	ErrCodeInsufficientStock   = "insufficient_stock"

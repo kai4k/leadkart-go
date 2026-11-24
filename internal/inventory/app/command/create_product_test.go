@@ -200,6 +200,23 @@ func TestCreateProductHandler_DuplicateSKU_ReturnsErrSKUTaken(t *testing.T) {
 	}
 }
 
+// A SKU never frees up: an INACTIVE product's SKU is told apart (ADR 0073 addendum).
+func TestCreateProductHandler_SKUOfAnInactiveProduct_ReturnsErrSKUTakenByInactive(t *testing.T) {
+	t.Parallel()
+	repo := newFakeProductRepo()
+	h, l := newCreate(repo, commercepolicy.DrugScheduleOptional)
+	cmd := baseCreate(t, "OLD-1", l.twelve)
+	old := seedProduct(t, repo, cmd.TenantID, cmd.ActorMembershipID, "OLD-1")
+	if err := old.Deactivate(cmd.ActorMembershipID, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := h.Handle(t.Context(), cmd)
+	if !errors.Is(err, product.ErrSKUTakenByInactive) || errors.Is(err, product.ErrSKUTaken) {
+		t.Fatalf("err: got %v want ErrSKUTakenByInactive (and not ErrSKUTaken)", err)
+	}
+}
+
 // Repo Add error propagates wrapped (caller can branch on errors.Is).
 func TestCreateProductHandler_RepoAddError_Propagates(t *testing.T) {
 	t.Parallel()

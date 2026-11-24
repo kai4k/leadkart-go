@@ -96,6 +96,9 @@ func (r *FakeRepository) Add(_ context.Context, p *product.Product) error {
 	}
 	for _, existing := range r.Products {
 		if existing.TenantID() == p.TenantID() && existing.SKU() == p.SKU() {
+			if !existing.IsActive() {
+				return product.ErrSKUTakenByInactive
+			}
 			return product.ErrSKUTaken
 		}
 	}

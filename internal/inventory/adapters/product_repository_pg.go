@@ -193,6 +193,18 @@ func insertProductRow(ctx context.Context, q *db.Queries, p *product.Product) er
 	if err != nil {
 		return fmt.Errorf("product repo: parse tenant id: %w", err)
 	}
+	// A SKU never frees up. Look the holder up first so an inactive one is told apart; the unique index
+	// stays the backstop for a concurrent create (reported as the plain [product.ErrSKUTaken]).
+	holders, herr := q.GetProductSkuHolderActive(ctx, db.GetProductSkuHolderActiveParams{TenantID: pgconv.PgUUID(tid), Sku: p.SKU()})
+	if herr != nil {
+		return fmt.Errorf("product repo: sku holder: %w", herr)
+	}
+	if len(holders) > 0 {
+		if holders[0] {
+			return product.ErrSKUTaken
+		}
+		return product.ErrSKUTakenByInactive
+	}
 	err = q.InsertProduct(ctx, db.InsertProductParams{
 		ID:         pgconv.PgUUID(pid),
 		TenantID:   pgconv.PgUUID(tid),

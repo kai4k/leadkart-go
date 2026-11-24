@@ -15,6 +15,11 @@ var ErrNotFound = errs.New(errs.KindNotFound, "product", "product not found")
 // SKUs are canonicalised upper-case; the check is case-insensitive.
 var ErrSKUTaken = errs.New(errs.KindAlreadyExists, "product", "sku already taken in this tenant")
 
+// ErrSKUTakenByInactive is returned by [Repository.Add] when the SKU is held by an INACTIVE product of
+// the tenant. A SKU never frees up (old invoices print it), so the owner wants this told apart from
+// [ErrSKUTaken]: the web says "A deleted product used this SKU. Pick another." (ADR 0073 addendum).
+var ErrSKUTakenByInactive = errs.New(errs.KindAlreadyExists, "product", "sku was used by a deleted (inactive) product of this tenant")
+
 // ListFilter is the filter input for [Repository.ListPage] (GET /v1/inventory/products, BRD §6.5).
 //
 //   - Search       — pg_trgm fuzzy match on (sku || name); empty = no filter.

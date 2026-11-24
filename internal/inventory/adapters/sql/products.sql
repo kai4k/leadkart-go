@@ -16,6 +16,15 @@ INSERT INTO inventory.products (
     $16, $17, $18, $19, $20, $21
 );
 
+-- name: GetProductSkuHolderActive :many
+-- Whether the product holding this SKU in the tenant is active. A SKU is unique over EVERY product,
+-- inactive ones included (old invoices print it), so the create path tells the two cases apart.
+SELECT is_active
+FROM   inventory.products
+WHERE  tenant_id = $1
+  AND  sku       = $2
+LIMIT  1;
+
 -- name: GetProductByID :one
 -- Column order MUST match the inventory.products table column order so sqlc
 -- returns the db.InventoryProduct model (not a custom row).

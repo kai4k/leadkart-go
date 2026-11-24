@@ -142,6 +142,9 @@ func handleCreateProduct(log *slog.Logger, a app.Application) http.Handler {
 		case errors.As(err, &refusal):
 			writeFieldErrors(w, http.StatusUnprocessableEntity, ErrCodeValidationFailed, refusal.Fields)
 			return
+		case errors.Is(err, product.ErrSKUTakenByInactive):
+			writeError(w, http.StatusConflict, ErrCodeSKUTakenByInactive, "a deleted product used this SKU; pick another")
+			return
 		case errors.Is(err, product.ErrSKUTaken):
 			writeError(w, http.StatusConflict, ErrCodeAlreadyExists, "sku already exists in this tenant")
 			return

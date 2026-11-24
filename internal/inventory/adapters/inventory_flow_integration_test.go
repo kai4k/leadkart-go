@@ -62,3 +62,35 @@ func TestProductRepository_Add_DuplicateSKU_ReturnsErrSKUTaken(t *testing.T) {
 		t.Fatalf("want ErrSKUTaken, got %v", err)
 	}
 }
+
+// A SKU never frees up (old invoices print it): an INACTIVE holder is reported as
+// [product.ErrSKUTakenByInactive], an active one as [product.ErrSKUTaken] (ADR 0073 addendum).
+func TestProductRepository_Add_SKUHeldByInactiveProduct_ReturnsErrSKUTakenByInactive(t *testing.T) {
+	t.Parallel()
+	pool := repoFixture(t)
+	tid := seedTenant(t, pool)
+	ctx := tenantCtx(t, tid)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	products := adapters.NewProductRepository(pool, pg.NewTransactor(pool))
+	actor := membership.ID(ids.NewV7().String())
+	spec := product.Spec{SKU: "OLD-1", Name: "First", DosageForm: "Tablet", PackSize: "10", HSNCode: "3004", GSTRateBps: 1200}
+	first, _ := product.New(product.ID(ids.NewV7().String()), tid, actor, spec, fixedNow)
+	if err := products.Add(ctx, first); err != nil {
+		t.Fatalf("first Add: %v", err)
+	}
+	second, _ := product.New(product.ID(ids.NewV7().String()), tid, actor, spec, fixedNow)
+	if err := products.Add(ctx, second); !errors.Is(err, product.ErrSKUTaken) {
+		t.Fatalf("active holder: got %v want ErrSKUTaken", err)
+	}
+	if err := products.UpdateByID(ctx, tid, first.ID(), func(p *product.Product) (bool, error) {
+		return true, p.Deactivate(actor, fixedNow)
+	}); err != nil {
+		t.Fatalf("deactivate: %v", err)
+	}
+	third, _ := product.New(product.ID(ids.NewV7().String()), tid, actor, spec, fixedNow)
+	if err := products.Add(ctx, third); !errors.Is(err, product.ErrSKUTakenByInactive) {
+		t.Fatalf("inactive holder: got %v want ErrSKUTakenByInactive", err)
+	}
+}
