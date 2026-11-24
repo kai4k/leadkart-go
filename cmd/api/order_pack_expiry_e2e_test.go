@@ -340,3 +340,90 @@ func TestE2E_Orders_AnInvoiceEventArrivingAfterTheExpiryIssuesNoInvoice(t *testi
 		t.Fatalf("cancel: %d %s", r.status, r.body)
 	}
 }
+
+// Review G2d B2: the expiry check and the invoice commit are one decision. An invoice that
+// has passed the check and then waits on the order's row lock must be judged again when it
+// gets the lock: the printed month can end while it waits, and an invoice must not commit
+// on expired stock. Here the manual invoice waits behind a held lock on the order row, the
+// month ends, the lock is released, and the invoice is refused.
+func TestE2E_Orders_AnInvoiceWaitingOnTheOrderLockIsJudgedAfterTheLock(t *testing.T) {
+	f := newE2EFixture(t)
+	reg := f.registerAndLogin(t, "invlock")
+	tok := reg.AccessToken
+	inCompany := func(fn func(tx pgx.Tx) error) {
+		t.Helper()
+		if err := pg.NewTransactor(f.Pool).WithinTxPgxTenant(t.Context(), reg.TenantID, func(_ context.Context, tx pgx.Tx) error { return fn(tx) }); err != nil {
+			t.Fatalf("company statement: %v", err)
+		}
+	}
+	productID := invCreateProduct(t, f, tok, "INV-LOCK", nil)
+	now := time.Now().UTC()
+	add := invAddBatch(t, f, tok, productID, "LOT-1", expiry.MonthEnd(now.Year(), now.Month()+6), map[string]any{"initial_quantity": 20})
+	if add.status != http.StatusCreated {
+		t.Fatalf("add batch: %d %s", add.status, add.body)
+	}
+	batchID, _ := invObj(t, add.body)["batch_id"].(string)
+	stack := startFulfilmentStack(t, f.Pool)
+	orderID, orderPath := confirmedOrderOn(t, f, tok, productID, "INV-LOCK")
+	waitFor(t, "the confirmed order reserves 10 units", func() bool {
+		b := invObj(t, f.authedJSON(t, http.MethodGet, "/api/v1/inventory/batches/"+batchID, tok, nil).body)
+		r, _ := b["quantity_reserved"].(float64)
+		return r == 10
+	})
+	stack.pause() // nothing invoices on its own: the manual route is the one under test
+	if r := f.authedJSON(t, http.MethodPost, orderPath+"/pack", tok, ordersports.PackOrderRequest{CarrierName: "BlueDart", BoxCount: 2, WeightGrams: 1500}); r.status != http.StatusNoContent {
+		t.Fatalf("pack: %d %s", r.status, r.body)
+	}
+
+	// Hold the order row's lock.
+	locked := make(chan struct{})
+	release := make(chan struct{})
+	held := make(chan struct{})
+	go func() {
+		defer close(held)
+		_ = pg.NewTransactor(f.Pool).WithinTxPgxTenant(t.Context(), reg.TenantID, func(_ context.Context, tx pgx.Tx) error { // arch-test:ignore-err — a failure shows as the timeout below
+			if _, err := tx.Exec(t.Context(), `SELECT 1 FROM orders.orders WHERE id = $1 FOR UPDATE`, orderID); err != nil {
+				return err
+			}
+			close(locked)
+			<-release
+			return nil
+		})
+	}()
+	<-locked
+
+	// The invoice starts now and waits on the lock.
+	invoiced := make(chan httpResp, 1)
+	go func() { invoiced <- f.authedJSON(t, http.MethodPost, orderPath+"/invoice", tok, nil) }()
+	waitFor(t, "the invoice waits on the order lock", func() bool {
+		var n int
+		inCompany(func(tx pgx.Tx) error {
+			return tx.QueryRow(t.Context(), `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'`).Scan(&n)
+		})
+		return n > 0
+	})
+
+	// The printed month ends while it waits; then the lock is released.
+	last := expiry.MonthEnd(now.Year(), now.Month()-1)
+	inCompany(func(tx pgx.Tx) error {
+		tag, err := tx.Exec(t.Context(), `UPDATE inventory.batches SET expiry_date = $2 WHERE id = $1`, batchID, last)
+		if err == nil && tag.RowsAffected() != 1 {
+			err = errors.New("the batch was not aged")
+		}
+		return err
+	})
+	close(release)
+	<-held
+
+	r := <-invoiced
+	if r.status != http.StatusConflict || errorCode(t, r.body) != "order_stock_expired" {
+		t.Fatalf("invoice that waited on the lock: %d %s; want 409 order_stock_expired", r.status, r.body)
+	}
+	var ord ordersports.OrderDto
+	if err := json.Unmarshal(f.authedJSON(t, http.MethodGet, orderPath, tok, nil).body, &ord); err != nil {
+		t.Fatalf("decode order: %v", err)
+	}
+	if ord.State != "packed" || ord.InvoiceID != "" {
+		t.Fatalf("order state=%q invoice=%q; want packed with no invoice", ord.State, ord.InvoiceID)
+	}
+}

@@ -63,21 +63,23 @@ func (h InvoiceOrderHandler) Handle(ctx context.Context, cmd InvoiceOrderCommand
 	if cmd.TenantID == "" {
 		return InvoiceOrderResult{}, errors.New("orders invoice_order: tenant id required")
 	}
-	// No tax invoice on expired stock, however late this runs. Asked outside the
-	// transaction for the reason the pack gives (another module's read, a second pooled
-	// connection inside a transaction is the pool-deadlock shape). A consume that ran
-	// before the expiry has drained the hold, so its invoice still passes.
-	expired, err := h.stock.HoldsExpiredStock(ctx, cmd.TenantID, cmd.OrderID)
-	if err != nil {
-		return InvoiceOrderResult{}, fmt.Errorf("orders invoice_order: check held stock expiry: %w", err)
-	}
-	if expired {
-		return InvoiceOrderResult{}, fmt.Errorf("orders invoice_order: %w", order.ErrStockExpired)
-	}
 	var result InvoiceOrderResult
-	err = h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
+	err := h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
 		now := h.now().UTC()
 		return h.orders.UpdateByID(ctx, cmd.TenantID, cmd.OrderID, func(o *order.Order) (bool, error) {
+			// No tax invoice on expired stock, however late this runs. Asked here, after the
+			// order row is locked and inside the transaction that commits the invoice, so the
+			// month cannot end between the question and the commit. Both Inventory reads (the
+			// held batches, the company's expiry rule) join this transaction through ctx: no
+			// second pooled connection is taken. A consume that ran before the expiry has
+			// drained the hold, so its invoice still passes.
+			expired, err := h.stock.HoldsExpiredStock(ctx, cmd.TenantID, cmd.OrderID)
+			if err != nil {
+				return false, fmt.Errorf("check held stock expiry: %w", err)
+			}
+			if expired {
+				return false, order.ErrStockExpired
+			}
 			num, err := h.allocator.Allocate(ctx, cmd.TenantID, invoicenumber.FromDate(now), invoicenumber.KindInvoice)
 			if err != nil {
 				return false, fmt.Errorf("allocate number: %w", err)
