@@ -1,8 +1,10 @@
 package command
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -185,7 +187,12 @@ func (h ReserveOrderStockHandler) apply(ctx context.Context, cmd ReserveOrderSto
 			return fmt.Errorf("reserve order stock: %w", werr)
 		}
 		today = w.Today
-		for _, a := range plan {
+		// Batch locks are taken in batch-id order, the order the release and the shipment use
+		// (lockedOrderHold), so a reserve and a dispatch sharing two batches queue instead of
+		// deadlocking. The plan is by line, then FEFO; a copy is sorted, the plan is not changed.
+		ordered := slices.Clone(plan)
+		slices.SortStableFunc(ordered, func(x, y allocation) int { return cmp.Compare(x.batchID, y.batchID) })
+		for _, a := range ordered {
 			var loaded *batch.Batch
 			updErr := h.batches.UpdateByID(ctx, cmd.TenantID, a.batchID, func(b *batch.Batch) (bool, error) {
 				if !w.IsSellable(b.ExpiryDate()) {

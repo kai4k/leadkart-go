@@ -2,6 +2,7 @@ package command_test
 
 import (
 	"context"
+	"github.com/leadkart/leadkart-go/internal/inventory/app/sellability/sellabilitytest"
 	"sync"
 	"testing"
 
@@ -123,4 +124,39 @@ func TestReleaseOrderStock_AHoldDrainedWhileWaitingForTheLocksIsNotDrainedTwice(
 	require.False(t, res.Released)
 	require.Equal(t, int64(10), b.QuantityReserved(), "this worker released nothing")
 	require.Zero(t, movements.AddCalls)
+}
+
+// Review G2g M3: the reserve takes its batch locks in batch-id order too, the order the
+// release and the shipment use, so a reserve and a dispatch that share two batches queue
+// instead of deadlocking. The order's lines name the batches in the OPPOSITE order.
+func TestReserveOrderStock_LocksBatchesInIDOrder(t *testing.T) {
+	t.Parallel()
+	log := &eventLog{}
+	batches := newFakeBatchRepo()
+	movements := newFakeMovementRepo()
+	actor := newMembershipID(t)
+	tid := newTenantID(t)
+	products := newFakeProductRepo()
+	p1 := seedProduct(t, products, tid, actor, "SKU-RL-1")
+	p2 := seedProduct(t, products, tid, actor, "SKU-RL-2")
+	b1 := seedBatchWithStock(t, batches, p1, actor, "B1", 50)
+	b2 := seedBatchWithStock(t, batches, p2, actor, "B2", 50)
+	lo, hi := b1, b2
+	if lo.ID() > hi.ID() {
+		lo, hi = hi, lo
+	}
+	loProduct, hiProduct := p1, p2
+	if lo.ID() == b2.ID() {
+		loProduct, hiProduct = p2, p1
+	}
+
+	h := command.NewReserveOrderStockHandler(&fakeUoW{}, lockingBatchRepo{Repository: batches, log: log}, movements, &fakeReservationLedger{}, &fakeEnqueuer{}, sellabilitytest.Resolver(fixedNow), fixedClock, testNewMovementID)
+	res, err := h.Handle(t.Context(), command.ReserveOrderStockCommand{
+		TenantID: tid, OrderID: uuid.NewString(), ActorMembershipID: actor,
+		// the line of the HIGHER batch id first
+		Lines: []command.ReserveLine{{ProductID: hiProduct.ID(), Quantity: 5}, {ProductID: loProduct.ID(), Quantity: 5}},
+	})
+	require.NoError(t, err)
+	require.True(t, res.Reserved)
+	require.Equal(t, []string{"lock " + string(lo.ID()), "lock " + string(hi.ID())}, log.events)
 }
