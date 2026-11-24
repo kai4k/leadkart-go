@@ -409,15 +409,18 @@ func writeRoleMutationResult(w http.ResponseWriter, log *slog.Logger, r *http.Re
 		// ADR 0069 policy refusal, written by the shared translator.
 	case errors.Is(err, command.ErrRoleInUse):
 		var inUse *command.RoleInUseError
-		holders := 0
+		holders, active := 0, 0
+		var names []string
 		if errors.As(err, &inUse) {
-			holders = inUse.ActiveHolders
+			holders, active, names = inUse.Holders, inUse.ActiveHolders, inUse.HolderNames
 		}
-		msg := "the role is still held by " + strconv.Itoa(holders) + " active member(s); reassign them first"
+		msg := "the role is still held by " + strconv.Itoa(holders) + " member(s), " + strconv.Itoa(active) + " of them active; take it off them first"
 		writeJSON(w, http.StatusConflict, ErrorResponse{
 			Type: problemType(ErrCodeRoleInUse), Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,
 			Detail: msg, Error: ErrCodeRoleInUse, Message: msg,
-			Errors: map[string][]string{"active_holders": {strconv.Itoa(holders)}},
+			Errors:      map[string][]string{"active_holders": {strconv.Itoa(active)}},
+			Holders:     &holders,
+			HolderNames: names,
 		})
 	case errors.Is(err, command.ErrPermissionUnknown):
 		writeError(w, http.StatusUnprocessableEntity, ErrCodePermissionUnknown, err.Error())

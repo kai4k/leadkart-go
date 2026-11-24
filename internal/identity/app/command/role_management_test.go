@@ -289,27 +289,38 @@ func TestDeactivateRole_RoleInUseAndCeiling(t *testing.T) {
 	admin := w.adminActor(t)
 	err := h.del.Handle(ctx, command.ChangeRoleStatusCommand{TenantID: awTenant, RoleID: custom.ID(), Actor: admin})
 	var inUse *command.RoleInUseError
-	if !errors.Is(err, command.ErrRoleInUse) || !errors.As(err, &inUse) || inUse.ActiveHolders != 1 {
-		t.Fatalf("deactivate with an active holder: %v, want RoleInUseError with 1 holder", err)
+	if !errors.Is(err, command.ErrRoleInUse) || !errors.As(err, &inUse) || inUse.ActiveHolders != 1 || inUse.Holders != 2 || len(inUse.HolderNames) != 2 {
+		t.Fatalf("deactivate with an active and an inactive holder: %v, want RoleInUseError with 2 holders (1 active) and their names", err)
 	}
 	if !custom.IsActive() || len(inactive.RoleAssignments()) != 2 {
 		t.Fatalf("a refused deactivation changed state: active=%v inactive roles=%v", custom.IsActive(), inactive.RoleAssignments())
 	}
 
-	// the active holder moves on; only an inactive holder remains
+	// the active holder moves on; the INACTIVE holder still holds the role, which refuses the delete too
+	// (owner ruling 2026-11-25: a role is deleted only when nobody holds it)
 	if err := w.members.UpdateByID(ctx, awTenant, active.ID(), func(m *membership.Membership) (bool, error) {
 		return true, m.RevokeRole(custom.ID(), testNow)
 	}); err != nil {
 		t.Fatal(err)
 	}
+	err = h.del.Handle(ctx, command.ChangeRoleStatusCommand{TenantID: awTenant, RoleID: custom.ID(), Actor: admin})
+	if !errors.As(err, &inUse) || inUse.Holders != 1 || inUse.ActiveHolders != 0 {
+		t.Fatalf("deactivate with only an inactive holder: %v, want RoleInUseError with 1 holder, 0 active", err)
+	}
+	if !custom.IsActive() {
+		t.Fatal("role deactivated by a refused call")
+	}
+	// nobody holds it any more
+	if err := w.members.UpdateByID(ctx, awTenant, inactive.ID(), func(m *membership.Membership) (bool, error) {
+		return true, m.RevokeRole(custom.ID(), testNow)
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := h.del.Handle(ctx, command.ChangeRoleStatusCommand{TenantID: awTenant, RoleID: custom.ID(), Actor: admin}); err != nil {
-		t.Fatalf("deactivate with only an inactive holder: %v", err)
+		t.Fatalf("deactivate with no holder: %v", err)
 	}
 	if custom.IsActive() {
 		t.Error("role not deactivated")
-	}
-	if got := inactive.RoleAssignments(); len(got) != 2 {
-		t.Errorf("inactive holder's assignments = %v, want both kept (nothing is deleted)", got)
 	}
 	// Idempotent: deactivating an inactive role is a no-op.
 	if err := h.del.Handle(ctx, command.ChangeRoleStatusCommand{TenantID: awTenant, RoleID: custom.ID(), Actor: admin}); err != nil {

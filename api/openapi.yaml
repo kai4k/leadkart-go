@@ -1427,7 +1427,7 @@ paths:
       summary: Make a role inactive
       description: |
         Requires `identity.roles.manage` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). A role is never deleted (ADR 0073): it goes inactive.
-        The decision is exactly what deleting a role used to ask. The caller must hold every permission the role carries (deactivating removes them from every holder) and must be allowed to act on every holder, active or not (answered before `role_in_use`). A role still held by an ACTIVE member is refused with 409 `role_in_use` (`errors.active_holders` is the count). A system-default role is 409 `role_system_default`.
+        The decision is exactly what deleting a role used to ask. The caller must hold every permission the role carries (deactivating removes them from every holder) and must be allowed to act on every holder, active or not (answered before `role_in_use`). A role still held by ANY member, active or inactive, is refused with 409 `role_in_use` (a role is deleted only once nobody holds it, owner ruling 2026-11-25): the body carries `holders` (every holder), `holder_names` (display names of up to 5 of them) and `errors.active_holders` (how many are active). A system-default role is 409 `role_system_default`.
         An inactive role confers nothing (no permission, no rank), takes no new holder (`role_inactive` on assign), cannot be edited or be a parent, and is hidden from the default list. The assignments of its INACTIVE holders are kept (nothing is deleted); a holder reactivated while the role is inactive receives nothing from it. Idempotent: an inactive role answers 200. Answers the updated role.
       x-required-permissions: [identity.roles.manage]
       parameters:
@@ -1444,7 +1444,7 @@ paths:
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: '`role_in_use` (an active member holds the role) or `role_system_default` (system-default roles cannot be made inactive)'
+          description: '`role_in_use` (any member, active or inactive, holds the role; `holders`, `holder_names`) or `role_system_default` (system-default roles cannot be made inactive)'
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -4998,6 +4998,8 @@ components:
         detail: { type: string, description: 'RFC 9457 §3.1.4 — human-readable detail' }
         error:  { type: string, description: 'machine-parseable code (LeadKart legacy)' }
         message: { type: string, description: 'human-readable message (LeadKart legacy)' }
+        holders: { type: integer, minimum: 0, description: 'Only on 409 `role_in_use`: how many members, active or inactive, still hold the role.' }
+        holder_names: { type: array, maxItems: 5, items: { type: string }, description: 'Only on 409 `role_in_use`: display names of up to 5 of the holders.' }
         reason:
           type: string
           description: |

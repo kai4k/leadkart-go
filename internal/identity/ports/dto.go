@@ -771,6 +771,11 @@ type ErrorResponse struct {
 	// name, value = list of error messages). Populated by validation
 	// failures; nil for non-validation errors.
 	Errors map[string][]string `json:"errors,omitzero"`
+
+	// Holders is the number of members, active or not, that still hold the role (RFC 9457
+	// extension; only 409 role_in_use carries it). HolderNames are up to five of their display names.
+	Holders     *int     `json:"holders,omitzero"`
+	HolderNames []string `json:"holder_names,omitzero"`
 }
 
 // UserPermissionOverridesDto is a member's live permission overrides: the

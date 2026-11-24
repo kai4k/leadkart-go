@@ -34,16 +34,24 @@ var ErrRoleNameTaken = errors.New("role: name already taken in this tenant")
 // Actor is built once by the port (authn.AuthorityFrom); the zero Actor is
 // refused before anything is locked or loaded.
 
-// ErrRoleInUse surfaces when a delete is refused because active memberships
-// still hold the role. Wire shape: 409 role_in_use with the holder count
-// (see [RoleInUseError]).
-var ErrRoleInUse = errors.New("role: in use by active members")
+// MaxRoleInUseHolderNames is how many holder names a role_in_use refusal carries.
+const MaxRoleInUseHolderNames = 5
 
-// RoleInUseError is [ErrRoleInUse] with the number of active holders.
-type RoleInUseError struct{ ActiveHolders int }
+// ErrRoleInUse surfaces when a delete is refused because a membership, active or inactive,
+// still holds the role (owner ruling 2026-11-25: a role is deleted only when nobody holds it).
+// Wire shape: 409 role_in_use with the holder count and names (see [RoleInUseError]).
+var ErrRoleInUse = errors.New("role: still held by members")
+
+// RoleInUseError is [ErrRoleInUse] with every holder counted (Holders), how many of them are
+// active (ActiveHolders), and the display names of up to [MaxRoleInUseHolderNames] of them.
+type RoleInUseError struct {
+	Holders       int
+	ActiveHolders int
+	HolderNames   []string
+}
 
 func (e *RoleInUseError) Error() string {
-	return fmt.Sprintf("%s: %d active holders", ErrRoleInUse, e.ActiveHolders)
+	return fmt.Sprintf("%s: %d holders (%d active)", ErrRoleInUse, e.Holders, e.ActiveHolders)
 }
 
 // Is makes errors.Is(err, ErrRoleInUse) match.
@@ -430,13 +438,11 @@ func NewDeactivateRoleHandler(uow pg.UnitOfWork, lock AuthorityLocker, m members
 }
 
 // Handle decides [authority.Actor.MayDeactivateRole] (authority first), then applies the
-// role-in-use rule, which is exactly what deleting a role used to enforce: an ACTIVE holder
-// refuses it ([RoleInUseError], nothing changes). Otherwise the role goes inactive. An inactive
-// role confers nothing (every authority read skips it), so deactivating can never leave a member
-// with more than deleting did. The assignments of the INACTIVE holders are kept (nothing is deleted,
-// ADR 0073): if such a member is reactivated while the role is inactive, the role still confers
-// nothing; reactivating the role gives it back (and the actor needed authority over every holder
-// to do it). An inactive role is a no-op (idempotent).
+// role-in-use rule (owner ruling 2026-11-25, ADR 0073 addendum): ANY holder, active or inactive,
+// refuses it ([RoleInUseError], nothing changes), so a role is deleted only once nobody holds it.
+// Otherwise the role goes inactive. An inactive role confers nothing (every authority read skips
+// it). Reactivating gives it back to every holder (and the actor needed authority over every
+// holder to do it). An inactive role is a no-op (idempotent).
 func (h DeactivateRoleHandler) Handle(ctx context.Context, cmd ChangeRoleStatusCommand) error {
 	if err := validateRoleCommand("deactivate_role", cmd.TenantID, cmd.RoleID, true, cmd.Actor); err != nil {
 		return err
@@ -449,18 +455,36 @@ func (h DeactivateRoleHandler) Handle(ctx context.Context, cmd ChangeRoleStatusC
 		if !r.IsActive() {
 			return nil
 		}
-		active := 0
-		for _, m := range holders.memberships {
-			if m.Status() == membership.StatusActive {
-				active++
-			}
-		}
-		if active > 0 {
-			return &RoleInUseError{ActiveHolders: active}
+		if len(holders.memberships) > 0 {
+			return h.inUse(ctx, holders)
 		}
 		return r.Deactivate(cmd.ChangedBy, now)
 	})
 	return translateAuthorityWrite("deactivate_role", err)
+}
+
+// inUse builds the refusal: every holder counted, active ones apart, and the names of the first few.
+func (h DeactivateRoleHandler) inUse(ctx context.Context, holders loadedHolders) error {
+	out := &RoleInUseError{Holders: len(holders.memberships)}
+	var personIDs []person.ID
+	for _, m := range holders.memberships {
+		if m.Status() == membership.StatusActive {
+			out.ActiveHolders++
+		}
+		if len(personIDs) < MaxRoleInUseHolderNames {
+			personIDs = append(personIDs, m.PersonID())
+		}
+	}
+	people, err := h.facts.persons.GetByIDs(ctx, personIDs)
+	if err != nil {
+		return fmt.Errorf("deactivate_role: load holder names: %w", err)
+	}
+	for _, id := range personIDs {
+		if p, ok := people[id]; ok {
+			out.HolderNames = append(out.HolderNames, strings.TrimSpace(p.FirstName()+" "+p.LastName()))
+		}
+	}
+	return out
 }
 
 // ReactivateRoleHandler runs the reactivate flow.

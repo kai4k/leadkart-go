@@ -255,7 +255,7 @@ func TestE2E_RoleEdits_EndHoldersStaleTokens(t *testing.T) {
 }
 
 // TestE2E_RoleReactivate_NeedsADurableHold (review G2j B1): reactivating an inactive role gives its
-// permissions back to its holders, which is a conferral. An actor who holds P only through a
+// permissions back, which is a conferral. An actor who holds P only through a
 // time-bound approved override cannot make P durable for others that way, exactly as they cannot
 // by assigning a role that carries P; the owner can.
 func TestE2E_RoleReactivate_NeedsADurableHold(t *testing.T) {
@@ -272,21 +272,14 @@ func TestE2E_RoleReactivate_NeedsADurableHold(t *testing.T) {
 	f.setManager(t, owner.AccessToken, a.membershipID, sm.membershipID)
 	f.grantOverrides(t, owner.AccessToken, a.membershipID, []string{p.Roles.Update, p.Roles.Manage}, nil)
 
-	// R carries P and is held by H, whose membership is inactive when R goes inactive.
-	h := f.createMember(t, owner, "holder")
+	// R carries P and nobody holds it when it goes inactive (a role is deleted only once unused,
+	// owner ruling 2026-11-25). Reactivating it still asks the caller to hold P durably.
 	r := f.customRole(t, owner.AccessToken, "Carries P", 60)
 	if g := f.grantRolePerm(t, owner.AccessToken, r, perm); g.status != http.StatusNoContent {
 		t.Fatalf("grant P to R: %d %s", g.status, g.body)
 	}
-	f.assignRole(t, owner.AccessToken, h.membershipID, r)
-	if d := f.authedJSON(t, http.MethodPost, "/api/v1/users/"+h.membershipID+"/deactivate", owner.AccessToken, ports.DeactivateUserRequest{Reason: "reactivate conferral"}); d.status != http.StatusNoContent {
-		t.Fatalf("deactivate the holder: %d %s", d.status, d.body)
-	}
 	if d := f.authedJSON(t, http.MethodPost, "/api/v1/roles/"+r+"/deactivate", owner.AccessToken, nil); d.status != http.StatusOK {
 		t.Fatalf("deactivate R: %d %s", d.status, d.body)
-	}
-	if d := f.authedJSON(t, http.MethodPost, "/api/v1/users/"+h.membershipID+"/reactivate", owner.AccessToken, nil); d.status != http.StatusNoContent {
-		t.Fatalf("reactivate the holder: %d %s", d.status, d.body)
 	}
 
 	// A holds P only until the approval expires.

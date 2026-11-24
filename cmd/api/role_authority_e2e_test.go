@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -236,7 +237,24 @@ func TestE2E_RoleCommands_PolicyDecides(t *testing.T) {
 		if r := f.authedJSON(t, http.MethodPost, "/api/v1/users/"+holder.membershipID+"/deactivate", owner.AccessToken, ports.DeactivateUserRequest{Reason: "role in use test"}); r.status != http.StatusNoContent {
 			t.Fatalf("deactivate holder: %d %s", r.status, r.body)
 		}
-		// Only an inactive holder remains: the role goes inactive, answers the updated role, and repeating is a no-op.
+		// An INACTIVE holder still holds the role: it is refused too (owner ruling 2026-11-25), and the
+		// refusal says how many hold it and who.
+		r = f.authedJSON(t, http.MethodPost, rolePath(id, "/deactivate"), adminTok, nil)
+		f.wantForbidden(t, "deactivate a role held by an inactive member", r, http.StatusConflict, "role_in_use")
+		var inUse struct {
+			Holders     *int     `json:"holders"`
+			HolderNames []string `json:"holder_names"`
+		}
+		if err := json.Unmarshal(r.body, &inUse); err != nil || inUse.Holders == nil || *inUse.Holders != 1 || len(inUse.HolderNames) != 1 || !strings.Contains(inUse.HolderNames[0], "holder") {
+			t.Fatalf("role_in_use must carry holders=1 and the holder name: %s (%v)", r.body, err)
+		}
+		if e := decodeError(t, r.body); e.Errors["active_holders"][0] != "0" {
+			t.Errorf("active holder count = %v, want 0", e.Errors)
+		}
+		// Taken off the last holder, the role goes inactive, answers the updated role, and repeating is a no-op.
+		if r := f.authedJSON(t, http.MethodDelete, "/api/v1/users/"+holder.membershipID+"/roles/"+id, owner.AccessToken, nil); r.status != http.StatusNoContent {
+			t.Fatalf("revoke the role from the inactive holder: %d %s", r.status, r.body)
+		}
 		for range 2 {
 			r := f.authedJSON(t, http.MethodPost, rolePath(id, "/deactivate"), adminTok, nil)
 			if r.status != http.StatusOK {
@@ -247,12 +265,9 @@ func TestE2E_RoleCommands_PolicyDecides(t *testing.T) {
 				t.Fatalf("deactivate answers the role, now inactive: %s (%v)", r.body, err)
 			}
 		}
-		// Nothing is deleted: the role is still readable and the holder keeps the assignment.
+		// Nothing is deleted: the role is still readable.
 		if got := f.roleDto(t, owner.AccessToken, id); got.IsActive {
 			t.Errorf("the role reads as active after deactivation: %+v", got)
-		}
-		if u := f.getUser(t, owner.AccessToken, holder.membershipID); !slices.Contains(u.RoleIDs, id) {
-			t.Errorf("the assignment of the inactive holder was removed: %v", u.RoleIDs)
 		}
 		// An inactive role takes no new holder and cannot be edited.
 		other := f.createMember(t, owner, "other")
@@ -262,22 +277,11 @@ func TestE2E_RoleCommands_PolicyDecides(t *testing.T) {
 		if r := f.authedJSON(t, http.MethodPatch, rolePath(id, ""), adminTok, ports.UpdateRoleRequest{Name: "Edited while inactive"}); r.status != http.StatusConflict || decodeError(t, r.body).Error != "role_inactive" {
 			t.Errorf("edit an inactive role: %d %s, want 409 role_inactive", r.status, r.body)
 		}
-		// SECURITY: the holder is reactivated while the role is inactive and gets NOTHING from it.
-		if r := f.authedJSON(t, http.MethodPost, "/api/v1/users/"+holder.membershipID+"/reactivate", owner.AccessToken, nil); r.status != http.StatusNoContent {
-			t.Fatalf("reactivate the holder: %d %s", r.status, r.body)
-		}
-		holderTok := f.loginToken(t, holder.email, holder.password)
-		if perms := f.effectivePermissions(t, holderTok); slices.Contains(perms, p.Tasks.WorkItems.Read) {
-			t.Fatalf("a member reactivated while the role is inactive holds the role's permission: %v", perms)
-		}
-		// Reactivating the role gives it back (an active holder's tokens are refreshed).
+		// A role that nobody holds can come back, and an active role takes holders again.
 		if r := f.authedJSON(t, http.MethodPost, rolePath(id, "/reactivate"), adminTok, nil); r.status != http.StatusOK {
 			t.Fatalf("reactivate the role: %d %s", r.status, r.body)
 		}
-		holderTok = f.loginToken(t, holder.email, holder.password)
-		if perms := f.effectivePermissions(t, holderTok); !slices.Contains(perms, p.Tasks.WorkItems.Read) {
-			t.Fatalf("after the role is reactivated its holder lacks its permission: %v", perms)
-		}
+		f.assignRole(t, owner.AccessToken, holder.membershipID, id)
 	})
 	// arch-test:serial — subtests share one fixture and one tenant.
 	t.Run("parent: must be strictly more senior; the key is required; null clears", func(t *testing.T) {
