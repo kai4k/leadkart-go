@@ -25,7 +25,7 @@ import (
 
 func (f e2eFixture) createRoleVia(t *testing.T, token string, body any) (httpResp, string) {
 	t.Helper()
-	r := f.authedJSON(t, http.MethodPost, "/api/v1/roles", token, body)
+	r := f.roleWrite(t, http.MethodPost, "/api/v1/roles", token, body)
 	var out ports.CreateRoleResponse
 	if r.status == http.StatusCreated {
 		if err := json.Unmarshal(r.body, &out); err != nil {
@@ -73,8 +73,6 @@ func TestE2E_RoleCommands_PolicyDecides(t *testing.T) {
 	f.assignRole(t, owner.AccessToken, weakM.membershipID, roleID(role.SystemRoles.Tenant.Administrator))
 	f.grantOverrides(t, owner.AccessToken, weakM.membershipID, []string{p.Roles.Update, p.Roles.Manage}, []string{p.Meta.TenantAdmin})
 	adminTok := f.loginToken(t, adminM.email, adminM.password)
-	mgrTok := f.loginToken(t, mgrM.email, mgrM.password)
-	weakTok := f.loginToken(t, weakM.email, weakM.password)
 	superTok := f.mintPlatformTokenWith(t, nil, true)
 
 	rolePath := func(id, suffix string) string { return "/api/v1/roles/" + id + suffix }
@@ -124,24 +122,6 @@ func TestE2E_RoleCommands_PolicyDecides(t *testing.T) {
 		assertOwnerRoleIntact(t)
 	})
 
-	// arch-test:serial — subtests share one fixture and one tenant.
-	t.Run("create: level is required, in [1, 99], strictly below the creator", func(t *testing.T) {
-		r, _ := f.createRoleVia(t, mgrTok, map[string]any{"name": "No Level Role"})
-		f.wantForbidden(t, "create without hierarchy_level", r, http.StatusBadRequest, "invalid_body")
-		r, _ = f.createRoleVia(t, mgrTok, map[string]any{"name": "Zero Level", "hierarchy_level": 0})
-		f.wantForbidden(t, "create at level 0", r, http.StatusUnprocessableEntity, "role_invalid")
-		r, _ = f.createRoleVia(t, mgrTok, map[string]any{"name": "Level 100", "hierarchy_level": 100})
-		f.wantForbidden(t, "create at level 100", r, http.StatusUnprocessableEntity, "role_invalid")
-		r, _ = f.createRoleVia(t, mgrTok, ports.CreateRoleRequest{Name: "Peer Manager", HierarchyLevel: role.HierarchyLevelManager})
-		f.wantForbidden(t, "manager creates at their own level", r, http.StatusForbidden, "insufficient_rank")
-		r, _ = f.createRoleVia(t, mgrTok, ports.CreateRoleRequest{Name: "Boss Role", HierarchyLevel: role.HierarchyLevelAdmin})
-		f.wantForbidden(t, "manager creates above themselves", r, http.StatusForbidden, "insufficient_rank")
-		r, id := f.createRoleVia(t, mgrTok, ports.CreateRoleRequest{Name: "Field Rep", HierarchyLevel: 60})
-		if r.status != http.StatusCreated || id == "" {
-			t.Fatalf("manager creates a role below themselves: %d %s", r.status, r.body)
-		}
-	})
-
 	custom := func(t *testing.T, name string, level int, perms ...string) string {
 		t.Helper()
 		r, id := f.createRoleVia(t, adminTok, ports.CreateRoleRequest{Name: name, HierarchyLevel: level})
@@ -156,67 +136,6 @@ func TestE2E_RoleCommands_PolicyDecides(t *testing.T) {
 		return id
 	}
 
-	// arch-test:serial — subtests share one fixture and one tenant.
-	t.Run("update: re-levelling above yourself is refused, and so is level 0", func(t *testing.T) {
-		id := custom(t, "Relevel Me", 60)
-		r := f.authedJSON(t, http.MethodPatch, rolePath(id, ""), mgrTok, map[string]any{"hierarchy_level": role.HierarchyLevelAdmin})
-		f.wantForbidden(t, "manager re-levels above themselves", r, http.StatusForbidden, "insufficient_rank")
-		r = f.authedJSON(t, http.MethodPatch, rolePath(id, ""), mgrTok, map[string]any{"hierarchy_level": 0})
-		f.wantForbidden(t, "manager re-levels to 0", r, http.StatusUnprocessableEntity, "role_invalid")
-		if got := f.roleDto(t, owner.AccessToken, id).HierarchyLevel; got != 60 {
-			t.Errorf("level = %d after refused re-levels, want 60", got)
-		}
-		r = f.authedJSON(t, http.MethodPatch, rolePath(id, ""), mgrTok, map[string]any{"hierarchy_level": 70, "name": "Relevelled"})
-		if r.status != http.StatusNoContent {
-			t.Errorf("manager re-levels below themselves: %d %s", r.status, r.body)
-		}
-		dup := custom(t, "Duplicate Source", 60)
-		r = f.authedJSON(t, http.MethodPatch, rolePath(dup, ""), mgrTok, map[string]any{"name": "Relevelled"})
-		f.wantForbidden(t, "rename onto a taken name", r, http.StatusConflict, "role_name_taken")
-	})
-	// arch-test:serial — subtests share one fixture and one tenant.
-	t.Run("permissions: a manager confers and removes only what they hold", func(t *testing.T) {
-		id := custom(t, "Perm Target", 60, p.Crm.Leads.Read, p.Dispatch.ConsignmentNotes.Manage)
-		r := f.authedJSON(t, http.MethodPost, rolePath(id, "/permissions/grant"), mgrTok, ports.RolePermissionRequest{Permission: p.Dispatch.ConsignmentNotes.Read})
-		f.wantForbidden(t, "grant unheld", r, http.StatusForbidden, "grant_exceeds_authority")
-		r = f.authedJSON(t, http.MethodPost, rolePath(id, "/permissions/revoke"), mgrTok, ports.RolePermissionRequest{Permission: p.Dispatch.ConsignmentNotes.Manage})
-		f.wantForbidden(t, "revoke unheld", r, http.StatusForbidden, "grant_exceeds_authority")
-		r = f.authedJSON(t, http.MethodPut, rolePath(id, "/permissions"), mgrTok, ports.ReplaceRolePermissionsRequest{Permissions: []string{}})
-		f.wantForbidden(t, "empty a role that carries an unheld permission", r, http.StatusForbidden, "grant_exceeds_authority")
-		r = f.authedJSON(t, http.MethodPut, rolePath(id, "/permissions"), mgrTok, ports.ReplaceRolePermissionsRequest{Permissions: []string{p.Tenants.Suspend}})
-		f.wantForbidden(t, "confer a platform-reserved name", r, http.StatusForbidden, "grant_exceeds_authority")
-		if got := f.roleDto(t, owner.AccessToken, id).Permissions; len(got) != 2 {
-			t.Errorf("a refused call changed the role: %v", got)
-		}
-		r = f.authedJSON(t, http.MethodPost, rolePath(id, "/permissions/grant"), mgrTok, ports.RolePermissionRequest{Permission: p.Crm.Leads.ReadAll})
-		if r.status != http.StatusNoContent {
-			t.Errorf("grant held: %d %s", r.status, r.body)
-		}
-		r = f.authedJSON(t, http.MethodPost, rolePath(id, "/permissions/grant"), mgrTok, ports.RolePermissionRequest{Permission: "identity.totally.fake"})
-		f.wantForbidden(t, "grant unknown", r, http.StatusUnprocessableEntity, "permission_unknown")
-	})
-	// arch-test:serial — subtests share one fixture and one tenant.
-	t.Run("deactivate: an Administrator without tenant.admin cannot deactivate a role carrying it", func(t *testing.T) {
-		id := custom(t, "Carries Admin", 60)
-		// Only an owner may confer tenant.admin.
-		if r := f.authedJSON(t, http.MethodPost, rolePath(id, "/permissions/grant"), owner.AccessToken, ports.RolePermissionRequest{Permission: p.Meta.TenantAdmin}); r.status != http.StatusNoContent {
-			t.Fatalf("owner grants tenant.admin to a custom role: %d %s", r.status, r.body)
-		}
-		r := f.authedJSON(t, http.MethodPost, rolePath(id, "/deactivate"), weakTok, nil)
-		f.wantForbidden(t, "weak admin deactivates a tenant.admin role", r, http.StatusForbidden, "grant_exceeds_authority")
-		// tenant.admin is owner-only in both directions, even for an Administrator who holds it.
-		r = f.authedJSON(t, http.MethodPost, rolePath(id, "/permissions/revoke"), adminTok, ports.RolePermissionRequest{Permission: p.Meta.TenantAdmin})
-		f.wantForbidden(t, "admin revokes tenant.admin from a custom role", r, http.StatusForbidden, "grant_exceeds_authority")
-		r = f.authedJSON(t, http.MethodPost, rolePath(id, "/deactivate"), adminTok, nil)
-		f.wantForbidden(t, "admin holding tenant.admin deactivates the role carrying it", r, http.StatusForbidden, "grant_exceeds_authority")
-		if r := f.authedJSON(t, http.MethodPost, rolePath(id, "/deactivate"), owner.AccessToken, nil); r.status != http.StatusOK {
-			t.Errorf("owner deactivates the role carrying tenant.admin: %d %s", r.status, r.body)
-		}
-		// Reactivating gives tenant.admin back to every holder: the same authority is asked.
-		r = f.authedJSON(t, http.MethodPost, rolePath(id, "/reactivate"), adminTok, nil)
-		f.wantForbidden(t, "admin holding tenant.admin reactivates the role carrying it", r, http.StatusForbidden, "grant_exceeds_authority")
-		return
-	})
 	// arch-test:serial — subtests share one fixture and one tenant.
 	t.Run("deactivate: a role with an active holder is 409 role_in_use; an inactive role confers nothing (ADR 0073)", func(t *testing.T) {
 		id := custom(t, "Held Role", 60)

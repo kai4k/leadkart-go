@@ -46,7 +46,7 @@ func satisfiesIn(c *jwt.Claims, effective tenancy.ID, required string) bool {
 	if c == nil || !permission.IsKnown(required) {
 		return false
 	}
-	if c.IsSuperUser {
+	if superUserHolds(c, required) {
 		return true
 	}
 	own := sameID(c.TenantID, effective.String())
@@ -57,7 +57,7 @@ func satisfiesIn(c *jwt.Claims, effective tenancy.ID, required string) bool {
 	// inert here, which is also why it is absent from effective_permissions. The
 	// platform rule (super user above, the operator's platform equivalents below)
 	// is not a tenant tier and is unaffected.
-	tierOK := authority.MayHoldAt(authority.RankFromClaim(c.Rank), required) || c.IsImpersonation()
+	tierOK := tenantPlaneMayHold(c, required)
 	if slices.Contains(c.Permissions, required) {
 		if permission.IsPlatformReserved(required) && required != permission.IdentityPermissions.Meta.TenantAdmin {
 			return IsPlatformOperator(c)
@@ -79,6 +79,26 @@ func satisfiesIn(c *jwt.Claims, effective tenancy.ID, required string) bool {
 		}
 	}
 	return false
+}
+
+// superUserHolds: a super user holds everything, except that the role-management names are LeadKart
+// platform authority: a super-admin role of a COMPANY (a claim minted outside the platform tenant)
+// does not carry them (owner ruling 2026-11-25).
+func superUserHolds(c *jwt.Claims, required string) bool {
+	return c.IsSuperUser && (!permission.IsPlatformManagedRole(required) || c.TenantSlug == PlatformTenantSlug)
+}
+
+// tenantPlaneMayHold: whether a TENANT-plane grant (explicit, or implied by tenant.admin) of required
+// counts for c. The admin-tier names need the Administrator tier or above (an impersonation session is
+// Admin-equivalent). Owner ruling 2026-11-25: identity.roles.{create,update,manage} are platform
+// authority, so no company member holds them, the owner and a company super-admin role included; only
+// an impersonation session (a platform operator acting inside the company) and the platform
+// equivalents do.
+func tenantPlaneMayHold(c *jwt.Claims, required string) bool {
+	if permission.IsPlatformManagedRole(required) {
+		return c.IsImpersonation()
+	}
+	return authority.MayHoldAt(authority.RankFromClaim(c.Rank), required) || c.IsImpersonation()
 }
 
 // Satisfies reports whether the authenticated caller on ctx may exercise

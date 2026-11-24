@@ -414,7 +414,7 @@ func TestRequireAnyPermission_SuperUser_Bypass(t *testing.T) {
 	}
 	s := &sentinel{}
 	mw := authn.RequireAnyPermission(v, alwaysFresh{},
-		permission.IdentityPermissions.Roles.Manage,
+		permission.IdentityPermissions.Roles.Assign,
 	)(s.handler())
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, newRequest(t, "Bearer tok"))

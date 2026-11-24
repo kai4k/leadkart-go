@@ -225,7 +225,7 @@ func TestAttack_Operators_TenantMembersCannotScopeOrReachAcrossTenants(t *testin
 			attack{who: actor, what: "override a victim member", method: http.MethodPatch, path: "/api/v1/users/" + w.vExec.membershipID + "/permission-overrides",
 				body: ports.ReplaceUserPermissionOverridesRequest{Granted: []string{p.Users.View}, Revoked: []string{}}, hdr: vh, status: http.StatusNotFound},
 			attack{who: actor, what: "grant to a victim role", method: http.MethodPost, path: "/api/v1/roles/" + vRole + "/permissions/grant",
-				body: ports.RolePermissionRequest{Permission: p.Users.View}, hdr: vh, status: http.StatusNotFound},
+				body: ports.RolePermissionRequest{Permission: p.Users.View}, hdr: vh, status: http.StatusForbidden}, // role writes are platform authority: the gate answers before the tenant is looked up
 			attack{who: actor, what: "edit the victim tenant by path", method: http.MethodPatch, path: "/api/v1/tenants/" + w.victim.TenantID + "/profile",
 				body: ports.UpdateTenantProfileRequest{LegalName: "Pwned Ltd", DisplayName: "Pwned"}, status: http.StatusForbidden},
 			attack{who: actor, what: "edit the victim tenant by path with a matching header", method: http.MethodPatch, path: "/api/v1/tenants/" + w.victim.TenantID + "/profile",

@@ -156,7 +156,8 @@ func (w *attackWorld) assertIdRows(t *testing.T, rows []attack) {
 	t.Helper()
 	before := w.snapshot(t)
 	for _, a := range rows {
-		r := w.f.doWithHeaders(t, a.method, a.path, w.tok(t, a.who), a.body, nil)
+		// A role write by a company persona is refused by the route gate (owner ruling 2026-11-25).
+		r := w.f.doWithHeaders(t, a.method, a.path, w.tok(t, a.who), a.body, asCompanyHdr)
 		if r.status < 400 || r.status >= 500 {
 			t.Errorf("[%s] %s %s: %d %s, want a 4xx refusal", a.what, a.method, a.path, r.status, r.body)
 			continue
@@ -242,7 +243,7 @@ func TestAttack_Inputs_BodyGamesAreRefusedAndMoveNothing(t *testing.T) {
 	}
 	before := w.snapshot(t)
 	for _, a := range rows {
-		r := w.f.doWithHeaders(t, a.method, a.path, w.tok(t, a.who), a.body, nil)
+		r := w.f.doWithHeaders(t, a.method, a.path, w.tok(t, a.who), a.body, asCompanyHdr)
 		// Several games are legitimate requests in disguise (a duplicate key whose LAST value is fine, a
 		// level at the actor's own, ...): those are refused for another reason or not at all. What must
 		// never happen is a 5xx, or a state change not explained by one of the two known-legal rows.
@@ -253,6 +254,13 @@ func TestAttack_Inputs_BodyGamesAreRefusedAndMoveNothing(t *testing.T) {
 		// (an empty object, null, a body followed by garbage) is refused 400 invalid_body (hierarchy
 		// round 6), not accepted as a silent no-op.
 		noFieldBody := strings.HasPrefix(a.what, "edit role: ") && (strings.HasSuffix(a.what, "object missing every key") || strings.HasSuffix(a.what, ": null") || strings.HasSuffix(a.what, "trailing garbage"))
+		if isPlatformRoleWrite(a.method, a.path) {
+			// The gate answers first: a company persona never reaches the role-write handlers.
+			if r.status != http.StatusForbidden || errCodeOf(r) != "forbidden" {
+				t.Errorf("[%s] %s %s: %d %s, want 403 forbidden (role writes are platform authority)", a.what, a.method, a.path, r.status, r.body)
+			}
+			continue
+		}
 		if noFieldBody && (r.status != http.StatusBadRequest || errCodeOf(r) != "invalid_body") {
 			t.Errorf("[%s] %s %s: %d %s, want 400 invalid_body", a.what, a.method, a.path, r.status, r.body)
 		}

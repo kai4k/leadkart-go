@@ -38,114 +38,13 @@ func (f e2eFixture) customRole(t *testing.T, token, name string, level int) stri
 
 func (f e2eFixture) grantRolePerm(t *testing.T, token, roleID, perm string) httpResp {
 	t.Helper()
-	return f.authedJSON(t, http.MethodPost, "/api/v1/roles/"+roleID+"/permissions/grant", token, ports.RolePermissionRequest{Permission: perm})
+	return f.roleWrite(t, http.MethodPost, "/api/v1/roles/"+roleID+"/permissions/grant", token, ports.RolePermissionRequest{Permission: perm})
 }
 
 func (f e2eFixture) setManager(t *testing.T, token, memberID, managerID string) {
 	t.Helper()
 	if r := f.authedJSON(t, http.MethodPut, "/api/v1/users/"+memberID+"/manager", token, ports.AssignUserManagerRequest{ManagerID: managerID}); r.status != http.StatusNoContent {
 		t.Fatalf("set manager of %s: %d %s", memberID, r.status, r.body)
-	}
-}
-
-// TestE2E_RoleEdits_ActOnEveryHolder: manager M1 (rank 20, holds identity.roles.update
-// and the permission P) edits a custom level-30 role that PEER manager M2 also
-// holds. M1 can neither change M2's overrides nor assign M2 a role, so the role
-// edit must not do either by the back door.
-func TestE2E_RoleEdits_ActOnEveryHolder(t *testing.T) {
-	f := newE2EFixtureAt(t, time.Now)
-	owner := f.registerAndLogin(t, "holders")
-	p := permission.IdentityPermissions
-	perm := p.Tasks.WorkItems.Reassign
-	roleID := func(name string) string { return f.roleIDByName(t, owner.AccessToken, name) }
-
-	m1 := f.createMember(t, owner, "m1")
-	f.assignRole(t, owner.AccessToken, m1.membershipID, roleID(role.SystemRoles.Tenant.SalesManager))
-	f.grantOverrides(t, owner.AccessToken, m1.membershipID, []string{p.Roles.Update, p.Roles.Manage, perm}, nil)
-	m2 := f.createMember(t, owner, "m2")
-	f.assignRole(t, owner.AccessToken, m2.membershipID, roleID(role.SystemRoles.Tenant.SalesManager))
-	custom := f.customRole(t, owner.AccessToken, "Shared custom", 30)
-	f.assignRole(t, owner.AccessToken, m2.membershipID, custom)
-	m1Tok := f.loginToken(t, m1.email, m1.password)
-
-	rolePerms := func() []string { return f.roleDto(t, owner.AccessToken, custom).Permissions }
-
-	// arch-test:serial — subtests share one fixture and one tenant.
-	t.Run("a: conferring a permission on a role a peer holds is refused", func(t *testing.T) {
-		r := f.grantRolePerm(t, m1Tok, custom, perm)
-		f.wantForbidden(t, "M1 grants P to a role peer M2 holds", r, http.StatusForbidden, "insufficient_rank")
-		if slices.Contains(rolePerms(), perm) {
-			t.Errorf("the role gained %s although the call was refused", perm)
-		}
-	})
-	// The owner puts P on the role: M2 holds it through the role.
-	if r := f.grantRolePerm(t, owner.AccessToken, custom, perm); r.status != http.StatusNoContent {
-		t.Fatalf("owner grants P: %d %s", r.status, r.body)
-	}
-	// arch-test:serial — subtests share one fixture and one tenant.
-	t.Run("c: stripping a permission from a role a peer holds is refused (revoke, replace)", func(t *testing.T) {
-		r := f.authedJSON(t, http.MethodPost, "/api/v1/roles/"+custom+"/permissions/revoke", m1Tok, ports.RolePermissionRequest{Permission: perm})
-		f.wantForbidden(t, "revoke", r, http.StatusForbidden, "insufficient_rank")
-		r = f.authedJSON(t, http.MethodPut, "/api/v1/roles/"+custom+"/permissions", m1Tok, ports.ReplaceRolePermissionsRequest{Permissions: []string{}})
-		f.wantForbidden(t, "replace with []", r, http.StatusForbidden, "insufficient_rank")
-		if !slices.Contains(rolePerms(), perm) {
-			t.Errorf("the role lost %s although the calls were refused", perm)
-		}
-	})
-	// arch-test:serial — subtests share one fixture and one tenant.
-	t.Run("deactivate: authority is answered before role_in_use", func(t *testing.T) {
-		r := f.authedJSON(t, http.MethodPost, "/api/v1/roles/"+custom+"/deactivate", m1Tok, nil)
-		f.wantForbidden(t, "deactivate a role a peer holds", r, http.StatusForbidden, "insufficient_rank")
-	})
-	// arch-test:serial — subtests share one fixture and one tenant.
-	t.Run("re-level: a role a peer holds cannot be re-levelled either", func(t *testing.T) {
-		lvl := 40
-		r := f.authedJSON(t, http.MethodPatch, "/api/v1/roles/"+custom, m1Tok, ports.UpdateRoleRequest{HierarchyLevel: &lvl})
-		f.wantForbidden(t, "re-level", r, http.StatusForbidden, "insufficient_rank")
-	})
-	// arch-test:serial — subtests share one fixture and one tenant.
-	t.Run("rename only is not acting on holders", func(t *testing.T) {
-		r := f.authedJSON(t, http.MethodPatch, "/api/v1/roles/"+custom, m1Tok, ports.UpdateRoleRequest{Name: "Shared custom renamed"})
-		if r.status != http.StatusNoContent {
-			t.Errorf("rename by M1: %d %s, want 204", r.status, r.body)
-		}
-	})
-}
-
-// TestE2E_RoleEdits_SelfConferralIsRefused: A holds P only through a time-bound
-// approved override and also holds a role below their rank; A must not make P
-// permanent for themself by granting it to that role.
-func TestE2E_RoleEdits_SelfConferralIsRefused(t *testing.T) {
-	f := newE2EFixtureAt(t, time.Now)
-	owner := f.registerAndLogin(t, "selfconf")
-	p := permission.IdentityPermissions
-	perm := p.Tasks.WorkItems.Reassign
-	roleID := func(name string) string { return f.roleIDByName(t, owner.AccessToken, name) }
-
-	tl := f.createMember(t, owner, "tl")
-	f.assignRole(t, owner.AccessToken, tl.membershipID, roleID(role.SystemRoles.Tenant.TeamLead))
-	a := f.createMember(t, owner, "a")
-	f.assignRole(t, owner.AccessToken, a.membershipID, roleID(role.SystemRoles.Tenant.SalesExecutive))
-	below := f.customRole(t, owner.AccessToken, "Below A", 60)
-	f.assignRole(t, owner.AccessToken, a.membershipID, below)
-	f.setManager(t, owner.AccessToken, a.membershipID, tl.membershipID)
-	f.grantOverrides(t, owner.AccessToken, a.membershipID, []string{p.Roles.Update}, nil)
-
-	aTok := f.loginToken(t, a.email, a.password)
-	sub, reqID := f.requestElevation(t, aTok, perm)
-	if sub.status != http.StatusCreated {
-		t.Fatalf("A requests P: %d %s", sub.status, sub.body)
-	}
-	if ap := f.approveRequest(t, f.loginToken(t, tl.email, tl.password), reqID); ap.status != http.StatusNoContent {
-		t.Fatalf("T approves P for A: %d %s", ap.status, ap.body)
-	}
-	f.evictStamp(t, a.personID)
-	aTok = f.loginToken(t, a.email, a.password)
-
-	r := f.grantRolePerm(t, aTok, below, perm)
-	f.wantForbidden(t, "A grants its time-bound P to a role A holds", r, http.StatusForbidden, "self_modification_forbidden")
-	if slices.Contains(f.roleDto(t, owner.AccessToken, below).Permissions, perm) {
-		t.Errorf("P is now permanent for A through the role they hold")
 	}
 }
 
@@ -254,52 +153,7 @@ func TestE2E_RoleEdits_EndHoldersStaleTokens(t *testing.T) {
 	}
 }
 
-// TestE2E_RoleReactivate_NeedsADurableHold (review G2j B1): reactivating an inactive role gives its
-// permissions back, which is a conferral. An actor who holds P only through a
-// time-bound approved override cannot make P durable for others that way, exactly as they cannot
-// by assigning a role that carries P; the owner can.
-func TestE2E_RoleReactivate_NeedsADurableHold(t *testing.T) {
-	f := newE2EFixtureAt(t, time.Now)
-	owner := f.registerAndLogin(t, "reactconf")
-	p := permission.IdentityPermissions
-	perm := p.Tasks.WorkItems.Reassign
-	roleID := func(name string) string { return f.roleIDByName(t, owner.AccessToken, name) }
-
-	sm := f.createMember(t, owner, "teamlead")
-	f.assignRole(t, owner.AccessToken, sm.membershipID, roleID(role.SystemRoles.Tenant.TeamLead))
-	a := f.createMember(t, owner, "a")
-	f.assignRole(t, owner.AccessToken, a.membershipID, roleID(role.SystemRoles.Tenant.SalesExecutive))
-	f.setManager(t, owner.AccessToken, a.membershipID, sm.membershipID)
-	f.grantOverrides(t, owner.AccessToken, a.membershipID, []string{p.Roles.Update, p.Roles.Manage}, nil)
-
-	// R carries P and nobody holds it when it goes inactive (a role is deleted only once unused,
-	// owner ruling 2026-11-25). Reactivating it still asks the caller to hold P durably.
-	r := f.customRole(t, owner.AccessToken, "Carries P", 60)
-	if g := f.grantRolePerm(t, owner.AccessToken, r, perm); g.status != http.StatusNoContent {
-		t.Fatalf("grant P to R: %d %s", g.status, g.body)
-	}
-	if d := f.authedJSON(t, http.MethodPost, "/api/v1/roles/"+r+"/deactivate", owner.AccessToken, nil); d.status != http.StatusOK {
-		t.Fatalf("deactivate R: %d %s", d.status, d.body)
-	}
-
-	// A holds P only until the approval expires.
-	aTok := f.loginToken(t, a.email, a.password)
-	sub, reqID := f.requestElevation(t, aTok, perm)
-	if sub.status != http.StatusCreated {
-		t.Fatalf("A requests P: %d %s", sub.status, sub.body)
-	}
-	if ap := f.approveRequest(t, f.loginToken(t, sm.email, sm.password), reqID); ap.status != http.StatusNoContent {
-		t.Fatalf("the manager approves P for A: %d %s", ap.status, ap.body)
-	}
-	f.evictStamp(t, a.personID)
-	aTok = f.loginToken(t, a.email, a.password)
-
-	res := f.authedJSON(t, http.MethodPost, "/api/v1/roles/"+r+"/reactivate", aTok, nil)
-	f.wantForbidden(t, "A reactivates a role carrying its time-bound P", res, http.StatusForbidden, "grant_exceeds_authority")
-	if f.roleDto(t, owner.AccessToken, r).IsActive {
-		t.Fatal("the role was reactivated by a refused call")
-	}
-	if got := f.authedJSON(t, http.MethodPost, "/api/v1/roles/"+r+"/reactivate", owner.AccessToken, nil); got.status != http.StatusOK {
-		t.Fatalf("the owner (durable hold) reactivates R: %d %s", got.status, got.body)
-	}
-}
+// Owner ruling 2026-11-25 (ADR 0073 addendum): creating, editing and deleting a role is LeadKart platform
+// authority, so a company manager never reaches the role-edit commands. The rank, ceiling and holder rules
+// those scenarios exercised are decided in the authority policy (role_management_test, authority unit tests)
+// and still bind the platform actor; the route gate refusal is proved in platform_role_writes_e2e_test.go.

@@ -214,6 +214,16 @@ Owner ruling 2026-11-24: "All become Inactive." The three delete routes are gone
 | Drug schedule class | `ScheduleClassDto.active`. An inactive class cannot be newly set on a product (`422 errors.drug_schedule: [inactive]`); a product that already carries it keeps it and its label. `drug_schedule_class_in_use` is gone (a class in use can be made inactive). | 422 `inactive` | Offer only active classes in the picker; show the label of the class a product carries even when it is inactive. |
 | Orders and quotations | An inactive product is NOT refused on a new order or quotation line: nothing validates a line's `product_id` against the catalogue yet (round G5). A quotation draft is cancelled with `POST /orders/quotations/{id}/reject` (state `rejected`, the row stays). | none | Hide inactive products from the order and quotation pickers yourself until G5. |
 
+### Roles are written by LeadKart only (owner ruling 2026-11-25, ADR 0073 addendum)
+
+A company never creates, edits or deletes its own roles. `identity.roles.create`, `identity.roles.update` and `identity.roles.manage` are no longer satisfied by anything a company member holds: not `tenant.admin`, not the Company Owner role, not an explicit grant. Only LeadKart platform authority satisfies them (a platform operator holding `platform.roles.manage` acting on the company, and an impersonation session; super users unchanged). `identity.roles.assign` and `revoke` are UNCHANGED: a company Administrator still assigns existing roles to people. The roles list and read (`identity.roles.view`) are unchanged.
+
+| Contract change | Detail | Status / code | What the web must do |
+|---|---|---|---|
+| `POST /roles`, `PATCH /roles/{id}`, `PUT /roles/{id}/permissions`, `POST /roles/{id}/permissions/grant\|revoke`, `PATCH /roles/{id}/parent`, `POST /roles/{id}/deactivate\|reactivate` | A company caller (owner included) is refused by the route gate before anything is read. | 403 `forbidden` (`missing permission: identity.roles.<create\|update\|manage>`) | Hide the role editor, "New role", Delete and the permission pickers from company users; the roles screen is read-only for them. |
+| `GET /auth/me/capabilities` | `effective_permissions` no longer lists `identity.roles.create`, `identity.roles.update` or `identity.roles.manage` for any company member (the Company Owner included); `identity.roles.assign`, `revoke` and `view` stay. | 200 | Gate the role-management UI on these three names (now absent for company users) and keep the assign-role control on `identity.roles.assign`. |
+| `POST /permission-requests` | These three names are still in the catalogue and are not removed from the requestable list, but an approved request for one confers nothing (the gate ignores a company grant of them). | n/a | Do not offer them in a permission-request picker. |
+
 ### Deleted names free up; SKUs never do (owner ruling 2026-11-25, ADR 0073 addendum)
 
 The web shows the action as **Delete**; behind the scenes it stays deactivate (a state change). A deleted record is gone from the screen and the web offers no restore; the reactivate routes stay for support tooling.

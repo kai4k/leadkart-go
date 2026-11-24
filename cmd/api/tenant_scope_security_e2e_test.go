@@ -194,10 +194,10 @@ func TestE2E_TenantScope_ScopedWriteCarriesOperatorAttribution(t *testing.T) {
 	}
 	scopedCount := len(scoped)
 
-	// Control: the tenant admin's own role creation (header ignored) adds no
+	// Control: the tenant admin's own member creation (header ignored) adds no
 	// act_operator_id row.
-	if r := f.doWithHeaders(t, http.MethodPost, "/api/v1/roles", b.AccessToken, ports.CreateRoleRequest{Name: "Own Role", HierarchyLevel: 40}, scopeHdr(unknownTenantID)); r.status != http.StatusCreated {
-		t.Fatalf("own create role: %d %s", r.status, r.body)
+	if r := f.doWithHeaders(t, http.MethodPost, "/api/v1/users", b.AccessToken, ports.CreateUserRequest{Email: "own-member@e2e.test", Password: "Member-Pass-2026!own", FirstName: "Own", LastName: "Member"}, scopeHdr(unknownTenantID)); r.status != http.StatusCreated {
+		t.Fatalf("own create member: %d %s", r.status, r.body)
 	}
 	attributed := 0
 	for _, row := range messagingtest.DrainOutbox(t.Context(), t, f.Pool) {

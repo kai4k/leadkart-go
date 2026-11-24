@@ -346,6 +346,7 @@ func (f e2eFixture) do(t *testing.T, method, path, token string, body any) httpR
 // the ADR 0039 X-Tenant-Id operator scope header).
 func (f e2eFixture) doWithHeaders(t *testing.T, method, path, token string, body any, headers map[string]string) httpResp {
 	t.Helper()
+	token, headers = f.asPlatformForRoleWrite(t, method, path, token, headers)
 	r, err := f.tryDo(t.Context(), method, path, token, body, headers)
 	if err != nil {
 		t.Fatalf("%s %s: %v", method, path, err)

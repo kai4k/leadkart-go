@@ -64,7 +64,7 @@ func TestSatisfies_BelowTheTierEverythingElseTenantAdminImpliesStays(t *testing.
 	n := 20
 	c := &jwt.Claims{TenantID: tenantA, Rank: &n, Permissions: []string{p.Meta.TenantAdmin}}
 	ctx := tenancy.WithID(authn.WithClaims(t.Context(), c), tenancy.ID(tenantA))
-	for _, name := range []string{p.Users.Update, p.Users.View, p.Roles.Create, p.Crm.Leads.Read} {
+	for _, name := range []string{p.Users.Update, p.Users.View, p.Roles.Assign, p.Crm.Leads.Read} {
 		if !authn.Satisfies(ctx, name) {
 			t.Errorf("a manager holding tenant.admin lost %s", name)
 		}
@@ -111,5 +111,65 @@ func TestSatisfies_CompanySettingsWritesAreAdminTierOnly(t *testing.T) {
 				t.Errorf("Satisfies(company_settings.read) = %v, want %v", got, tc.wantRead)
 			}
 		})
+	}
+}
+
+// Owner ruling 2026-11-25 (ADR 0073 addendum): identity.roles.{create,update,manage} are LeadKart
+// platform authority. No company member holds them, whatever they carry (tenant.admin, an explicit
+// grant, a super-admin role of the company); an impersonation session and a platform super user do;
+// identity.roles.assign is unchanged.
+func TestSatisfies_RoleManagementIsPlatformAuthority(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	owner, admin := 0, 10
+	managed := []string{p.Roles.Create, p.Roles.Update, p.Roles.Manage}
+	cases := []struct {
+		name   string
+		claims *jwt.Claims
+		want   bool
+	}{
+		{"owner with tenant.admin", &jwt.Claims{TenantID: tenantA, Rank: &owner, Permissions: []string{p.Meta.TenantAdmin}}, false},
+		{"administrator with tenant.admin", &jwt.Claims{TenantID: tenantA, Rank: &admin, Permissions: []string{p.Meta.TenantAdmin}}, false},
+		{"administrator with the explicit grants", &jwt.Claims{TenantID: tenantA, Rank: &admin, Permissions: managed}, false},
+		{"a company super-admin role", &jwt.Claims{TenantID: tenantA, TenantSlug: "acme", Rank: &owner, IsSuperUser: true, Permissions: []string{p.Meta.TenantAdmin}}, false},
+		{"impersonation session", &jwt.Claims{TenantID: tenantA, Rank: &admin, Permissions: []string{p.Meta.TenantAdmin}, Act: &jwt.ActClaim{Sub: "op", SessionID: "s", Reason: "support"}}, true},
+		{"platform super user", &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, Rank: &owner, IsSuperUser: true}, true},
+	}
+	for _, tc := range cases {
+		ctx := tenancy.WithID(authn.WithClaims(t.Context(), tc.claims), tenancy.ID(tenantA))
+		for _, name := range managed {
+			if got := authn.Satisfies(ctx, name); got != tc.want {
+				t.Errorf("%s: Satisfies(%s) = %v, want %v", tc.name, name, got, tc.want)
+			}
+		}
+	}
+	// assign is a company power and stays so: an owner, an administrator and a company super-admin
+	// role keep it.
+	for _, c := range []struct {
+		name   string
+		claims *jwt.Claims
+	}{{cases[0].name, cases[0].claims}, {cases[1].name, cases[1].claims}, {cases[3].name, cases[3].claims}} {
+		ctx := tenancy.WithID(authn.WithClaims(t.Context(), c.claims), tenancy.ID(tenantA))
+		if !authn.Satisfies(ctx, p.Roles.Assign) {
+			t.Errorf("%s lost identity.roles.assign", c.name)
+		}
+	}
+	// A platform operator reaches a company through the platform equivalent.
+	op := &jwt.Claims{TenantID: tenantB, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true, Permissions: []string{p.Platform.RolesManage}}
+	ctx := tenancy.WithID(authn.WithClaims(t.Context(), op), tenancy.ID(tenantA))
+	for _, name := range managed {
+		if !authn.Satisfies(ctx, name) {
+			t.Errorf("platform operator with platform.roles.manage cannot satisfy %s in a company", name)
+		}
+	}
+	// Capabilities: the owner effective set no longer lists them, assign stays.
+	eff := authn.EffectivePermissions(cases[0].claims)
+	for _, name := range managed {
+		if slices.Contains(eff, name) {
+			t.Errorf("owner effective_permissions lists %s", name)
+		}
+	}
+	if !slices.Contains(eff, p.Roles.Assign) {
+		t.Error("owner effective_permissions lost identity.roles.assign")
 	}
 }

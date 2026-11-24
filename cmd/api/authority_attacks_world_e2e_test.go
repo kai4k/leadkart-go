@@ -386,14 +386,25 @@ func (w *attackWorld) assertGrouped(t *testing.T, rows []attack) {
 				if tok == "" {
 					tok = w.tok(t, a.who)
 				}
-				r := w.f.doWithHeaders(t, a.method, a.path, tok, a.body, a.hdr)
+				wantStatus, wantAlt, wantCode, hdr := a.status, a.alt, a.code, a.hdr
+				if companyRoleWrite(a, tok) {
+					// Owner ruling 2026-11-25: a role write is LeadKart platform authority, so every company
+					// persona is answered by the route gate whatever the rank ladder would have said. The
+					// ladder itself is covered by the policy unit tests and the platform-actor scenarios.
+					wantStatus, wantAlt, wantCode = http.StatusForbidden, 0, "forbidden"
+					hdr = map[string]string{"X-E2E-As-Company": "1"}
+					for k, v := range a.hdr {
+						hdr[k] = v
+					}
+				}
+				r := w.f.doWithHeaders(t, a.method, a.path, tok, a.body, hdr)
 				if testing.Verbose() {
 					t.Logf("[%s] %s %s -> %d %s", a.what, a.method, a.path, r.status, errCodeOf(r))
 				}
-				if r.status != a.status && (a.alt == 0 || r.status != a.alt) {
-					t.Errorf("[%s] %s %s: %d %s, want %d %s", a.what, a.method, a.path, r.status, r.body, a.status, a.code)
-				} else if !codeMatches(a.code, r.body) {
-					t.Errorf("[%s] %s %s: %d %s, want code %s", a.what, a.method, a.path, r.status, r.body, a.code)
+				if r.status != wantStatus && (wantAlt == 0 || r.status != wantAlt) {
+					t.Errorf("[%s] %s %s: %d %s, want %d %s", a.what, a.method, a.path, r.status, r.body, wantStatus, wantCode)
+				} else if !codeMatches(wantCode, r.body) {
+					t.Errorf("[%s] %s %s: %d %s, want code %s", a.what, a.method, a.path, r.status, r.body, wantCode)
 				}
 			}
 			if after := w.snapshot(t); after != before {
@@ -423,4 +434,13 @@ func codeMatches(want string, body []byte) bool {
 		return false
 	}
 	return slices.Contains(strings.Split(want, "|"), er.Error)
+}
+
+// companyRoleWrite: the row is a role write made with a company token (no operator scope header).
+func companyRoleWrite(a attack, token string) bool {
+	if !isPlatformRoleWrite(a.method, a.path) || a.hdr["X-Tenant-Id"] != "" {
+		return false
+	}
+	tenantID, platform, impersonating := tokenFacts(token)
+	return tenantID != "" && !platform && !impersonating
 }

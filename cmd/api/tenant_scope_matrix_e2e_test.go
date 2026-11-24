@@ -82,14 +82,16 @@ func TestE2E_TenantScope_RegisterTenantNeedsCreatePermission(t *testing.T) {
 	}
 }
 
-// A tenant user's header is ignored on a WRITE too: the role lands in their own
-// tenant and never in the tenant the header names.
+// A tenant user's header is ignored on a WRITE too: the member lands in their own
+// tenant and never in the tenant the header names. (A member is the vehicle because a company
+// no longer writes roles: owner ruling 2026-11-25.)
 func TestE2E_TenantScope_TenantUserHeaderIgnoredOnWrite(t *testing.T) {
 	f := newE2EFixture(t)
 	a := f.registerAndLogin(t, "ignwa")
 	b := f.registerAndLogin(t, "ignwb")
-	r := f.doWithHeaders(t, http.MethodPost, "/api/v1/roles", b.AccessToken,
-		ports.CreateRoleRequest{Name: "Header Ignored Role", HierarchyLevel: 50}, scopeHdr(a.TenantID))
+	const email = "header-ignored@e2e.test"
+	r := f.doWithHeaders(t, http.MethodPost, "/api/v1/users", b.AccessToken,
+		ports.CreateUserRequest{Email: email, Password: "Member-Pass-2026!hdr", FirstName: "Header", LastName: "Ignored"}, scopeHdr(a.TenantID))
 	if r.status != http.StatusCreated {
 		t.Fatalf("tenant user write with foreign header: %d %s", r.status, r.body)
 	}
@@ -98,15 +100,15 @@ func TestE2E_TenantScope_TenantUserHeaderIgnoredOnWrite(t *testing.T) {
 		token string
 		dst   *bool
 	}{{b.AccessToken, &inB}, {a.AccessToken, &inA}} {
-		lr := f.authedJSON(t, http.MethodGet, "/api/v1/roles", tok.token, nil)
-		var roles ports.ListRolesResponse
-		if err := json.Unmarshal(lr.body, &roles); err != nil {
-			t.Fatalf("decode roles: %v", err)
+		lr := f.authedJSON(t, http.MethodGet, "/api/v1/users", tok.token, nil)
+		var users ports.ListUsersResponse
+		if err := json.Unmarshal(lr.body, &users); err != nil {
+			t.Fatalf("decode users: %v", err)
 		}
-		*tok.dst = slices.ContainsFunc(roles.Roles, func(x ports.RoleDto) bool { return x.Name == "Header Ignored Role" })
+		*tok.dst = slices.ContainsFunc(users.Users, func(x ports.UserDto) bool { return x.Email == email })
 	}
 	if !inB || inA {
-		t.Errorf("role must land in the caller's own tenant only: inB=%v inA=%v", inB, inA)
+		t.Errorf("member must land in the caller's own tenant only: inB=%v inA=%v", inB, inA)
 	}
 }
 

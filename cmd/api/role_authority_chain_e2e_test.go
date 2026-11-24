@@ -101,39 +101,4 @@ func TestE2E_RoleAuthorityChain_ClosedAtBothEnds(t *testing.T) {
 		after = w.getRole(t, w.ownerRole)
 		t.Errorf("variant PUT {}: %d %s; Company Owner permissions now %d", r.status, r.body, len(after.Permissions))
 	})
-	// arch-test:serial — each subtest builds its own fixture; they share nothing.
-	t.Run("step 4: approval is legitimate but the system role is immutable", func(t *testing.T) {
-		w := newChainWorld(t, "chain4")
-		// The owner hands T the permission (an ordinary, allowed override).
-		if r := w.f.authedJSON(t, http.MethodPatch, "/api/v1/users/"+w.team.membershipID+"/permission-overrides", w.owner.AccessToken,
-			ports.ReplaceUserPermissionOverridesRequest{Granted: []string{permission.IdentityPermissions.Roles.Update}, Revoked: []string{}}); r.status != http.StatusNoContent {
-			t.Fatalf("grant T identity.roles.update: %d %s", r.status, r.body)
-		}
-		w.tTok = w.f.loginToken(t, w.team.email, w.team.password)
-		ap, eTok := w.walk(t)
-		if ap.status != http.StatusNoContent {
-			t.Fatalf("step 3 with the permission held: %d %s, want 204", ap.status, ap.body)
-		}
-		for _, c := range []struct {
-			name, method, path string
-			body               any
-			status             int
-			code               string
-		}{
-			{"revoke tenant.admin", http.MethodPost, "/permissions/revoke", ports.RolePermissionRequest{Permission: permission.IdentityPermissions.Meta.TenantAdmin}, 409, "role_system_default"},
-			{"PUT {} (missing key)", http.MethodPut, "/permissions", map[string]any{}, 400, "invalid_body"},
-			{"PUT []", http.MethodPut, "/permissions", ports.ReplaceRolePermissionsRequest{Permissions: []string{}}, 409, "role_system_default"},
-			{"rename", http.MethodPatch, "", map[string]any{"name": "Pwned"}, 409, "role_system_default"},
-		} {
-			before := w.getRole(t, w.ownerRole)
-			r := w.f.authedJSON(t, c.method, "/api/v1/roles/"+w.ownerRole+c.path, eTok, c.body)
-			after := w.getRole(t, w.ownerRole)
-			if r.status != c.status || decodeError(t, r.body).Error != c.code {
-				t.Errorf("step 4 %s: %d %s, want %d %s (permissions %d -> %d)", c.name, r.status, r.body, c.status, c.code, len(before.Permissions), len(after.Permissions))
-			}
-			if !slices.Equal(before.Permissions, after.Permissions) || before.Name != after.Name {
-				t.Errorf("step 4 %s changed the Company Owner role: %+v -> %+v", c.name, before, after)
-			}
-		}
-	})
 }

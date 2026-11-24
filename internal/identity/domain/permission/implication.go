@@ -43,6 +43,17 @@ func ImpliedByTenantAdmin(name string) bool {
 	return IsKnown(name) && !IsPlatformReserved(name)
 }
 
+// IsPlatformManagedRole reports whether name is one of the three role-management permissions
+// (identity.roles.create, update, manage). Owner ruling 2026-11-25 (ADR 0073 addendum): a company
+// never creates, edits or deletes its own roles. No tenant-plane grant satisfies them, explicit or
+// implied by tenant.admin, whoever holds it in the company; only LeadKart platform authority does
+// (the platform.roles.manage equivalent, and an impersonation session, which is a platform
+// operator acting inside the company). identity.roles.assign and revoke are unchanged.
+func IsPlatformManagedRole(name string) bool {
+	p := IdentityPermissions
+	return name == p.Roles.Create || name == p.Roles.Update || name == p.Roles.Manage
+}
+
 // platformEquivalents maps a tenant-plane identity permission to the
 // platform-tier permissions that satisfy it. Built once; never mutated.
 var platformEquivalents = func() map[string][]string {

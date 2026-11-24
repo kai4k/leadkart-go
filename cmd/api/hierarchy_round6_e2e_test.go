@@ -99,10 +99,10 @@ func TestE2E_Round6_AnOwnerEditsACustomRoleTheyHold(t *testing.T) {
 	if r.status != http.StatusNoContent {
 		t.Fatalf("an owner grants on a custom role they hold: %d %s, want 204", r.status, r.body)
 	}
-	// another administrator who holds a role may not
+	// another administrator who holds a role may not (and since owner ruling 2026-11-25 no company member may: the gate refuses)
 	w.f.assignRole(t, w.owner.AccessToken, w.mid(t, "admin"), custom)
 	w.relogin(t, "admin")
-	r = w.f.authedJSON(t, http.MethodPost, "/api/v1/roles/"+custom+"/permissions/grant", w.tok(t, "admin"), ports.RolePermissionRequest{Permission: p.Crm.Leads.ReadAll})
+	r = w.f.doWithHeaders(t, http.MethodPost, "/api/v1/roles/"+custom+"/permissions/grant", w.tok(t, "admin"), ports.RolePermissionRequest{Permission: p.Crm.Leads.ReadAll}, asCompanyHdr)
 	if r.status != http.StatusForbidden {
 		t.Fatalf("an administrator grants on a role they hold: %d %s, want 403", r.status, r.body)
 	}

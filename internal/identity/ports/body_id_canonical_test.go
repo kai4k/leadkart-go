@@ -80,6 +80,24 @@ func bodyAdminClaims(perms ...string) *jwt.Claims {
 	return c
 }
 
+// bodyImpersonating is bodyAdminClaims as an impersonation session: a LeadKart platform operator acting
+// inside the company, the only tenant-side caller that may create, edit or delete roles (owner ruling
+// 2026-11-25, ADR 0073 addendum).
+func bodyImpersonating(perms ...string) *jwt.Claims {
+	c := bodyAdminClaims(perms...)
+	c.Act = &jwt.ActClaim{Sub: c.Subject, SessionID: "session", Reason: "support"}
+	return c
+}
+
+// impersonatingFor returns c as an impersonation session when perm is a platform-managed role
+// permission, and c unchanged otherwise.
+func impersonatingFor(perm string, c *jwt.Claims) *jwt.Claims {
+	if permission.IsPlatformManagedRole(perm) {
+		c.Act = &jwt.ActClaim{Sub: c.Subject, SessionID: "session", Reason: "support"}
+	}
+	return c
+}
+
 // bodyRoles is a role repository holding one live custom role per id at the
 // given hierarchy level (tenant azTenant).
 func bodyRoles(t *testing.T, levels map[string]int) *roletest.FakeRepository {
@@ -197,7 +215,7 @@ func TestBodyID_UnparseableBodyIDsAre400(t *testing.T) {
 		{"role", "POST", "/api/v1/users/" + azOther + "/roles", `{"role_id":"nope"}`, "invalid_role_id", p.Roles.Assign},
 		{"parent", "PATCH", "/api/v1/roles/" + azRole + "/parent", `{"parent_role_id":"nope","reason":"valid reason text"}`, "invalid_role_id", p.Roles.Update},
 	} {
-		rec := azServe(t, azClaims(tc.perm), tc.method, tc.path, tc.body)
+		rec := azServe(t, impersonatingFor(tc.perm, azClaims(tc.perm)), tc.method, tc.path, tc.body)
 		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), tc.code) {
 			t.Errorf("%s: %d %s, want 400 %s", tc.name, rec.Code, rec.Body.String(), tc.code)
 		}
@@ -252,7 +270,7 @@ func TestBodyID_ParentRoleIDReachesCommandCanonical(t *testing.T) {
 			var a app.Application
 			a.Commands.SetRoleParent = command.NewSetRoleParentHandler(inlineUoW{}, bodyLock{}, mems, roles, bodyPersons{}, edges,
 				func() time.Time { return bodyNow }, func() rolehierarchy.ID { return "0190a000-0000-7000-8000-0000000000f1" })
-			rec := azServeApp(t, a, bodyAdminClaims(permission.IdentityPermissions.Roles.Update), "PATCH",
+			rec := azServeApp(t, a, bodyImpersonating(permission.IdentityPermissions.Roles.Update), "PATCH",
 				"/api/v1/roles/"+azRole+"/parent", `{"parent_role_id":"`+spelled+`","reason":"reorganise the tree"}`)
 			if rec.Code != http.StatusNoContent {
 				t.Fatalf("status %d %s", rec.Code, rec.Body.String())
@@ -280,7 +298,7 @@ func TestBodyID_CreateRoleParentReachesCommandCanonical(t *testing.T) {
 			var a app.Application
 			a.Commands.CreateRole = command.NewCreateRoleHandler(inlineUoW{}, bodyLock{}, mems, roles, bodyPersons{}, edges,
 				func() time.Time { return bodyNow }, func() role.ID { return newRole }, func() rolehierarchy.ID { return "0190a000-0000-7000-8000-0000000000f1" })
-			rec := azServeApp(t, a, bodyAdminClaims(permission.IdentityPermissions.Roles.Create), "POST", "/api/v1/roles",
+			rec := azServeApp(t, a, bodyImpersonating(permission.IdentityPermissions.Roles.Create), "POST", "/api/v1/roles",
 				`{"name":"Field Rep","hierarchy_level":50,"parent_role_id":"`+spelled+`"}`)
 			if rec.Code != http.StatusCreated {
 				t.Fatalf("status %d %s", rec.Code, rec.Body.String())
@@ -307,7 +325,7 @@ func TestBodyID_PaddedAndNilBodyIDsAreRejected(t *testing.T) {
 		"wrapped":        " " + bodyRoleB + " ",
 		"nil uuid":       "00000000-0000-0000-0000-000000000000",
 	} {
-		rec := azServe(t, azClaims(p.Roles.Create), "POST", "/api/v1/roles", `{"name":"x","hierarchy_level":50,"parent_role_id":"`+bad+`"}`)
+		rec := azServe(t, bodyImpersonating(p.Roles.Create), "POST", "/api/v1/roles", `{"name":"x","hierarchy_level":50,"parent_role_id":"`+bad+`"}`)
 		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_role_id") {
 			t.Errorf("create role, parent %s: %d %s, want 400 invalid_role_id", name, rec.Code, rec.Body.String())
 		}

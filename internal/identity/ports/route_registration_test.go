@@ -34,6 +34,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 )
 
@@ -56,6 +57,11 @@ func (stubVerifier) Verify(string) (*jwt.Claims, error) { return nil, nil }
 type stubStampValidator struct{}
 
 func (stubStampValidator) IsFresh(context.Context, string, string) (bool, error) {
+	return true, nil
+}
+
+// IsSessionLive makes every impersonation session live: the route tests decide the gate, not the store.
+func (stubStampValidator) IsSessionLive(context.Context, string, string, tenant.ID) (bool, error) {
 	return true, nil
 }
 

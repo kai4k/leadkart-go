@@ -1,6 +1,7 @@
 package ports_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -72,7 +73,9 @@ func azServeApp(t *testing.T, a app.Application, c *jwt.Claims, method, path, bo
 	req.Header.Set("Authorization", "Bearer tok")
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
-	httpmw.Recover(logger)(mux).ServeHTTP(rec, req)
+	// An impersonation token writes only into an active company: answer "active" for every tenant.
+	active := func(context.Context, string) (authn.TenantScopeState, error) { return authn.TenantScopeActive, nil }
+	httpmw.Recover(logger)(authn.TenantScope(active, logger)(mux)).ServeHTTP(rec, req)
 	return rec
 }
 
@@ -120,6 +123,20 @@ func TestRouteAuthz_IdentityRoutesRequirePermissions(t *testing.T) {
 			t.Parallel()
 			if rec := azServe(t, azClaims(), rt.method, rt.path, "{}"); rec.Code != http.StatusForbidden {
 				t.Errorf("member without %s: status %d, want 403", rt.perm, rec.Code)
+			}
+			if permission.IsPlatformManagedRole(rt.perm) {
+				// Owner ruling 2026-11-25: no company member creates, edits or deletes a role, whatever
+				// they hold, tenant.admin included. A platform operator acting in the company does.
+				if rec := azServe(t, azClaims(rt.perm), rt.method, rt.path, "{}"); rec.Code != http.StatusForbidden {
+					t.Errorf("company member holding %s: status %d, want 403 (platform-managed)", rt.perm, rec.Code)
+				}
+				if rec := azServe(t, azClaims(p.Meta.TenantAdmin), rt.method, rt.path, "{}"); rec.Code != http.StatusForbidden {
+					t.Errorf("company tenant.admin on %s: status %d, want 403 (platform-managed)", rt.perm, rec.Code)
+				}
+				if rec := azServe(t, bodyImpersonating(p.Meta.TenantAdmin), rt.method, rt.path, "{}"); !gatePassed(rec.Code) {
+					t.Errorf("platform operator in the company: status %d, want gate pass (body %s)", rec.Code, rec.Body.String())
+				}
+				return
 			}
 			if rec := azServe(t, azClaims(rt.perm), rt.method, rt.path, "{}"); !gatePassed(rec.Code) {
 				t.Errorf("holder of %s: status %d, want gate pass (body %s)", rt.perm, rec.Code, rec.Body.String())
@@ -223,7 +240,7 @@ func TestRouteAuthz_GrantBeyondAuthorityRejected(t *testing.T) {
 	// here through the real handlers: a caller holding only roles.update confers
 	// nothing it does not hold.
 	a := selfTargetApp(t)
-	claims := bodyAdminClaims(p.Roles.Update)
+	claims := bodyImpersonating(p.Roles.Update)
 	for _, rt := range []struct{ method, path, body string }{
 		{"POST", "/api/v1/roles/" + azRole + "/permissions/grant", `{"permission":"identity.users.view"}`},
 		{"PUT", "/api/v1/roles/" + azRole + "/permissions", `{"permissions":["identity.users.view"]}`},

@@ -145,7 +145,7 @@ func TestAttack_Races_RolesAgainstTheirHoldersAndLinks(t *testing.T) {
 		for round := range raceRounds {
 			id := f.customRole(t, ownTok, "Delete Race "+string(rune('a'+round)), 60)
 			res := w.raceOnce(t,
-				w.call(http.MethodPost, "/api/v1/roles/"+id+"/deactivate", ownTok, nil),
+				w.callRoleWrite(t, http.MethodPost, "/api/v1/roles/"+id+"/deactivate", ownTok, nil),
 				w.call(http.MethodPost, "/api/v1/users/"+norole+"/roles", w.tok(t, "admin"), ports.AssignUserRoleRequest{RoleID: id}))
 			onlyStatuses(t, "deactivate", res[0], http.StatusOK, http.StatusConflict)
 			onlyStatuses(t, "assign", res[1], http.StatusNoContent, http.StatusNotFound, http.StatusConflict)
@@ -200,7 +200,7 @@ func TestAttack_Races_RolesAgainstTheirHoldersAndLinks(t *testing.T) {
 		for round := range raceRounds {
 			to25 := 25 // more senior than the Team Lead (30) the holder reports to
 			res := w.raceOnce(t,
-				w.call(http.MethodPatch, "/api/v1/roles/"+lvl40, ownTok, ports.UpdateRoleRequest{HierarchyLevel: &to25}),
+				w.callRoleWrite(t, http.MethodPatch, "/api/v1/roles/"+lvl40, ownTok, ports.UpdateRoleRequest{HierarchyLevel: &to25}),
 				w.call(http.MethodPut, "/api/v1/users/"+h.membershipID+"/manager", ownTok, ports.AssignUserManagerRequest{ManagerID: w.mid(t, "sales")}))
 			onlyStatuses(t, "re-level", res[0], http.StatusNoContent, http.StatusUnprocessableEntity)
 			onlyStatuses(t, "manager", res[1], http.StatusNoContent)
