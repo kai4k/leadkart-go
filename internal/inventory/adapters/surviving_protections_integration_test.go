@@ -71,3 +71,24 @@ func (r *stockRig) rawExec(t *testing.T, sql string, args ...any) error {
 	_, err = tx.Exec(r.ctx, sql, args...)
 	return err
 }
+
+// ADR 0073 (review G2j M1): an INACTIVE product raises no reorder alert (its stock may still expire,
+// so the expiry scan keeps it, but nobody reorders what is no longer sold). Mutant: the reorder
+// query's `p.is_active` filter replaced by true.
+func TestAlertScan_ReorderSkipsAnInactiveProduct(t *testing.T) {
+	t.Parallel()
+	rig := newStockRig(t)
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	w := windowAt(now, 0)
+	active := rig.product(t, product.Spec{DosageForm: "Tablet", ReorderLevel: 10})
+	inactive := rig.product(t, product.Spec{DosageForm: "Tablet", ReorderLevel: 10})
+	require.NoError(t, rig.products.UpdateByID(rig.ctx, rig.tid, inactive, func(p *product.Product) (bool, error) {
+		return true, p.Deactivate(rig.actor, now)
+	}))
+
+	scan := adapters.NewAlertScanRepository(repoFixture(t), pg.NewTransactor(repoFixture(t)))
+	got, err := scan.ListProductsBelowReorder(t.Context(), uuid.MustParse(rig.tid.String()), w.MinSellable)
+	require.NoError(t, err)
+	require.Len(t, got, 1, "only the active product below its level is alerted")
+	require.Equal(t, string(active), got[0].ProductID.String())
+}
