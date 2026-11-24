@@ -3411,7 +3411,7 @@ paths:
         '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: Invalid status transition
+          description: "`invalid_status_transition` — the note is not `pending`. `order_not_invoiced` — the note's order has no tax invoice (it was never invoiced, or the invoice was refused on expired stock): goods are not dispatched without one, so the note stays `pending`. A read that cannot answer is a 500, never a dispatch."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

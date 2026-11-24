@@ -11,6 +11,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"github.com/leadkart/leadkart-go/internal/common/expiry"
 	"net/http"
 	"slices"
@@ -445,9 +446,11 @@ func TestE2E_Dispatch_TextOverItsDatabaseLimitIs422(t *testing.T) {
 	})
 	want("carrier 201", resp.status, resp.body, "carrier_name_too_long")
 
+	notes := 0
 	create := func() string {
+		notes++
 		resp := f.authedJSON(t, http.MethodPost, "/api/v1/dispatch/consignment-notes", tok, dispatchports.CreateConsignmentNoteRequest{
-			OrderID: uuid.NewString(), CarrierName: "BlueDart", BoxCount: 1, WeightGrams: 100,
+			OrderID: invoicedOrderID(t, f, tok, fmt.Sprintf("DISP-TXT-%d", notes)), CarrierName: "BlueDart", BoxCount: 1, WeightGrams: 100,
 		})
 		var out dispatchports.CreateConsignmentNoteResponse
 		if err := json.Unmarshal(resp.body, &out); err != nil || resp.status != http.StatusCreated {

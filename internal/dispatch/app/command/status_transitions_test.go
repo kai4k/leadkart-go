@@ -41,7 +41,7 @@ func TestMarkDispatchedHandler_HappyPath(t *testing.T) {
 	t.Parallel()
 	repo := consignmentnotetest.NewFakeRepository()
 	tID, cnID, actor := seedPending(t, repo)
-	h := command.NewMarkDispatchedHandler(repo, fixedNow)
+	h := command.NewMarkDispatchedHandler(repo, fakeInvoiced{has: true}, fixedNow)
 
 	require.NoError(t, h.Handle(t.Context(), command.MarkDispatchedCommand{
 		TenantID:                 tID,
@@ -64,7 +64,7 @@ func TestMarkDispatchedHandler_RejectsEmptyDocket(t *testing.T) {
 	t.Parallel()
 	repo := consignmentnotetest.NewFakeRepository()
 	tID, cnID, actor := seedPending(t, repo)
-	h := command.NewMarkDispatchedHandler(repo, fixedNow)
+	h := command.NewMarkDispatchedHandler(repo, fakeInvoiced{has: true}, fixedNow)
 
 	err := h.Handle(t.Context(), command.MarkDispatchedCommand{
 		TenantID:                 tID,
@@ -83,7 +83,7 @@ func TestMarkInTransitHandler_HappyPath(t *testing.T) {
 	t.Parallel()
 	repo := consignmentnotetest.NewFakeRepository()
 	tID, cnID, actor := seedPending(t, repo)
-	dispatchH := command.NewMarkDispatchedHandler(repo, fixedNow)
+	dispatchH := command.NewMarkDispatchedHandler(repo, fakeInvoiced{has: true}, fixedNow)
 	transitH := command.NewMarkInTransitHandler(repo, fixedNow)
 
 	// Walk pending → dispatched → in_transit.
@@ -121,7 +121,7 @@ func TestMarkDeliveredHandler_FromDispatched(t *testing.T) {
 	t.Parallel()
 	repo := consignmentnotetest.NewFakeRepository()
 	tID, cnID, actor := seedPending(t, repo)
-	dispatchH := command.NewMarkDispatchedHandler(repo, fixedNow)
+	dispatchH := command.NewMarkDispatchedHandler(repo, fakeInvoiced{has: true}, fixedNow)
 	deliverH := command.NewMarkDeliveredHandler(repo, fixedNow)
 
 	require.NoError(t, dispatchH.Handle(t.Context(), command.MarkDispatchedCommand{

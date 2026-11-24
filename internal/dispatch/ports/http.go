@@ -300,6 +300,8 @@ func mapMutationErr(w http.ResponseWriter, log *slog.Logger, r *http.Request, er
 		writeError(w, http.StatusNotFound, errCodeConsignmentNoteNotFound, "")
 	case errors.Is(err, consignmentnote.ErrInvalidTransition):
 		writeError(w, http.StatusConflict, errCodeInvalidStatusTransition, err.Error())
+	case errors.Is(err, command.ErrOrderNotInvoiced):
+		writeError(w, http.StatusConflict, errCodeOrderNotInvoiced, "the order has no tax invoice yet; goods are not dispatched without one")
 	case errors.Is(err, consignmentnote.ErrInvalid):
 		writeInvalid(w, err)
 	default:

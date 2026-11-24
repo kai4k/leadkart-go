@@ -1088,12 +1088,15 @@ func buildCompanySettingsApp(pool *pgxpool.Pool, now func() time.Time) companyse
 func buildDispatchApp(pool *pgxpool.Pool, now func() time.Time) dispatchapp.Application {
 	tx := pg.NewTransactor(pool)
 	repo := dispatchadapters.NewConsignmentNoteRepository(pool, tx)
+	// A note is dispatched only for an order that has a tax invoice (review G2d B1); Orders
+	// answers, bound here because modules never import each other.
+	orderInvoice := bridges.OrderInvoice{Invoices: ordersquery.NewGetInvoiceByOrderHandler(ordersadapters.NewInvoiceRepository(pool, tx))}
 	newID := func() consignmentnote.ID { return consignmentnote.ID(ids.NewV7().String()) }
 
 	return dispatchapp.Application{
 		Commands: dispatchapp.Commands{
 			CreateConsignmentNote: dispatchcommand.NewCreateConsignmentNoteHandler(tx, repo, now, newID),
-			MarkDispatched:        dispatchcommand.NewMarkDispatchedHandler(repo, now),
+			MarkDispatched:        dispatchcommand.NewMarkDispatchedHandler(repo, orderInvoice, now),
 			MarkInTransit:         dispatchcommand.NewMarkInTransitHandler(repo, now),
 			MarkDelivered:         dispatchcommand.NewMarkDeliveredHandler(repo, now),
 			MarkFailed:            dispatchcommand.NewMarkFailedHandler(repo, now),

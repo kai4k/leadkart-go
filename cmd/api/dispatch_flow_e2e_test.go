@@ -14,9 +14,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/google/uuid"
-
 	dispatchports "github.com/leadkart/leadkart-go/internal/dispatch/ports"
+	ordersports "github.com/leadkart/leadkart-go/internal/orders/ports"
 )
 
 // TestE2E_Dispatch_ConsignmentLifecycle drives create → get-by-order →
@@ -26,7 +25,7 @@ func TestE2E_Dispatch_ConsignmentLifecycle(t *testing.T) {
 	f := newE2EFixture(t)
 	owner := f.registerAndLogin(t, "dispatchflow")
 	tok := owner.AccessToken
-	orderID := uuid.NewString()
+	orderID := invoicedOrderID(t, f, tok, "DISP-FLOW")
 
 	// Create the slot.
 	resp := f.authedJSON(t, http.MethodPost, "/api/v1/dispatch/consignment-notes", tok, dispatchports.CreateConsignmentNoteRequest{
@@ -100,4 +99,20 @@ func TestE2E_Dispatch_ConsignmentLifecycle(t *testing.T) {
 	if resp.status != http.StatusUnauthorized {
 		t.Fatalf("anon get: status %d want 401", resp.status)
 	}
+}
+
+// invoicedOrderID makes a real order that has a tax invoice (quote, approve, token payment,
+// confirm, pack, manual invoice) and returns its id: a consignment note is dispatched only
+// for an order with an invoice (review G2d B1).
+func invoicedOrderID(t *testing.T, f e2eFixture, tok, sku string) string {
+	t.Helper()
+	productID := invCreateProduct(t, f, tok, sku, nil)
+	orderID, orderPath := confirmedOrderOn(t, f, tok, productID, sku)
+	if r := f.authedJSON(t, http.MethodPost, orderPath+"/pack", tok, ordersports.PackOrderRequest{CarrierName: "BlueDart", BoxCount: 2, WeightGrams: 1500}); r.status != http.StatusNoContent {
+		t.Fatalf("pack: %d %s", r.status, r.body)
+	}
+	if r := f.authedJSON(t, http.MethodPost, orderPath+"/invoice", tok, nil); r.status != http.StatusOK {
+		t.Fatalf("invoice: %d %s", r.status, r.body)
+	}
+	return orderID
 }

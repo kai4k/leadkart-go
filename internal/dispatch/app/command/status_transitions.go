@@ -29,22 +29,52 @@ type MarkDispatchedCommand struct {
 	TransitionedByMembership membership.ID
 }
 
-// MarkDispatchedHandler runs the pending → dispatched transition.
-type MarkDispatchedHandler struct {
-	notes consignmentnote.Repository
-	now   func() time.Time
+// ErrOrderNotInvoiced is returned when a note is dispatched for an order that has no tax
+// invoice. Goods do not leave without one, and an invoice is refused on expired stock, so
+// this also stops expired stock leaving by hand (review G2d B1).
+var ErrOrderNotInvoiced = errors.New("dispatch: the order has no tax invoice")
+
+// OrderInvoiceChecker asks Orders whether an order has a tax invoice. Dispatch owns the
+// question; the composition root binds it to an Orders read, because modules never import
+// each other. An invoice, once issued, is never removed.
+type OrderInvoiceChecker interface {
+	OrderHasInvoice(ctx context.Context, tenantID tenant.ID, orderID string) (bool, error)
 }
 
-// NewMarkDispatchedHandler wires the handler.
-func NewMarkDispatchedHandler(notes consignmentnote.Repository, now func() time.Time) MarkDispatchedHandler {
+// MarkDispatchedHandler runs the pending → dispatched transition.
+type MarkDispatchedHandler struct {
+	notes    consignmentnote.Repository
+	invoiced OrderInvoiceChecker
+	now      func() time.Time
+}
+
+// NewMarkDispatchedHandler wires the handler. invoiced is required.
+func NewMarkDispatchedHandler(notes consignmentnote.Repository, invoiced OrderInvoiceChecker, now func() time.Time) MarkDispatchedHandler {
+	if invoiced == nil {
+		panic("command: NewMarkDispatchedHandler invoice check required")
+	}
 	if now == nil {
 		now = time.Now
 	}
-	return MarkDispatchedHandler{notes: notes, now: now}
+	return MarkDispatchedHandler{notes: notes, invoiced: invoiced, now: now}
 }
 
-// Handle executes the transition via the UpdateFn pattern.
+// Handle executes the transition via the UpdateFn pattern, after Orders confirms the
+// note's order has an invoice. The question is asked first and outside the note's
+// transaction (another module's read); an invoice is never removed, so the answer cannot
+// go stale. A read that fails fails closed.
 func (h MarkDispatchedHandler) Handle(ctx context.Context, cmd MarkDispatchedCommand) error {
+	cn, err := h.notes.GetByID(ctx, cmd.TenantID, cmd.ConsignmentNoteID)
+	if err != nil {
+		return err
+	}
+	has, err := h.invoiced.OrderHasInvoice(ctx, cmd.TenantID, string(cn.OrderID()))
+	if err != nil {
+		return fmt.Errorf("mark dispatched: check the order's invoice: %w", err)
+	}
+	if !has {
+		return fmt.Errorf("mark dispatched: %w", ErrOrderNotInvoiced)
+	}
 	return h.notes.UpdateByID(ctx, cmd.TenantID, cmd.ConsignmentNoteID, func(cn *consignmentnote.ConsignmentNote) (bool, error) {
 		priorStatus := cn.Status()
 		if err := cn.MarkDispatched(cmd.DocketNumber, cmd.TransitionedByMembership, h.now()); err != nil {

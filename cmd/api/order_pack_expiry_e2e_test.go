@@ -41,6 +41,7 @@ import (
 	dispatchcommand "github.com/leadkart/leadkart-go/internal/dispatch/app/command"
 	dispatchquery "github.com/leadkart/leadkart-go/internal/dispatch/app/query"
 	"github.com/leadkart/leadkart-go/internal/dispatch/domain/consignmentnote"
+	dispatchports "github.com/leadkart/leadkart-go/internal/dispatch/ports"
 	dispatchsubscribers "github.com/leadkart/leadkart-go/internal/dispatch/ports/subscribers"
 	inventoryadapters "github.com/leadkart/leadkart-go/internal/inventory/adapters"
 	inventorycommand "github.com/leadkart/leadkart-go/internal/inventory/app/command"
@@ -257,6 +258,19 @@ func TestE2E_Orders_AnOrderHoldingExpiredStockCannotBePackedInvoicedOrDispatched
 		t.Fatalf("stock on hand %v reserved %v; want 20 and 10, untouched", onHand, reserved)
 	}
 
+	// Review G2d B1: a note made by hand for this order cannot be dispatched either: the
+	// order has no invoice, and the invoice is refused on expired stock.
+	mk := f.authedJSON(t, http.MethodPost, "/api/v1/dispatch/consignment-notes", tok, dispatchports.CreateConsignmentNoteRequest{
+		OrderID: orderID, CarrierName: "BlueDart", BoxCount: 2, WeightGrams: 1500,
+	})
+	if mk.status != http.StatusCreated {
+		t.Fatalf("manual note: %d %s", mk.status, mk.body)
+	}
+	noteID, _ := invObj(t, mk.body)["consignment_note_id"].(string)
+	if r := f.authedJSON(t, http.MethodPost, "/api/v1/dispatch/consignment-notes/"+noteID+"/dispatch", tok, dispatchports.MarkDispatchedRequest{DocketNumber: "BDX-1"}); r.status != http.StatusConflict || errorCode(t, r.body) != "order_not_invoiced" {
+		t.Fatalf("dispatch of a note on an uninvoiced order: %d %s; want 409 order_not_invoiced", r.status, r.body)
+	}
+
 	// The order is not stuck: it can still be cancelled.
 	if r := f.authedJSON(t, http.MethodPost, orderPath+"/cancel", tok, ordersports.CancelOrderRequest{Reason: "stock expired"}); r.status != http.StatusNoContent {
 		t.Fatalf("cancel: %d %s", r.status, r.body)
@@ -287,7 +301,7 @@ func TestE2E_Orders_AnInvoiceEventArrivingAfterTheExpiryIssuesNoInvoice(t *testi
 	batchID, _ := invObj(t, add.body)["batch_id"].(string)
 	stack := startFulfilmentStack(t, f.Pool)
 
-	_, orderPath := confirmedOrderOn(t, f, tok, productID, "INV-LATE")
+	orderID, orderPath := confirmedOrderOn(t, f, tok, productID, "INV-LATE")
 	stock := func() (onHand, reserved float64) {
 		b := invObj(t, f.authedJSON(t, http.MethodGet, "/api/v1/inventory/batches/"+batchID, tok, nil).body)
 		onHand, _ = b["quantity_on_hand"].(float64)
@@ -335,6 +349,14 @@ func TestE2E_Orders_AnInvoiceEventArrivingAfterTheExpiryIssuesNoInvoice(t *testi
 	}
 	if onHand, reserved := stock(); onHand != 20 || reserved != 10 {
 		t.Fatalf("stock on hand %v reserved %v; want 20 and 10, untouched", onHand, reserved)
+	}
+	// Review G2d B1: the pending note the late pack event created cannot leave the building.
+	var noteID string
+	inCompany(func(tx pgx.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT id::text FROM dispatch.consignment_notes WHERE order_id = $1`, orderID).Scan(&noteID)
+	})
+	if r := f.authedJSON(t, http.MethodPost, "/api/v1/dispatch/consignment-notes/"+noteID+"/dispatch", tok, dispatchports.MarkDispatchedRequest{DocketNumber: "BDX-1"}); r.status != http.StatusConflict || errorCode(t, r.body) != "order_not_invoiced" {
+		t.Fatalf("dispatch of the pending note: %d %s; want 409 order_not_invoiced", r.status, r.body)
 	}
 	if r := f.authedJSON(t, http.MethodPost, orderPath+"/cancel", tok, ordersports.CancelOrderRequest{Reason: "stock expired"}); r.status != http.StatusNoContent {
 		t.Fatalf("cancel: %d %s", r.status, r.body)
