@@ -144,13 +144,19 @@ func (f *fixture) deliveredEvent(cnID uuid.UUID) *dispatchevents.ConsignmentDeli
 // invoiceAndDispatch takes the seeded order through the auto-invoice and the goods leaving.
 func (f *fixture) invoiceAndDispatch(t *testing.T) {
 	t.Helper()
+	f.invoiceAndDispatchNote(t, uuid.NewString())
+}
+
+// invoiceAndDispatchNote is invoiceAndDispatch for the note the order is linked to.
+func (f *fixture) invoiceAndDispatchNote(t *testing.T, noteID string) {
+	t.Helper()
 	require.NoError(t, f.autoInvoice.Handle(t.Context(), &integrationevents.OrderPackedV1{
 		OrderID: f.orderID.String(), TenantID: f.tenantID.String(),
 		BoxCount: 2, WeightGrams: 1500, CarrierName: "BlueDart",
 		PackedAtUTC: now(), PackedByMembershipID: f.actor.String(),
 	}))
 	require.NoError(t, command.NewDispatchOrderHandler(f.orders, now).Handle(t.Context(), command.DispatchOrderCommand{
-		TenantID: f.tenantID, OrderID: f.orderID, TransitionedByMembership: f.actor,
+		TenantID: f.tenantID, OrderID: f.orderID, ConsignmentNoteID: noteID, TransitionedByMembership: f.actor,
 	}))
 }
 
@@ -196,7 +202,7 @@ func TestConsignmentCreated_ReplayAcks(t *testing.T) {
 	f := newFixture(t)
 	cn := uuid.New()
 	require.NoError(t, f.created.Handle(t.Context(), f.createdEvent(cn)))
-	f.invoiceAndDispatch(t)
+	f.invoiceAndDispatchNote(t, cn.String())
 	require.NoError(t, f.created.Handle(t.Context(), f.createdEvent(cn)), "replay must ack")
 	require.Equal(t, order.StateDispatched, f.orderState(t))
 }
@@ -206,9 +212,10 @@ func TestConsignmentCreated_ReplayAcks(t *testing.T) {
 func TestConsignmentDelivered_LinksAndDeliversADispatchedOrder(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	f.invoiceAndDispatch(t)
+	cn := uuid.New()
+	f.invoiceAndDispatchNote(t, cn.String())
 
-	require.NoError(t, f.delivered.Handle(t.Context(), f.deliveredEvent(uuid.New())))
+	require.NoError(t, f.delivered.Handle(t.Context(), f.deliveredEvent(cn)))
 
 	require.Equal(t, order.StateDelivered, f.orderState(t))
 }
@@ -235,7 +242,7 @@ func TestConsignmentDelivered_ReplayAcks(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	cn := uuid.New()
-	f.invoiceAndDispatch(t)
+	f.invoiceAndDispatchNote(t, cn.String())
 	require.NoError(t, f.delivered.Handle(t.Context(), f.deliveredEvent(cn)))
 	require.NoError(t, f.delivered.Handle(t.Context(), f.deliveredEvent(cn)), "replay must ack")
 	require.Equal(t, order.StateDelivered, f.orderState(t))

@@ -35,12 +35,12 @@ type OrderShipper struct {
 // MarkOrderDispatched runs the Orders step inside the dispatch transaction and translates
 // Orders' refusals into Dispatch's. An order that does not exist for this company reads as
 // not invoiced (the Orders command already answers so).
-func (b OrderShipper) MarkOrderDispatched(ctx context.Context, tenantID tenant.ID, orderID string, actor membership.ID) error {
+func (b OrderShipper) MarkOrderDispatched(ctx context.Context, tenantID tenant.ID, orderID, consignmentNoteID string, actor membership.ID) error {
 	if _, ok := pg.TxFromContext(ctx); !ok {
 		return ErrNoActiveTx
 	}
 	err := b.Dispatch.Handle(ctx, orderscommand.DispatchOrderCommand{
-		TenantID: tenantID, OrderID: order.ID(orderID), TransitionedByMembership: actor,
+		TenantID: tenantID, OrderID: order.ID(orderID), ConsignmentNoteID: consignmentNoteID, TransitionedByMembership: actor,
 	})
 	switch {
 	case err == nil:

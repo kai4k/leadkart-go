@@ -307,8 +307,8 @@ type orderThenFail struct {
 	fail  error
 }
 
-func (o orderThenFail) MarkOrderDispatched(ctx context.Context, tid tenant.ID, orderID string, actor membership.ID) error {
-	if err := o.inner.MarkOrderDispatched(ctx, tid, orderID, actor); err != nil {
+func (o orderThenFail) MarkOrderDispatched(ctx context.Context, tid tenant.ID, orderID, noteID string, actor membership.ID) error {
+	if err := o.inner.MarkOrderDispatched(ctx, tid, orderID, noteID, actor); err != nil {
 		return err
 	}
 	return o.fail
@@ -403,6 +403,14 @@ func TestE2E_Dispatch_OneTransaction_SuccessRetryAndRefusals(t *testing.T) {
 		after := r.world(t, o)
 		if !strings.Contains(after, "order[dispatched dispatched=true]") || !strings.Contains(after, `note[dispatched "BDX-1"]`) {
 			t.Fatalf("world after: %s (before: %s)", after, before)
+		}
+		// The note is linked to the order in the same transaction (no stack here runs the async attach).
+		var linked string
+		r.inCompany(t, func(tx pgx.Tx) error {
+			return tx.QueryRow(t.Context(), `SELECT COALESCE(consignment_note_id::text, '') FROM orders.orders WHERE id = $1`, o.orderID).Scan(&linked)
+		})
+		if linked != o.noteID {
+			t.Fatalf("the order links note %q; want %q", linked, o.noteID)
 		}
 		// The events written in the same transaction reach the bus: the two stock movements
 		// (release, outbound) and the note's dispatched event. The order's own transition

@@ -43,7 +43,7 @@ type fakeOrderStep struct {
 	err error
 }
 
-func (f fakeOrderStep) MarkOrderDispatched(ctx context.Context, _ tenant.ID, _ string, _ membership.ID) error {
+func (f fakeOrderStep) MarkOrderDispatched(ctx context.Context, _ tenant.ID, _, _ string, _ membership.ID) error {
 	f.log.add("order")
 	if ctx.Value(txMarker{}) == nil {
 		f.log.add("order-outside-tx")

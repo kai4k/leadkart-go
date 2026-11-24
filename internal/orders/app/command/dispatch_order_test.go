@@ -52,13 +52,35 @@ func TestDispatchOrder_AdvancesAnInvoicedOrder(t *testing.T) {
 	id := seedOrderAt(t, repo, tid, actor, order.StateInvoiced)
 
 	require.NoError(t, command.NewDispatchOrderHandler(repo, now).Handle(t.Context(), command.DispatchOrderCommand{
-		TenantID: tid, OrderID: id, TransitionedByMembership: actor,
+		TenantID: tid, OrderID: id, ConsignmentNoteID: uuid.NewString(), TransitionedByMembership: actor,
 	}))
 
 	got, err := repo.GetByID(t.Context(), tid, id)
 	require.NoError(t, err)
 	require.Equal(t, order.StateDispatched, got.State())
 	require.NotNil(t, got.DispatchedAt())
+}
+
+// Review G2g M4: the note is linked in the dispatch transaction itself, so a lost or late
+// consignment-created event cannot leave a dispatched order with no note. The async attach of
+// the same note stays a no-op.
+func TestDispatchOrder_LinksTheNoteInTheSameStep(t *testing.T) {
+	t.Parallel()
+	tid, actor := tenant.ID(uuid.NewString()), membership.ID(uuid.NewString())
+	repo := ordertest.NewFakeRepository()
+	id := seedOrderAt(t, repo, tid, actor, order.StateInvoiced)
+	noteID := uuid.NewString()
+
+	require.NoError(t, command.NewDispatchOrderHandler(repo, now).Handle(t.Context(), command.DispatchOrderCommand{
+		TenantID: tid, OrderID: id, ConsignmentNoteID: noteID, TransitionedByMembership: actor,
+	}))
+
+	got, err := repo.GetByID(t.Context(), tid, id)
+	require.NoError(t, err)
+	require.Equal(t, noteID, got.ConsignmentNoteID())
+	require.NoError(t, command.NewAttachConsignmentHandler(repo).Handle(t.Context(), command.AttachConsignmentCommand{
+		TenantID: tid, OrderID: id, ConsignmentNoteID: noteID,
+	}), "the async attach of the same note is a no-op")
 }
 
 func TestDispatchOrder_RefusalsLeaveTheOrderAlone(t *testing.T) {
@@ -78,7 +100,7 @@ func TestDispatchOrder_RefusalsLeaveTheOrderAlone(t *testing.T) {
 			repo := ordertest.NewFakeRepository()
 			id := seedOrderAt(t, repo, tid, actor, c.state)
 			err := command.NewDispatchOrderHandler(repo, now).Handle(t.Context(), command.DispatchOrderCommand{
-				TenantID: tid, OrderID: id, TransitionedByMembership: actor,
+				TenantID: tid, OrderID: id, ConsignmentNoteID: uuid.NewString(), TransitionedByMembership: actor,
 			})
 			require.ErrorIs(t, err, c.wantIs)
 			got, gerr := repo.GetByID(t.Context(), tid, id)
@@ -93,7 +115,7 @@ func TestDispatchOrder_NoSuchOrderIsNotInvoiced(t *testing.T) {
 	tid, actor := tenant.ID(uuid.NewString()), membership.ID(uuid.NewString())
 	repo := ordertest.NewFakeRepository()
 	err := command.NewDispatchOrderHandler(repo, now).Handle(t.Context(), command.DispatchOrderCommand{
-		TenantID: tid, OrderID: order.ID(uuid.NewString()), TransitionedByMembership: actor,
+		TenantID: tid, OrderID: order.ID(uuid.NewString()), ConsignmentNoteID: uuid.NewString(), TransitionedByMembership: actor,
 	})
 	require.ErrorIs(t, err, command.ErrDispatchNotInvoiced)
 }

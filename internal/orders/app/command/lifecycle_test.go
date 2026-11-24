@@ -117,8 +117,9 @@ func TestOrderFulfilmentLifecycle(t *testing.T) {
 
 	// Consignment note created (saga) → linked, the order still invoiced.
 	attach := command.NewAttachConsignmentHandler(orders)
+	noteID := uuid.NewString()
 	require.NoError(t, attach.Handle(ctx, command.AttachConsignmentCommand{
-		TenantID: tid, OrderID: orderID, ConsignmentNoteID: uuid.NewString(),
+		TenantID: tid, OrderID: orderID, ConsignmentNoteID: noteID,
 	}))
 	linked, err := orders.GetByID(ctx, tid, orderID)
 	require.NoError(t, err)
@@ -127,7 +128,7 @@ func TestOrderFulfilmentLifecycle(t *testing.T) {
 	// The goods leave (Dispatch's transaction) → dispatched.
 	dispatch := command.NewDispatchOrderHandler(orders, now)
 	require.NoError(t, dispatch.Handle(ctx, command.DispatchOrderCommand{
-		TenantID: tid, OrderID: orderID, TransitionedByMembership: actor,
+		TenantID: tid, OrderID: orderID, ConsignmentNoteID: noteID, TransitionedByMembership: actor,
 	}))
 
 	// Delivered (saga) → delivered, then complete.

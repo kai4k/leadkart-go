@@ -58,7 +58,7 @@ var ErrStockNotHeld = errors.New("dispatch: the order holds no stock to ship")
 // [ErrOrderNotInvoiced] for an order with no invoice (or none for this company) and
 // [ErrOrderNotDispatchable] for one in a state goods do not leave from.
 type OrderShipper interface {
-	MarkOrderDispatched(ctx context.Context, tenantID tenant.ID, orderID string, actor membership.ID) error
+	MarkOrderDispatched(ctx context.Context, tenantID tenant.ID, orderID, consignmentNoteID string, actor membership.ID) error
 }
 
 // StockShipper is Dispatch's port to Inventory for the moment goods leave: it locks the
@@ -116,7 +116,7 @@ func (h MarkDispatchedHandler) Handle(ctx context.Context, cmd MarkDispatchedCom
 					return false, fmt.Errorf("mark dispatched: %w", err)
 				}
 				orderID := string(cn.OrderID())
-				if err := h.orders.MarkOrderDispatched(ctx, cmd.TenantID, orderID, cmd.TransitionedByMembership); err != nil {
+				if err := h.orders.MarkOrderDispatched(ctx, cmd.TenantID, orderID, cmd.ConsignmentNoteID.String(), cmd.TransitionedByMembership); err != nil {
 					return false, fmt.Errorf("mark dispatched: %w", err)
 				}
 				if err := h.stock.ShipOrderStock(ctx, cmd.TenantID, orderID, cmd.TransitionedByMembership); err != nil {

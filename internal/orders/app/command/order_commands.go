@@ -295,6 +295,7 @@ var ErrDispatchWrongState = errors.New("orders dispatch_order: the order is not 
 type DispatchOrderCommand struct {
 	TenantID                 tenant.ID
 	OrderID                  order.ID
+	ConsignmentNoteID        string
 	TransitionedByMembership membership.ID
 }
 
@@ -331,6 +332,10 @@ func (h DispatchOrderHandler) Handle(ctx context.Context, cmd DispatchOrderComma
 			return false, ErrDispatchWrongState
 		}
 		if err := o.MarkDispatched(cmd.TransitionedByMembership, h.now().UTC()); err != nil {
+			return false, fmt.Errorf("orders dispatch_order: %w", err)
+		}
+		// The note is linked in the same step (a no-op when the async attach already did).
+		if err := o.AttachConsignment(cmd.ConsignmentNoteID); err != nil {
 			return false, fmt.Errorf("orders dispatch_order: %w", err)
 		}
 		return true, nil
