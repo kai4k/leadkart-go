@@ -104,7 +104,7 @@ func TestAttack_Requests_ApprovalIsTheCeilingOfTheApprover(t *testing.T) {
 	path, body := decide("approve", notHeld)
 	rows = append(rows, attack{who: "lead", what: "approve a name she does not hold", method: http.MethodPost, path: path, body: body,
 		status: http.StatusForbidden, code: "grant_exceeds_authority"})
-	// an Administrator without tenant.admin does not hold roles.delete (must-hold set).
+	// an Administrator without tenant.admin does not hold roles.manage (must-hold set).
 	path, body = decide("approve", mustHold)
 	rows = append(rows, attack{who: "adminRO", what: "approve a must-hold name without holding it", method: http.MethodPost, path: path, body: body,
 		status: http.StatusForbidden, code: "grant_exceeds_authority"})

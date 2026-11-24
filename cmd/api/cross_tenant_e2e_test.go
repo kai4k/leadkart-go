@@ -557,11 +557,13 @@ func TestE2E_CrossTenant_RoleRouteHiddenAsNotFound(t *testing.T) {
 		t.Errorf("GET cross-tenant role: status %d, want 404; body=%s", read.status, read.body)
 	}
 
-	// Tenant A tries to delete it → 404.
-	del := f.authedJSON(t, http.MethodDelete,
-		"/api/v1/roles/"+bRole.RoleID, tenantA.AccessToken, nil)
-	if del.status != http.StatusNotFound {
-		t.Errorf("DELETE cross-tenant role: status %d, want 404; body=%s", del.status, del.body)
+	// Tenant A tries to deactivate and reactivate it → 404 (a role is never deleted, ADR 0073).
+	for _, verb := range []string{"deactivate", "reactivate"} {
+		res := f.authedJSON(t, http.MethodPost,
+			"/api/v1/roles/"+bRole.RoleID+"/"+verb, tenantA.AccessToken, nil)
+		if res.status != http.StatusNotFound {
+			t.Errorf("POST %s cross-tenant role: status %d, want 404; body=%s", verb, res.status, res.body)
+		}
 	}
 
 	// Tenant A's listing must NOT include B's custom role. (System
