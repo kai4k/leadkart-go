@@ -1455,7 +1455,7 @@ paths:
       tags: [roles]
       summary: Make an inactive role active again
       description: |
-        Requires `identity.roles.manage`. The same authority as deactivating: reactivating gives the role's permissions back to every holder, so the caller must hold every permission the role carries and be allowed to act on every holder. The security stamp of every ACTIVE holder rotates (their tokens are refreshed). Idempotent: an active role answers 200. Answers the updated role.
+        Requires `identity.roles.manage`. Reactivating gives the role's permissions back to every holder, so it asks the deactivate authority (the caller holds every permission the role carries and may act on every holder) PLUS a durable hold of each of those permissions: a permission held only until a date cannot be conferred this way (403 `grant_exceeds_authority`). The security stamp of every ACTIVE holder rotates (their tokens are refreshed). Idempotent: an active role answers 200. Answers the updated role.
       x-required-permissions: [identity.roles.manage]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
