@@ -14,6 +14,9 @@ DROP INDEX IF EXISTS inventory.idx_products_search_trgm;
 DROP INDEX IF EXISTS inventory.idx_products_tenant_reorder_enabled;
 DROP INDEX IF EXISTS inventory.idx_products_schedule_class;
 
+-- A product soft-deleted before this migration is INACTIVE afterwards (it never reappears as active).
+UPDATE inventory.products SET is_active = false WHERE is_deleted;
+
 ALTER TABLE inventory.products
     DROP COLUMN is_deleted,
     DROP COLUMN deleted_at,
