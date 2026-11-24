@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// Per-request operator impersonation activity. Indexed on operator + target tenant for forensic queries. 7-year retention per SOC2 CC4.1 / DPDP §12.
+// Per-request operator impersonation activity. Indexed on operator + target tenant for forensic queries. Append-only and kept forever (ADR 0071).
 type CommonAdminImpersonationAudit struct {
 	ID             pgtype.UUID
 	SessionID      pgtype.UUID
@@ -66,6 +66,15 @@ type CommonDeadLetter struct {
 	Payload        []byte
 	Metadata       []byte
 	DeadLetteredAt pgtype.Timestamptz
+}
+
+// One row per replay of a timed-out dead letter (review G2b H1). Append-only and kept forever (ADR 0071): the application role holds SELECT and INSERT only.
+type CommonDeadLetterReplay struct {
+	ID           pgtype.UUID
+	DeadLetterID pgtype.UUID
+	MessageID    string
+	HandlerName  string
+	ReplayedAt   pgtype.Timestamptz
 }
 
 // Transactional-outbox relay queue (watermill-sql PostgreSQLQueueSchema). One shared table, no RLS — pure relay per ADR 0064/0067. Rows deleted on ack.
