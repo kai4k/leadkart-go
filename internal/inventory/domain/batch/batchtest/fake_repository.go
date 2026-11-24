@@ -185,7 +185,7 @@ func (r *FakeRepository) ListByProductPage(_ context.Context, _ tenant.ID, _ pro
 // ListFefoForProduct returns the live, in-stock, not-yet-expired
 // batches for productID in tenantID, ordered (expiry_date ASC, id ASC)
 // — mirrors the SQL adapter's
-// `WHERE NOT is_deleted AND quantity_on_hand > 0 AND expiry_date > now`
+// `WHERE quantity_on_hand > 0 AND expiry_date > now`
 // filter + ORDER BY clause.
 //
 // FEFO ordering canon: the dispatch picker pulls the soonest-to-expire

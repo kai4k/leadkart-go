@@ -434,8 +434,8 @@ func parseTenantIDForRole(id tenant.ID) (uuid.UUID, error) {
 	return parsed, nil
 }
 
-// constraintRoleTenantName is the partial unique index name for
-// (tenant_id, name) WHERE NOT is_deleted (migration 20260507000002).
+// constraintRoleTenantName is the unique index name for
+// (tenant_id, name) over every role, inactive ones included (migration 20261125000006).
 const constraintRoleTenantName = "uq_roles_tenant_name"
 
 // isRoleNameUniqueViolation reports whether err is a unique-constraint

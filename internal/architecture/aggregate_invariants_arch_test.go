@@ -453,7 +453,6 @@ func TestArch_MutatorsEmitEventsOnStateChange(t *testing.T) {
 		{"Batch", "ApplyMovement"}:           true, // paired StockMovement emits the inventory.* event
 		{"Batch", "applyOutbound"}:           true, // paired StockMovement ledger row is the event
 		{"Batch", "applyQuarantineMovement"}: true, // the paired StockMovement row (quarantine, release_quarantine, write_off) is the event
-		{"Batch", "SoftDelete"}:              true, // version bump only; deletion auditing via outbox row
 		{"Role", "ChangeHierarchyLevel"}:     true, // hierarchy edges aggregate owns the event surface (ADR 0058)
 		{"Order", "AttachInvoice"}:           true, // event emitted via advance(StateInvoiced, ...) per ADR 0063 §4 state-machine canon
 		{"Order", "AttachConsignment"}:       true, // links the note id only (state untouched); the order's row version tracks it, and the dispatched event is Order.MarkDispatched's

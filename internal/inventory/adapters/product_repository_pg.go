@@ -312,8 +312,8 @@ func drainProductEvents(ctx context.Context, tx pgx.Tx, p *product.Product) erro
 	return writeOutboxEvents(ctx, tx, tid, mapped)
 }
 
-// constraintProductTenantSku is the partial unique index on
-// (tenant_id, sku) WHERE NOT is_deleted (migration 20260603000001).
+// constraintProductTenantSku is the unique index on
+// (tenant_id, sku) over every product, inactive ones included (migration 20261125000005).
 const constraintProductTenantSku = "uq_products_tenant_sku"
 
 // isSKUUniqueViolation reports whether err is a unique-constraint

@@ -481,7 +481,7 @@ type InventoryProduct struct {
 	UpdatedAt    pgtype.Timestamptz
 	// Audit chain — Membership that created this product. NULL = system-bootstrapped (seed / import). Wave 1.5 ADR 0027.
 	CreatedByMembershipID pgtype.UUID
-	// When SUM(batches.quantity_on_hand WHERE NOT is_deleted AND NOT expired) < reorder_level, the daily ReorderScanJob emits ProductBelowReorderLevelV1. 0 disables the alert (BRD §6.5).
+	// When SUM(batches.quantity_on_hand, quarantined excluded, of sellable batches) < reorder_level, the daily ReorderScanJob emits ProductBelowReorderLevelV1 for an ACTIVE product. 0 disables the alert (BRD §6.5).
 	ReorderLevel int32
 	// Batches with expiry_date <= now() + this days threshold trigger BatchExpiringSoonV1 via the daily ExpiryScanJob. Default 90 per BRD §6.5.
 	ExpiryAlertThresholdDays int32

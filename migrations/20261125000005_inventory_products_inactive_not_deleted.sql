@@ -53,10 +53,16 @@ CREATE INDEX idx_products_schedule_class
     ON inventory.products (tenant_id, drug_schedule_class_id)
     WHERE drug_schedule_class_id IS NOT NULL;
 
+COMMENT ON COLUMN inventory.products.reorder_level IS
+    'When SUM(batches.quantity_on_hand, quarantined excluded, of sellable batches) < reorder_level, the daily ReorderScanJob emits ProductBelowReorderLevelV1 for an ACTIVE product. 0 disables the alert (BRD §6.5).';
+
 -- +goose StatementEnd
 
 -- +goose Down
 -- +goose StatementBegin
+
+COMMENT ON COLUMN inventory.products.reorder_level IS
+    'When SUM(batches.quantity_on_hand WHERE NOT is_deleted AND NOT expired) < reorder_level, the daily ReorderScanJob emits ProductBelowReorderLevelV1. 0 disables the alert (BRD §6.5).';
 
 DROP INDEX IF EXISTS inventory.idx_products_schedule_class;
 DROP INDEX IF EXISTS inventory.idx_products_tenant_reorder_enabled;
