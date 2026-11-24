@@ -119,11 +119,6 @@ func (a Actor) mayChangePermissions(tenantID tenant.ID, names []string) error {
 			return fmt.Errorf("%w: %q is not a known permission", ErrGrantExceedsAuthority, n)
 		}
 	}
-	for _, n := range names {
-		if permission.IsPlatformManagedRole(n) && !a.mayManageRoles {
-			return fmt.Errorf("%w: %s is LeadKart platform authority", ErrGrantExceedsAuthority, n)
-		}
-	}
 	if a.superUser {
 		return nil
 	}
@@ -147,6 +142,57 @@ func (a Actor) mayChangePermissions(tenantID tenant.ID, names []string) error {
 		}
 	}
 	return nil
+}
+
+// mayManageRolesIn is the role-write fact decided for the TARGET tenant (G2m M1): the caller
+// holds platform authority over roles (mayManageRoles) AND it reaches tid: its own tenant, or any
+// tenant for a super user, an impersonation session or an operator holding platform.roles.manage
+// (the same reach the route gate gives). An operator holding only platform.users.manage is exempt
+// in a company but may not write its roles.
+func (a Actor) mayManageRolesIn(tid tenant.ID) bool {
+	return a.valid && a.mayManageRoles &&
+		(sameTenant(tid, a.tenantID) || a.superUser || a.impersonation || a.hasOwn(permission.IdentityPermissions.Platform.RolesManage))
+}
+
+// mayConferManaged is the rule for the three platform-managed role names (G2m S1a): they are
+// meaningless outside the platform tenant (the claim drops them, the gate ignores them), so NO
+// actor, LeadKart included, may confer them on a role or a member's override anywhere but the
+// platform tenant, and inside it only an actor with the platform role fact acting from there.
+// Conferring only: removing a managed name is never refused here (S1b).
+func (a Actor) mayConferManaged(tid tenant.ID, conferred []string) error {
+	if !a.valid || !validTenant(tid) {
+		return ErrNoAuthority
+	}
+	for _, n := range conferred {
+		if !permission.IsPlatformManagedRole(n) {
+			continue
+		}
+		if !a.mayManageRoles || a.impersonation || (!a.platformOperator && !a.superUser) || !sameTenant(tid, a.tenantID) {
+			return fmt.Errorf("%w: %s is LeadKart platform authority and exists only in the platform tenant", ErrGrantExceedsAuthority, n)
+		}
+	}
+	return nil
+}
+
+// mayChange is the permission ceiling over a change that confers some names and removes others:
+// conferred names also pass mayConferManaged; a removed platform-managed name is outside the
+// ceiling (an inert name must always be removable, S1b).
+func (a Actor) mayChange(tid tenant.ID, conferred, removed []string) error {
+	if err := a.mayConferManaged(tid, conferred); err != nil {
+		return err
+	}
+	names := slices.Clone(conferred)
+	for _, n := range removed {
+		if !permission.IsPlatformManagedRole(n) {
+			names = append(names, n)
+		}
+	}
+	return a.mayChangePermissions(tid, names)
+}
+
+// notIn is the names of a that are not in b.
+func notIn(a, b []string) []string {
+	return slices.DeleteFunc(slices.Clone(a), func(n string) bool { return slices.Contains(b, n) })
 }
 
 // mayTouchRole: the rank, tenant and super-admin rules shared by assigning and
@@ -191,7 +237,7 @@ func (a Actor) MayAssignRole(t Member, r *role.Role) error {
 	if err := roleMayContain(r, names); err != nil {
 		return err
 	}
-	if err := a.mayChangePermissions(t.tenantID, names); err != nil {
+	if err := a.mayChange(t.tenantID, names, nil); err != nil {
 		return err
 	}
 	return a.mayConfer(names)
@@ -206,7 +252,7 @@ func (a Actor) MayRevokeRole(t Member, r *role.Role, owners []Member) error {
 		return err
 	}
 	if r.IsActive() {
-		if err := a.mayChangePermissions(t.tenantID, PermissionNames(r.Permissions())); err != nil {
+		if err := a.mayChange(t.tenantID, nil, PermissionNames(r.Permissions())); err != nil {
 			return err
 		}
 	}
@@ -250,7 +296,7 @@ func (a Actor) MayChangeOverrides(t Member, after Overrides) error {
 	}
 	delta := slices.Concat(grantDelta(t.overrides.Granted, after.Granted), Delta(t.overrides.Revoked, after.Revoked))
 	slices.Sort(delta)
-	if err := a.mayChangePermissions(t.tenantID, slices.Compact(delta)); err != nil {
+	if err := a.mayChange(t.tenantID, conferredByOverrides(t.overrides, after), slices.Compact(delta)); err != nil {
 		return err
 	}
 	if err := a.mayConfer(conferredByOverrides(t.overrides, after)); err != nil {
@@ -475,7 +521,7 @@ func (a Actor) MayCreateRole(tenantID tenant.ID, level int, perms []string, pare
 	if err != nil || !a.valid {
 		return ErrNoAuthority
 	}
-	if !a.mayManageRoles {
+	if !a.mayManageRolesIn(tid) {
 		return fmt.Errorf("%w: creating a role is LeadKart platform authority", ErrNoAuthority)
 	}
 	if !validLevel(level) {
@@ -492,7 +538,7 @@ func (a Actor) MayCreateRole(tenantID tenant.ID, level int, perms []string, pare
 			return fmt.Errorf("%w: a new role's level %d must be below rank %d", ErrInsufficientRank, level, a.Rank())
 		}
 	}
-	if err := a.mayChangePermissions(tid, perms); err != nil {
+	if err := a.mayChange(tid, perms, nil); err != nil {
 		return err
 	}
 	if err := a.mayConfer(perms); err != nil {
@@ -526,11 +572,11 @@ func (a Actor) mayMutateRole(r *role.Role, newLevel int) error {
 	if !a.valid {
 		return ErrNoAuthority
 	}
-	if !a.mayManageRoles {
-		return fmt.Errorf("%w: changing a role is LeadKart platform authority", ErrNoAuthority)
-	}
 	if r == nil {
 		return fmt.Errorf("%w: role required", ErrNoAuthority)
+	}
+	if !a.mayManageRolesIn(r.TenantID()) {
+		return fmt.Errorf("%w: changing a role is LeadKart platform authority", ErrNoAuthority)
 	}
 	if r.IsSystemDefault() {
 		return fmt.Errorf("%w: %q is a system-default role", role.ErrSystemDefault, r.Name())
@@ -688,7 +734,7 @@ func (a Actor) MayReplaceRolePermissions(r *role.Role, after []string, holders R
 	if err := roleMayContain(r, after); err != nil {
 		return err
 	}
-	if err := a.mayChangePermissions(r.TenantID(), Delta(cur, after)); err != nil {
+	if err := a.mayChange(r.TenantID(), notIn(after, cur), Delta(cur, after)); err != nil {
 		return err
 	}
 	if err := a.mayChangeRoleFor(holders); err != nil {
@@ -706,7 +752,7 @@ func (a Actor) MayGrantRolePermission(r *role.Role, name string, holders RoleHol
 	if err := roleMayContain(r, append(slices.Clone(cur), name)); err != nil {
 		return err
 	}
-	if err := a.mayChangePermissions(r.TenantID(), Delta(cur, append(slices.Clone(cur), name))); err != nil {
+	if err := a.mayChange(r.TenantID(), notIn([]string{name}, cur), nil); err != nil {
 		return err
 	}
 	if err := a.mayChangeRoleFor(holders); err != nil {
@@ -724,7 +770,7 @@ func (a Actor) MayRevokeRolePermission(r *role.Role, name string, holders RoleHo
 		return err
 	}
 	cur := PermissionNames(r.Permissions())
-	if err := a.mayChangePermissions(r.TenantID(), Delta(cur, slices.DeleteFunc(slices.Clone(cur), func(n string) bool { return n == name }))); err != nil {
+	if err := a.mayChange(r.TenantID(), nil, Delta(cur, slices.DeleteFunc(slices.Clone(cur), func(n string) bool { return n == name }))); err != nil {
 		return err
 	}
 	return a.mayChangeRoleFor(holders)
@@ -739,7 +785,7 @@ func (a Actor) MayDeactivateRole(r *role.Role, holders RoleHolders) error {
 	if err := a.mayMutateRole(r, NoLevelChange); err != nil {
 		return err
 	}
-	if err := a.mayChangePermissions(r.TenantID(), PermissionNames(r.Permissions())); err != nil {
+	if err := a.mayChange(r.TenantID(), nil, PermissionNames(r.Permissions())); err != nil {
 		return err
 	}
 	return a.mayChangeRoleFor(holders)
@@ -757,6 +803,9 @@ func (a Actor) MayReactivateRole(r *role.Role, holders RoleHolders) error {
 	}
 	names := PermissionNames(r.Permissions())
 	if err := roleMayContain(r, names); err != nil {
+		return err
+	}
+	if err := a.mayConferManaged(r.TenantID(), names); err != nil {
 		return err
 	}
 	return a.mayConfer(names)

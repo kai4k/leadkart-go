@@ -223,7 +223,7 @@ func TestRolePermissions_PolicyDecides(t *testing.T) {
 	w := newAuthzWorld(t)
 	h := w.roleHandlers()
 	ctx := t.Context()
-	custom := w.customRole(t, "Custom", 60, p.Crm.Leads.Read, p.Roles.Update)
+	custom := w.customRole(t, "Custom", 60, p.Crm.Leads.Read, p.Crm.Leads.Manage)
 	mgrM := w.member(t, w.manager)
 	mgr := actorAs(t, mgrM.ID(), authority.RankManager, p.Crm.Leads.Read, p.Crm.Leads.ReadAll)
 
@@ -247,11 +247,11 @@ func TestRolePermissions_PolicyDecides(t *testing.T) {
 	if err := h.grant.Handle(ctx, command.GrantRolePermissionCommand{TenantID: awTenant, RoleID: custom.ID(), PermissionName: p.Crm.Leads.Assign, Actor: mgr}); !errors.Is(err, authority.ErrGrantExceedsAuthority) {
 		t.Errorf("grant unheld: %v, want ErrGrantExceedsAuthority", err)
 	}
-	if err := h.revoke.Handle(ctx, command.RevokeRolePermissionCommand{TenantID: awTenant, RoleID: custom.ID(), PermissionName: p.Roles.Update, Actor: mgr}); !errors.Is(err, authority.ErrGrantExceedsAuthority) {
+	if err := h.revoke.Handle(ctx, command.RevokeRolePermissionCommand{TenantID: awTenant, RoleID: custom.ID(), PermissionName: p.Crm.Leads.Manage, Actor: mgr}); !errors.Is(err, authority.ErrGrantExceedsAuthority) {
 		t.Errorf("revoke unheld: %v, want ErrGrantExceedsAuthority", err)
 	}
 	if err := h.replace.Handle(ctx, command.ReplaceRolePermissionsCommand{TenantID: awTenant, RoleID: custom.ID(), PermissionNames: []string{}, Actor: mgr}); !errors.Is(err, authority.ErrGrantExceedsAuthority) {
-		t.Errorf("empty the role (removes unheld roles.update): %v, want ErrGrantExceedsAuthority", err)
+		t.Errorf("empty the role (removes unheld crm.leads.manage): %v, want ErrGrantExceedsAuthority", err)
 	}
 	if got := len(custom.Permissions()); got != 2 {
 		t.Errorf("refused calls changed the role: %d permissions, want 2", got)

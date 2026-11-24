@@ -64,7 +64,7 @@ func TestPolicy_Boundaries(t *testing.T) {
 	aAdmin := act(admin.ID(), tA, rk(authority.RankAdmin), adminEffective(), nil)
 	aTL := act(tl.ID(), tA, rk(authority.RankTeamLead), []string{p.Roles.Approve, p.Crm.Leads.Read}, nil)
 	aSuper := act(superSelf.ID(), tP, nil, nil, func(in *authority.ActorInput) { in.IsSuperUser = true })
-	aOp := act(opSelf.ID(), tP, rk(authority.RankNone), []string{p.Platform.UsersManage}, func(in *authority.ActorInput) { in.IsPlatformOperator = true })
+	aOp := act(opSelf.ID(), tP, rk(authority.RankNone), []string{p.Platform.UsersManage, p.Platform.RolesManage}, func(in *authority.ActorInput) { in.IsPlatformOperator = true })
 	aOpRolesOnly := act(opSelf.ID(), tP, rk(authority.RankNone), []string{p.Platform.RolesManage}, func(in *authority.ActorInput) { in.IsPlatformOperator = true })
 	aNotOperator := act(opSelf.ID(), tP, rk(authority.RankNone), []string{p.Platform.UsersManage, p.Platform.RolesManage}, nil)
 	aImp := act(membership.ID(uid(93)), tA, rk(authority.RankOwner), adminEffective(), func(in *authority.ActorInput) { in.IsImpersonation = true })

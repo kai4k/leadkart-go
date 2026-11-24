@@ -25,7 +25,7 @@ func actorOf(t *testing.T, m authority.Member, rank authority.Rank, perms ...str
 func TestMayCreateRole_TenantMustCanonicalise(t *testing.T) {
 	t.Parallel()
 	p := permission.IdentityPermissions
-	op := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(91)), TenantID: tP, Rank: rk(authority.RankNone), IsPlatformOperator: true, EffectivePermissions: []string{p.Platform.UsersManage}})
+	op := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(91)), TenantID: tP, Rank: rk(authority.RankNone), IsPlatformOperator: true, EffectivePermissions: []string{p.Platform.UsersManage, p.Platform.RolesManage}})
 	super := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(90)), TenantID: tP, IsSuperUser: true})
 	adminR := mkRole(2, tA, role.SystemRoles.Tenant.Administrator, false, 10, false, p.Meta.TenantAdmin)
 	admin := mkMember(t, 13, tA, true, "", adminR)
@@ -81,7 +81,7 @@ func TestLevelZeroIsNeverMintedByAnyActor(t *testing.T) {
 	owner := mkMember(t, 11, tA, true, "", ownerR)
 	aOwner := actorOf(t, owner, authority.RankOwner, adminEffective()...)
 	aSuper := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(90)), TenantID: tP, IsSuperUser: true})
-	aOp := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(91)), TenantID: tP, Rank: rk(authority.RankNone), IsPlatformOperator: true, EffectivePermissions: []string{p.Platform.UsersManage}})
+	aOp := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(91)), TenantID: tP, Rank: rk(authority.RankNone), IsPlatformOperator: true, EffectivePermissions: []string{p.Platform.UsersManage, p.Platform.RolesManage}})
 
 	cases := []decision{
 		{"owner creates level 0", aOwner.MayCreateRole(tA, 0, nil, nil), authority.ErrInsufficientRank},
@@ -174,7 +174,7 @@ func TestSystemDefaultRolesAreImmutableForEveryActor(t *testing.T) {
 	owner := mkMember(t, 11, tA, true, "", ownerR)
 	aOwner := actorOf(t, owner, authority.RankOwner, adminEffective()...)
 	aSuper := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(90)), TenantID: tP, IsSuperUser: true})
-	aOp := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(91)), TenantID: tP, Rank: rk(authority.RankNone), IsPlatformOperator: true, EffectivePermissions: []string{p.Platform.UsersManage}})
+	aOp := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(91)), TenantID: tP, Rank: rk(authority.RankNone), IsPlatformOperator: true, EffectivePermissions: []string{p.Platform.UsersManage, p.Platform.RolesManage}})
 	sysChild := mkRole(7, tA, "System Child", true, 40, false)
 
 	var cases []decision
@@ -402,7 +402,7 @@ func TestMemberOf_PersonActive(t *testing.T) {
 func TestSameTenantIsCanonical(t *testing.T) {
 	t.Parallel()
 	p := permission.IdentityPermissions
-	op := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(91)), TenantID: tP, Rank: rk(authority.RankNone), IsPlatformOperator: true, EffectivePermissions: []string{p.Platform.UsersManage}})
+	op := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(91)), TenantID: tP, Rank: rk(authority.RankNone), IsPlatformOperator: true, EffectivePermissions: []string{p.Platform.UsersManage, p.Platform.RolesManage}})
 	upperOwn := mkRole(41, tenant.ID(strings.ToUpper(tP.String())), "Own Manager", false, 20, false)
 	braced := mkRole(42, tenant.ID("{"+tP.String()+"}"), "Own Braced", false, 20, false)
 	other := mkRole(43, tB, "Other Manager", false, 20, false)

@@ -88,10 +88,22 @@ func TestOwnership_ExemptOperatorNeedsTheOwnershipPermission(t *testing.T) {
 		}},
 		{"create a role carrying tenant.admin", func(a authority.Actor) error { return a.MayCreateRole(tA, 30, []string{p.Meta.TenantAdmin}, nil) }},
 	}
+	// A role WRITE needs platform.roles.manage in a company (G2m M1), so an operator holding only
+	// platform.users.manage is refused before the ownership gate is reached.
+	roleWrite := map[string]bool{
+		"grant tenant.admin to a role":                    true,
+		"replace a role's permissions with tenant.admin":  true,
+		"revoke tenant.admin from the Administrator role": true,
+		"create a role carrying tenant.admin":             true,
+	}
 	for _, c := range gated {
 		for who, a := range map[string]authority.Actor{"users.manage only": w.opManage, "roles.manage only": w.opRoles} {
-			if err := c.do(a); !errors.Is(err, authority.ErrOwnershipAuthorityRequired) {
-				t.Errorf("%s, operator with %s: %v, want ErrOwnershipAuthorityRequired", c.name, who, err)
+			want := authority.ErrOwnershipAuthorityRequired
+			if roleWrite[c.name] && who == "users.manage only" {
+				want = authority.ErrNoAuthority
+			}
+			if err := c.do(a); !errors.Is(err, want) {
+				t.Errorf("%s, operator with %s: %v, want %v", c.name, who, err, want)
 			}
 		}
 		if err := c.do(w.opOwn); err != nil {
