@@ -106,7 +106,7 @@ jobs:
               - 'go.mod'
               - 'go.sum'
               - 'migrations/**'
-              - 'internal/identity/adapters/sql/**'
+              - 'internal/*/adapters/sql/**'
               - 'sqlc.yaml'
               - '.golangci.yml'
               - 'Taskfile.yml'
