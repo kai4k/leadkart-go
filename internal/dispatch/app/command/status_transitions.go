@@ -43,9 +43,19 @@ var ErrOrderNotDispatchable = errors.New("dispatch: the order is not in a state 
 // goods are still in the warehouse and expired stock is never sold (review G2e E1).
 var ErrStockExpired = errors.New("dispatch: the goods of the order are past their printed expiry")
 
+// ErrStockMismatch is returned when, for some product, the order's hold is not equal to the
+// quantity the order confirmed: goods leave only for what was ordered (ADR 0072).
+var ErrStockMismatch = errors.New("dispatch: the order's hold does not equal its confirmed quantity")
+
 // ErrStockNotHeld is returned when the order holds no stock at the moment goods leave for it:
 // goods never leave without a deduction (ADR 0072).
 var ErrStockNotHeld = errors.New("dispatch: the order holds no stock to ship")
+
+// ProductQuantity is a quantity of one product.
+type ProductQuantity struct {
+	ProductID string
+	Quantity  int64
+}
 
 // OrderShipper is Dispatch's port to Orders for the moment goods leave: it moves the order
 // from invoiced to dispatched. The composition root binds it to an Orders command, because
@@ -56,19 +66,21 @@ var ErrStockNotHeld = errors.New("dispatch: the order holds no stock to ship")
 // find a transaction in ctx must fail closed instead of opening its own: a second
 // transaction would not roll back with the stock and the note. It answers
 // [ErrOrderNotInvoiced] for an order with no invoice (or none for this company) and
-// [ErrOrderNotDispatchable] for one in a state goods do not leave from.
+// [ErrOrderNotDispatchable] for one in a state goods do not leave from. It returns what the
+// order confirmed per product, read from the order it just locked, for the stock step.
 type OrderShipper interface {
-	MarkOrderDispatched(ctx context.Context, tenantID tenant.ID, orderID, consignmentNoteID string, actor membership.ID) error
+	MarkOrderDispatched(ctx context.Context, tenantID tenant.ID, orderID, consignmentNoteID string, actor membership.ID) ([]ProductQuantity, error)
 }
 
 // StockShipper is Dispatch's port to Inventory for the moment goods leave: it locks the
 // batches the order holds, reads the hold under the locks and ships it (release + outbound,
 // both movement rows). Same transaction rule as [OrderShipper]. It answers
-// [ErrStockNotHeld] when the order holds nothing and [ErrStockExpired] when a held batch is
+// [ErrStockNotHeld] when the order holds nothing, [ErrStockMismatch] when the hold does not
+// EQUAL the confirmed quantity per product (less or more), and [ErrStockExpired] when a held batch is
 // past its printed expiry on the company business day; one expiry authority (Inventory's
 // batch rule), not a second check here.
 type StockShipper interface {
-	ShipOrderStock(ctx context.Context, tenantID tenant.ID, orderID string, actor membership.ID) error
+	ShipOrderStock(ctx context.Context, tenantID tenant.ID, orderID string, confirmed []ProductQuantity, actor membership.ID) error
 }
 
 // MarkDispatchedHandler runs the pending → dispatched transition.
@@ -116,10 +128,11 @@ func (h MarkDispatchedHandler) Handle(ctx context.Context, cmd MarkDispatchedCom
 					return false, fmt.Errorf("mark dispatched: %w", err)
 				}
 				orderID := string(cn.OrderID())
-				if err := h.orders.MarkOrderDispatched(ctx, cmd.TenantID, orderID, cmd.ConsignmentNoteID.String(), cmd.TransitionedByMembership); err != nil {
+				confirmed, err := h.orders.MarkOrderDispatched(ctx, cmd.TenantID, orderID, cmd.ConsignmentNoteID.String(), cmd.TransitionedByMembership)
+				if err != nil {
 					return false, fmt.Errorf("mark dispatched: %w", err)
 				}
-				if err := h.stock.ShipOrderStock(ctx, cmd.TenantID, orderID, cmd.TransitionedByMembership); err != nil {
+				if err := h.stock.ShipOrderStock(ctx, cmd.TenantID, orderID, confirmed, cmd.TransitionedByMembership); err != nil {
 					return false, fmt.Errorf("mark dispatched: %w", err)
 				}
 			}

@@ -307,11 +307,12 @@ type orderThenFail struct {
 	fail  error
 }
 
-func (o orderThenFail) MarkOrderDispatched(ctx context.Context, tid tenant.ID, orderID, noteID string, actor membership.ID) error {
-	if err := o.inner.MarkOrderDispatched(ctx, tid, orderID, noteID, actor); err != nil {
-		return err
+func (o orderThenFail) MarkOrderDispatched(ctx context.Context, tid tenant.ID, orderID, noteID string, actor membership.ID) ([]dispatchcommand.ProductQuantity, error) {
+	confirmed, err := o.inner.MarkOrderDispatched(ctx, tid, orderID, noteID, actor)
+	if err != nil {
+		return nil, err
 	}
-	return o.fail
+	return confirmed, o.fail
 }
 
 type stockThenFail struct {
@@ -319,8 +320,8 @@ type stockThenFail struct {
 	fail  error
 }
 
-func (s stockThenFail) ShipOrderStock(ctx context.Context, tid tenant.ID, orderID string, actor membership.ID) error {
-	if err := s.inner.ShipOrderStock(ctx, tid, orderID, actor); err != nil {
+func (s stockThenFail) ShipOrderStock(ctx context.Context, tid tenant.ID, orderID string, confirmed []dispatchcommand.ProductQuantity, actor membership.ID) error {
+	if err := s.inner.ShipOrderStock(ctx, tid, orderID, confirmed, actor); err != nil {
 		return err
 	}
 	return s.fail
@@ -925,4 +926,54 @@ func TestE2E_Dispatch_OneTransaction_ALateOrReplayedOrderPackedChangesNoStock(t 
 	if movements != 0 {
 		t.Fatalf("%d release/outbound movements before any dispatch; want none", movements)
 	}
+}
+
+// ----- Q8 / M8: the hold must equal what the order confirmed -----------------------------------
+
+func TestE2E_Dispatch_OneTransaction_AHoldThatDoesNotEqualTheConfirmedQuantityIsRefused(t *testing.T) {
+	r := newTxRig(t, "dispatchtx11")
+	// tamper adds one ledger row of the order's first reservation, with the given type and quantity.
+	tamper := func(t *testing.T, orderID, typ string, qty int) {
+		t.Helper()
+		r.inCompany(t, func(tx pgx.Tx) error {
+			_, err := tx.Exec(t.Context(), `INSERT INTO inventory.stock_movements (id, batch_id, product_id, tenant_id, type, quantity, quantity_on_hand_after, reason, actor_membership_id, source_reference, occurred_at)
+				SELECT gen_random_uuid(), batch_id, product_id, tenant_id, $2, $3, quantity_on_hand_after, 'test: tampered ledger', actor_membership_id, source_reference, now()
+				FROM inventory.stock_movements WHERE source_reference = $1 AND type = 'reservation' LIMIT 1`, orderID, typ, qty)
+			return err
+		})
+	}
+	for _, c := range []struct {
+		name, typ string
+		qty       int
+	}{
+		{"short: 6 held of 10 confirmed", "release", 4},
+		{"over: 15 held of 10 confirmed", "reservation", 5},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			// arch-test:serial — the scenarios share one stack and one company; each runs to completion first.
+			o, _, batchID := r.oneLine(t, "TX-EQ-"+c.typ, 20)
+			tamper(t, o.orderID, c.typ, c.qty)
+			before := r.world(t, o)
+
+			x := r.dispatch(t, o.noteID, "BDX-EQ")
+
+			if x.status != http.StatusConflict || errorCode(t, x.body) != "order_stock_mismatch" {
+				t.Fatalf("dispatch with a hold that does not equal the confirmed quantity: %d %s; want 409 order_stock_mismatch", x.status, x.body)
+			}
+			if after := r.world(t, o); after != before {
+				t.Fatalf("a refused dispatch changed the world:\n before: %s\n  after: %s", before, after)
+			}
+			if onHand, _ := r.stockOf(t, batchID); onHand != 20 {
+				t.Fatalf("on hand %d; want 20 (nothing shipped)", onHand)
+			}
+		})
+	}
+
+	t.Run("exact: the hold equals the confirmed quantity", func(t *testing.T) {
+		// arch-test:serial — the scenarios share one stack and one company; each runs to completion first.
+		o, _, _ := r.oneLine(t, "TX-EQ-EXACT", 20)
+		if x := r.dispatch(t, o.noteID, "BDX-EQ"); x.status != http.StatusNoContent {
+			t.Fatalf("dispatch: %d %s; want 204", x.status, x.body)
+		}
+	})
 }

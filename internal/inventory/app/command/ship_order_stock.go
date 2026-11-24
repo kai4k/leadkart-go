@@ -18,6 +18,17 @@ import (
 // recorded as a no-op.
 var ErrOrderStockNotHeld = errors.New("inventory: the order holds no stock to ship")
 
+// ErrOrderStockMismatch is returned when, for some product, the order's outstanding hold is not
+// EQUAL to the quantity the order confirmed: less (a lost or partial reservation) or more (a
+// reservation applied twice) than ordered. Goods leave only for what was ordered.
+var ErrOrderStockMismatch = errors.New("inventory: the order's hold does not equal its confirmed quantity")
+
+// ProductQuantity is a quantity of one product.
+type ProductQuantity struct {
+	ProductID string
+	Quantity  int64
+}
+
 // ShipOrderStockCommand realises an order's hold as a physical shipment when the goods leave
 // (ADR 0072): for every holding batch it releases the hold AND ships the units out, so
 // reserved-q and on-hand-q, with both movement rows. After the shipment the order's
@@ -26,6 +37,9 @@ type ShipOrderStockCommand struct {
 	TenantID          tenant.ID
 	OrderID           string
 	ActorMembershipID membership.ID
+	// Expected is what the order confirmed, per product (required). The hold read under the
+	// batch locks must equal it, product by product, or nothing ships.
+	Expected []ProductQuantity
 }
 
 // ShipOrderStockResult reports across how many batches the order shipped.
@@ -77,6 +91,9 @@ func (h ShipOrderStockHandler) Handle(ctx context.Context, cmd ShipOrderStockCom
 	if cmd.OrderID == "" {
 		return ShipOrderStockResult{}, fmt.Errorf("%w: order id required", batch.ErrInvalid)
 	}
+	if len(cmd.Expected) == 0 {
+		return ShipOrderStockResult{}, fmt.Errorf("%w: expected quantities required", batch.ErrInvalid)
+	}
 	// Lock the batches, THEN read the hold: see lockedOrderHold.
 	outstanding, err := lockedOrderHold(ctx, h.batches, h.ledger, cmd.TenantID, cmd.OrderID)
 	if err != nil {
@@ -84,6 +101,9 @@ func (h ShipOrderStockHandler) Handle(ctx context.Context, cmd ShipOrderStockCom
 	}
 	if len(outstanding) == 0 {
 		return ShipOrderStockResult{}, ErrOrderStockNotHeld
+	}
+	if err := holdEqualsConfirmed(outstanding, cmd.Expected); err != nil {
+		return ShipOrderStockResult{}, err
 	}
 
 	now := h.now()
@@ -149,4 +169,29 @@ func (h ShipOrderStockHandler) Handle(ctx context.Context, cmd ShipOrderStockCom
 		}
 	}
 	return ShipOrderStockResult{BatchCount: len(outstanding)}, nil
+}
+
+// holdEqualsConfirmed compares the hold (summed per product over its batches) with what the
+// order confirmed (summed per product over its lines): every product on either side must be on
+// both with the same quantity.
+func holdEqualsConfirmed(held []stockmovement.OutstandingReservation, expected []ProductQuantity) error {
+	want := map[string]int64{}
+	for _, e := range expected {
+		want[e.ProductID] += e.Quantity
+	}
+	have := map[string]int64{}
+	for _, h := range held {
+		have[string(h.ProductID)] += h.Quantity
+	}
+	for p, w := range want {
+		if have[p] != w {
+			return fmt.Errorf("%w: product %s holds %d, confirmed %d", ErrOrderStockMismatch, p, have[p], w)
+		}
+	}
+	for p, h := range have {
+		if _, ok := want[p]; !ok {
+			return fmt.Errorf("%w: product %s holds %d, not on the order", ErrOrderStockMismatch, p, h)
+		}
+	}
+	return nil
 }

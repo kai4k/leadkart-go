@@ -24,9 +24,9 @@ Nothing is live and no real data exists, so there is no backfill, no compatibili
 1. Lock the note (`FOR UPDATE`). Already dispatched with the same docket: success, nothing touched, no second deduction. Another docket: the existing refusal. A docket the note would refuse is refused here, before anything moves.
 2. Lock the order (`FOR UPDATE`) and move it `invoiced` to `dispatched` (not invoiced: 409 `order_not_invoiced`; any other state, including a cancelled order that kept its invoice: 409 `order_not_dispatchable`).
 3. Lock the order's batches **in batch-id order, then read the outstanding hold inside the transaction.**
-4. No outstanding hold: **409 `order_stock_not_held`** (goods never leave without a deduction). A held batch past its printed expiry on the company's business day: 409 `order_stock_expired`, judged by the one expiry rule of the Inventory batch.
+4. No outstanding hold: **409 `order_stock_not_held`** (goods never leave without a deduction). A hold that does not **equal** the quantity the order confirmed, product by product (less, more, or a product the order does not list): **409 `order_stock_mismatch`** (the Orders step returns the confirmed quantities from the order it just locked; the Inventory step compares them with the hold it read under the batch locks, before anything moves). A held batch past its printed expiry on the company's business day: 409 `order_stock_expired`, judged by the one expiry rule of the Inventory batch.
 5. For each batch: release the hold and ship it (outbound), writing both movement rows.
-6. The order is `dispatched`.
+6. The order is `dispatched` and linked to its consignment note (the async attach of the same note stays a no-op).
 7. The note is `dispatched`, its event in the outbox.
 
 The events of the same transaction are the two stock movements per batch and the note's `dispatch.consignment_note_dispatched.v1`. The order's own transition writes no outbox row: Orders suppresses its bare `AdvancedEvent`, as for every order transition except confirm, pack and cancel.
@@ -59,7 +59,7 @@ The release (cancellation) and the shipment (dispatch) share one private routine
 * **Stock falls at dispatch, not at pack.** Between the pack and the dispatch the units stay reserved on their batches.
 * **Cancelling an order after the goods left keeps the stock deducted** (the release finds no hold). Putting the units back is a return, round G8.
 * **A reserve that was lost leaves an order with no hold.** Such an order can still be packed (round G5 closes that, C9), but it can **never be dispatched**: the dispatch is refused with `order_stock_not_held` and nothing changes.
-* **An order that holds less than it ordered is not detected.** The shipment ships the hold the ledger shows; Dispatch has no port to compare it with the order's confirmed quantities. (The order does keep its confirmed items; comparing them is a follow-up.)
+* **A hold that differs from what was ordered is refused** (review G2g Q8/M8): the rule is equality, so a lost or partial reservation (less) and a reservation applied twice (more) both stop the goods, with `order_stock_mismatch`, and nothing changes. Round G5 should apply the same rule at the pack (C9).
 * The timed-out consume (review G2d B4) is gone by construction: there is no consume event to time out.
 * **Proofs** (real Postgres; the production bus where events are involved), in `cmd/api/dispatch_transaction_e2e_test.go`: success changes everything together; a failure injected after the stock step, the order step, the note step and at the outbox insert changes nothing; the same-docket retry deducts nothing twice; concurrent dispatches of one note deduct once; dispatch racing cancel is shipped or released, never both and never neither; concurrent dispatch and releases with more than one worker leave the other order's hold intact; opposite line order does not deadlock; dispatch completes on a one-connection pool; no hold and an expired hold are 409 with nothing changed; a late or replayed `order_packed` changes no stock.
 

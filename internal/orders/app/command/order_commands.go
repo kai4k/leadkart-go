@@ -299,6 +299,13 @@ type DispatchOrderCommand struct {
 	TransitionedByMembership membership.ID
 }
 
+// ConfirmedQuantity is the quantity of one product an order confirmed (its lines of the product
+// summed).
+type ConfirmedQuantity struct {
+	ProductID string
+	Quantity  int64
+}
+
 // DispatchOrderHandler runs the invoiced → dispatched transition as ONE STEP of Dispatch's
 // dispatch transaction: it neither opens nor joins a transaction of its own, it uses the
 // repository, which joins the one in ctx. The caller (the composition-root bridge) refuses a
@@ -321,6 +328,15 @@ func NewDispatchOrderHandler(orders order.Repository, now func() time.Time) Disp
 // event riding the outbox of the same transaction. An order that is not found answers
 // [ErrDispatchNotInvoiced] (another company's order looks the same as none).
 func (h DispatchOrderHandler) Handle(ctx context.Context, cmd DispatchOrderCommand) error {
+	_, err := h.Dispatch(ctx, cmd)
+	return err
+}
+
+// Dispatch is [DispatchOrderHandler.Handle] and also returns what the order confirmed, per
+// product, read from the same locked aggregate: Dispatch's stock step ships only a hold that
+// equals it.
+func (h DispatchOrderHandler) Dispatch(ctx context.Context, cmd DispatchOrderCommand) ([]ConfirmedQuantity, error) {
+	var confirmed []ConfirmedQuantity
 	err := h.orders.UpdateByID(ctx, cmd.TenantID, cmd.OrderID, func(o *order.Order) (bool, error) {
 		switch {
 		case o.State() == order.StateInvoiced:
@@ -338,12 +354,25 @@ func (h DispatchOrderHandler) Handle(ctx context.Context, cmd DispatchOrderComma
 		if err := o.AttachConsignment(cmd.ConsignmentNoteID); err != nil {
 			return false, fmt.Errorf("orders dispatch_order: %w", err)
 		}
+		byProduct := map[string]int64{}
+		for _, it := range o.ConfirmedItems() {
+			if _, seen := byProduct[it.ProductID]; !seen {
+				confirmed = append(confirmed, ConfirmedQuantity{ProductID: it.ProductID})
+			}
+			byProduct[it.ProductID] += int64(it.Quantity)
+		}
+		for i := range confirmed {
+			confirmed[i].Quantity = byProduct[confirmed[i].ProductID]
+		}
 		return true, nil
 	})
 	if errors.Is(err, order.ErrNotFound) {
-		return ErrDispatchNotInvoiced
+		return nil, ErrDispatchNotInvoiced
 	}
-	return err
+	if err != nil {
+		return nil, err
+	}
+	return confirmed, nil
 }
 
 // ----- MarkDelivered / CompleteOrder / CancelOrder --------------------------

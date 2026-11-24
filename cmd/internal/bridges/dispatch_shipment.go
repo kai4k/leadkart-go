@@ -35,22 +35,26 @@ type OrderShipper struct {
 // MarkOrderDispatched runs the Orders step inside the dispatch transaction and translates
 // Orders' refusals into Dispatch's. An order that does not exist for this company reads as
 // not invoiced (the Orders command already answers so).
-func (b OrderShipper) MarkOrderDispatched(ctx context.Context, tenantID tenant.ID, orderID, consignmentNoteID string, actor membership.ID) error {
+func (b OrderShipper) MarkOrderDispatched(ctx context.Context, tenantID tenant.ID, orderID, consignmentNoteID string, actor membership.ID) ([]dispatchcommand.ProductQuantity, error) {
 	if _, ok := pg.TxFromContext(ctx); !ok {
-		return ErrNoActiveTx
+		return nil, ErrNoActiveTx
 	}
-	err := b.Dispatch.Handle(ctx, orderscommand.DispatchOrderCommand{
+	confirmed, err := b.Dispatch.Dispatch(ctx, orderscommand.DispatchOrderCommand{
 		TenantID: tenantID, OrderID: order.ID(orderID), ConsignmentNoteID: consignmentNoteID, TransitionedByMembership: actor,
 	})
 	switch {
 	case err == nil:
-		return nil
+		out := make([]dispatchcommand.ProductQuantity, 0, len(confirmed))
+		for _, c := range confirmed {
+			out = append(out, dispatchcommand.ProductQuantity{ProductID: c.ProductID, Quantity: c.Quantity})
+		}
+		return out, nil
 	case errors.Is(err, orderscommand.ErrDispatchNotInvoiced):
-		return fmt.Errorf("%w: %w", dispatchcommand.ErrOrderNotInvoiced, err)
+		return nil, fmt.Errorf("%w: %w", dispatchcommand.ErrOrderNotInvoiced, err)
 	case errors.Is(err, orderscommand.ErrDispatchWrongState):
-		return fmt.Errorf("%w: %w", dispatchcommand.ErrOrderNotDispatchable, err)
+		return nil, fmt.Errorf("%w: %w", dispatchcommand.ErrOrderNotDispatchable, err)
 	}
-	return err
+	return nil, err
 }
 
 // StockShipper binds Dispatch's stock step (ship the order's hold when the goods leave) to
@@ -62,18 +66,24 @@ type StockShipper struct {
 
 // ShipOrderStock runs the Inventory step inside the dispatch transaction and translates
 // Inventory's refusals into Dispatch's.
-func (b StockShipper) ShipOrderStock(ctx context.Context, tenantID tenant.ID, orderID string, actor membership.ID) error {
+func (b StockShipper) ShipOrderStock(ctx context.Context, tenantID tenant.ID, orderID string, confirmed []dispatchcommand.ProductQuantity, actor membership.ID) error {
 	if _, ok := pg.TxFromContext(ctx); !ok {
 		return ErrNoActiveTx
 	}
+	expected := make([]inventorycommand.ProductQuantity, 0, len(confirmed))
+	for _, c := range confirmed {
+		expected = append(expected, inventorycommand.ProductQuantity{ProductID: c.ProductID, Quantity: c.Quantity})
+	}
 	_, err := b.Ship.Handle(ctx, inventorycommand.ShipOrderStockCommand{
-		TenantID: tenantID, OrderID: orderID, ActorMembershipID: actor,
+		TenantID: tenantID, OrderID: orderID, ActorMembershipID: actor, Expected: expected,
 	})
 	switch {
 	case err == nil:
 		return nil
 	case errors.Is(err, inventorycommand.ErrOrderStockNotHeld):
 		return fmt.Errorf("%w: %w", dispatchcommand.ErrStockNotHeld, err)
+	case errors.Is(err, inventorycommand.ErrOrderStockMismatch):
+		return fmt.Errorf("%w: %w", dispatchcommand.ErrStockMismatch, err)
 	case errors.Is(err, batch.ErrExpired):
 		return fmt.Errorf("%w: %w", dispatchcommand.ErrStockExpired, err)
 	}

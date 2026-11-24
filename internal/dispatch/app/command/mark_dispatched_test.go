@@ -43,12 +43,12 @@ type fakeOrderStep struct {
 	err error
 }
 
-func (f fakeOrderStep) MarkOrderDispatched(ctx context.Context, _ tenant.ID, _, _ string, _ membership.ID) error {
+func (f fakeOrderStep) MarkOrderDispatched(ctx context.Context, _ tenant.ID, _, _ string, _ membership.ID) ([]command.ProductQuantity, error) {
 	f.log.add("order")
 	if ctx.Value(txMarker{}) == nil {
 		f.log.add("order-outside-tx")
 	}
-	return f.err
+	return []command.ProductQuantity{{ProductID: "p1", Quantity: 10}}, f.err
 }
 
 // fakeStockStep is Inventory's step, same shape.
@@ -57,8 +57,11 @@ type fakeStockStep struct {
 	err error
 }
 
-func (f fakeStockStep) ShipOrderStock(ctx context.Context, _ tenant.ID, _ string, _ membership.ID) error {
+func (f fakeStockStep) ShipOrderStock(ctx context.Context, _ tenant.ID, _ string, confirmed []command.ProductQuantity, _ membership.ID) error {
 	f.log.add("stock")
+	if len(confirmed) != 1 || confirmed[0].ProductID != "p1" || confirmed[0].Quantity != 10 {
+		f.log.add("stock-without-the-confirmed-quantities")
+	}
 	if ctx.Value(txMarker{}) == nil {
 		f.log.add("stock-outside-tx")
 	}
@@ -115,6 +118,7 @@ func TestMarkDispatchedHandler_AStepRefusalRollsBackAndLeavesTheNotePending(t *t
 		{"order in the wrong state", command.ErrOrderNotDispatchable, nil, command.ErrOrderNotDispatchable, []string{"begin", "order", "rollback"}},
 		{"stock expired", nil, command.ErrStockExpired, command.ErrStockExpired, []string{"begin", "order", "stock", "rollback"}},
 		{"stock not held", nil, command.ErrStockNotHeld, command.ErrStockNotHeld, []string{"begin", "order", "stock", "rollback"}},
+		{"stock short or over (mismatch)", nil, command.ErrStockMismatch, command.ErrStockMismatch, []string{"begin", "order", "stock", "rollback"}},
 		{"orders read fails", boom, nil, boom, []string{"begin", "order", "rollback"}},
 		{"inventory read fails", nil, boom, boom, []string{"begin", "order", "stock", "rollback"}},
 	} {

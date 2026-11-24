@@ -78,6 +78,15 @@ func TestDispatchOrder_LinksTheNoteInTheSameStep(t *testing.T) {
 	got, err := repo.GetByID(t.Context(), tid, id)
 	require.NoError(t, err)
 	require.Equal(t, noteID, got.ConsignmentNoteID())
+
+	// And it reports what the order confirmed, per product (the stock step's expectation).
+	other := seedOrderAt(t, repo, tid, actor, order.StateInvoiced)
+	confirmed, err := command.NewDispatchOrderHandler(repo, now).Dispatch(t.Context(), command.DispatchOrderCommand{
+		TenantID: tid, OrderID: other, ConsignmentNoteID: uuid.NewString(), TransitionedByMembership: actor,
+	})
+	require.NoError(t, err)
+	require.Len(t, confirmed, 1)
+	require.Equal(t, int64(10), confirmed[0].Quantity)
 	require.NoError(t, command.NewAttachConsignmentHandler(repo).Handle(t.Context(), command.AttachConsignmentCommand{
 		TenantID: tid, OrderID: id, ConsignmentNoteID: noteID,
 	}), "the async attach of the same note is a no-op")

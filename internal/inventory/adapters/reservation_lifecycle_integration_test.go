@@ -63,11 +63,11 @@ func newReservationRig(t *testing.T) reservationRig {
 }
 
 // ship runs the shipment the way Dispatch does: as one step of a transaction the caller owns.
-func (r reservationRig) ship(orderID string) (command.ShipOrderStockResult, error) {
+func (r reservationRig) ship(orderID string, expected ...command.ProductQuantity) (command.ShipOrderStockResult, error) {
 	var res command.ShipOrderStockResult
 	err := r.tx.WithinTx(r.ctx, pg.TxScopeTenant, func(ctx context.Context) error {
 		var herr error
-		res, herr = r.shipper.Handle(ctx, command.ShipOrderStockCommand{TenantID: r.tid, OrderID: orderID, ActorMembershipID: r.actor})
+		res, herr = r.shipper.Handle(ctx, command.ShipOrderStockCommand{TenantID: r.tid, OrderID: orderID, ActorMembershipID: r.actor, Expected: expected})
 		return herr
 	})
 	return res, err
@@ -164,7 +164,7 @@ func TestReservationLifecycle_ReserveShipShipsStock(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	cres, err := rig.ship(orderID)
+	cres, err := rig.ship(orderID, command.ProductQuantity{ProductID: p.ID().String(), Quantity: 40})
 	require.NoError(t, err)
 	require.Equal(t, 1, cres.BatchCount)
 
@@ -174,7 +174,7 @@ func TestReservationLifecycle_ReserveShipShipsStock(t *testing.T) {
 	require.Zero(t, got.QuantityReserved())
 
 	// A second shipment: nothing held → refused, on-hand stable.
-	_, err = rig.ship(orderID)
+	_, err = rig.ship(orderID, command.ProductQuantity{ProductID: p.ID().String(), Quantity: 40})
 	require.ErrorIs(t, err, command.ErrOrderStockNotHeld)
 	got, err = rig.batches.GetByID(rig.ctx, rig.tid, b.ID())
 	require.NoError(t, err)

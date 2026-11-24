@@ -197,6 +197,7 @@ func TestShipOrderStock_ShipsAndReleasesHold(t *testing.T) {
 	h := command.NewShipOrderStockHandler(batches, movements, ledger, sellabilitytest.Resolver(fixedNow), fixedClock, testNewMovementID)
 	res, err := h.Handle(t.Context(), command.ShipOrderStockCommand{
 		TenantID: p.TenantID(), OrderID: uuid.NewString(), ActorMembershipID: actor,
+		Expected: []command.ProductQuantity{{ProductID: p.ID().String(), Quantity: 40}},
 	})
 	require.NoError(t, err)
 	require.Equal(t, 1, res.BatchCount)
@@ -204,6 +205,71 @@ func TestShipOrderStock_ShipsAndReleasesHold(t *testing.T) {
 	require.Zero(t, b.QuantityReserved(), "hold released on shipment")
 	require.Equal(t, 1, countMovements(movements, batch.MovementRelease))
 	require.Equal(t, 1, countMovements(movements, batch.MovementOutbound))
+}
+
+// Review G2g Q8/M8: goods leave only for what was ordered. The hold read under the locks must
+// EQUAL the confirmed quantity per product: less and more are refused and nothing moves.
+func TestShipOrderStock_TheHoldMustEqualTheConfirmedQuantityPerProduct(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name      string
+		held      int64
+		confirmed int64
+		wantErr   bool
+	}{
+		{"exact", 40, 40, false},
+		{"short: held less than confirmed", 30, 40, true},
+		{"over: held more than confirmed", 50, 40, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			batches := newFakeBatchRepo()
+			movements := newFakeMovementRepo()
+			actor := newMembershipID(t)
+			p := seedProduct(t, newFakeProductRepo(), newTenantID(t), actor, "SKU-EQ-"+c.name[:4])
+			b := seedBatchWithStock(t, batches, p, actor, "B1", 100)
+			require.NoError(t, b.ApplyMovement(batch.MovementReservation, c.held, fixedNow, fixedNow))
+			ledger := &fakeReservationLedger{outstanding: []stockmovement.OutstandingReservation{{BatchID: b.ID(), ProductID: p.ID(), Quantity: c.held}}}
+
+			h := command.NewShipOrderStockHandler(batches, movements, ledger, sellabilitytest.Resolver(fixedNow), fixedClock, testNewMovementID)
+			_, err := h.Handle(t.Context(), command.ShipOrderStockCommand{
+				TenantID: p.TenantID(), OrderID: uuid.NewString(), ActorMembershipID: actor,
+				Expected: []command.ProductQuantity{{ProductID: p.ID().String(), Quantity: c.confirmed}},
+			})
+			if c.wantErr {
+				require.ErrorIs(t, err, command.ErrOrderStockMismatch)
+				require.Equal(t, int64(100), b.QuantityOnHand(), "nothing shipped")
+				require.Equal(t, c.held, b.QuantityReserved(), "the hold is untouched")
+				require.Equal(t, 0, movements.AddCalls)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, int64(60), b.QuantityOnHand())
+		})
+	}
+}
+
+// A hold on a product the order did not confirm is a mismatch too, as is a missing expectation.
+func TestShipOrderStock_AHoldOnAnotherProductOrNoExpectationIsRefused(t *testing.T) {
+	t.Parallel()
+	batches := newFakeBatchRepo()
+	movements := newFakeMovementRepo()
+	actor := newMembershipID(t)
+	p := seedProduct(t, newFakeProductRepo(), newTenantID(t), actor, "SKU-EQ-OTHER")
+	b := seedBatchWithStock(t, batches, p, actor, "B1", 100)
+	require.NoError(t, b.ApplyMovement(batch.MovementReservation, 10, fixedNow, fixedNow))
+	ledger := &fakeReservationLedger{outstanding: []stockmovement.OutstandingReservation{{BatchID: b.ID(), ProductID: p.ID(), Quantity: 10}}}
+	h := command.NewShipOrderStockHandler(batches, movements, ledger, sellabilitytest.Resolver(fixedNow), fixedClock, testNewMovementID)
+
+	_, err := h.Handle(t.Context(), command.ShipOrderStockCommand{
+		TenantID: p.TenantID(), OrderID: uuid.NewString(), ActorMembershipID: actor,
+		Expected: []command.ProductQuantity{{ProductID: "another-product", Quantity: 10}},
+	})
+	require.ErrorIs(t, err, command.ErrOrderStockMismatch)
+
+	_, err = h.Handle(t.Context(), command.ShipOrderStockCommand{TenantID: p.TenantID(), OrderID: uuid.NewString(), ActorMembershipID: actor})
+	require.ErrorIs(t, err, batch.ErrInvalid)
+	require.Equal(t, 0, movements.AddCalls)
 }
 
 func TestShipOrderStock_NothingHeldIsRefused(t *testing.T) {
@@ -216,6 +282,7 @@ func TestShipOrderStock_NothingHeldIsRefused(t *testing.T) {
 	h := command.NewShipOrderStockHandler(batches, movements, ledger, sellabilitytest.Resolver(fixedNow), fixedClock, testNewMovementID)
 	res, err := h.Handle(t.Context(), command.ShipOrderStockCommand{
 		TenantID: newTenantID(t), OrderID: uuid.NewString(), ActorMembershipID: actor,
+		Expected: []command.ProductQuantity{{ProductID: "some-product", Quantity: 1}},
 	})
 	require.ErrorIs(t, err, command.ErrOrderStockNotHeld, "goods never leave without a deduction")
 	require.Zero(t, res.BatchCount)
@@ -267,7 +334,7 @@ func TestShipOrderStock_RefusesToShipUnitsOfABatchThatHasSinceExpired(t *testing
 	later := time.Date(2027, 2, 10, 12, 0, 0, 0, time.UTC)
 	ledger := &fakeReservationLedger{outstanding: []stockmovement.OutstandingReservation{{BatchID: b.ID(), ProductID: p.ID(), Quantity: 10}}}
 	consume := command.NewShipOrderStockHandler(batches, movements, ledger, sellabilitytest.Resolver(later), func() time.Time { return later }, testNewMovementID)
-	_, err = consume.Handle(t.Context(), command.ShipOrderStockCommand{TenantID: p.TenantID(), OrderID: orderID, ActorMembershipID: actor})
+	_, err = consume.Handle(t.Context(), command.ShipOrderStockCommand{TenantID: p.TenantID(), OrderID: orderID, ActorMembershipID: actor, Expected: []command.ProductQuantity{{ProductID: p.ID().String(), Quantity: 10}}})
 	require.ErrorIs(t, err, batch.ErrExpired)
 	require.Equal(t, int64(10), b.QuantityOnHand(), "nothing shipped")
 }
@@ -288,7 +355,7 @@ func TestShipOrderStock_IsJudgedOnTheBusinessDayNotTheUTCDate(t *testing.T) {
 	now := time.Date(2027, 1, 31, 20, 0, 0, 0, time.UTC) // 01:30 IST on 1 February
 	ledger := &fakeReservationLedger{outstanding: []stockmovement.OutstandingReservation{{BatchID: b.ID(), ProductID: p.ID(), Quantity: 10}}}
 	consume := command.NewShipOrderStockHandler(batches, movements, ledger, sellabilitytest.Resolver(now), func() time.Time { return now }, testNewMovementID)
-	_, err := consume.Handle(t.Context(), command.ShipOrderStockCommand{TenantID: p.TenantID(), OrderID: uuid.NewString(), ActorMembershipID: actor})
+	_, err := consume.Handle(t.Context(), command.ShipOrderStockCommand{TenantID: p.TenantID(), OrderID: uuid.NewString(), ActorMembershipID: actor, Expected: []command.ProductQuantity{{ProductID: p.ID().String(), Quantity: 10}}})
 	require.ErrorIs(t, err, batch.ErrExpired)
 	require.Equal(t, int64(10), b.QuantityOnHand(), "nothing shipped")
 }
