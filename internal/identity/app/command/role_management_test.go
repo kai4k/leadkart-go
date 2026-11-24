@@ -264,8 +264,8 @@ func TestRolePermissions_PolicyDecides(t *testing.T) {
 }
 
 // ADR 0073: deactivating asks exactly what deleting asked (authority and ceiling first, then the
-// role-in-use rule), keeps every assignment (nothing is deleted), and reactivating asks the same authority plus a durable hold (MayReactivateRole)
-// authority again because it gives the permissions back to every holder.
+// role-in-use rule), keeps every assignment (nothing is deleted), and reactivating asks that authority plus a durable hold of every permission
+// (MayReactivateRole) because it gives the permissions back to every holder.
 func TestDeactivateRole_RoleInUseAndCeiling(t *testing.T) {
 	t.Parallel()
 	p := permission.IdentityPermissions
