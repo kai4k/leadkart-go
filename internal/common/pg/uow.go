@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 )
 
 // UnitOfWork is the consumer-facing transaction primitive. App-layer
@@ -40,8 +42,32 @@ func (t *Transactor) WithinTx(
 	fn func(ctx context.Context) error,
 ) error {
 	return t.WithinTxPgx(ctx, scope, func(ctx context.Context, tx pgx.Tx) error {
-		return fn(contextWithTx(ctx, tx))
+		sc := txScope{scope: scope}
+		if scope == TxScopeTenant {
+			if id, ok := tenancy.FromContext(ctx); ok {
+				sc.tenant = id.String()
+			}
+		}
+		return fn(contextWithTxScope(contextWithTx(ctx, tx), sc))
 	})
+}
+
+// txScope is what a transaction was opened for: its scope and, for a tenant
+// scope, the tenant whose GUC it bound.
+type txScope struct {
+	scope  TxScope
+	tenant string
+}
+
+type txScopeCtxKey struct{}
+
+func contextWithTxScope(ctx context.Context, sc txScope) context.Context {
+	return context.WithValue(ctx, txScopeCtxKey{}, sc)
+}
+
+func txScopeFromContext(ctx context.Context) (txScope, bool) {
+	sc, ok := ctx.Value(txScopeCtxKey{}).(txScope)
+	return sc, ok
 }
 
 // txCtxKey is the unexported key under which the active pgx.Tx is

@@ -151,18 +151,36 @@ func (t *Transactor) WithinTxPgxTenant(
 	return nil
 }
 
+// ErrJoinTenantMismatch is returned by [Transactor.JoinTxPgxTenant] when the transaction in
+// ctx was opened for a different tenant than the one asked for.
+var ErrJoinTenantMismatch = errors.New("pg: ambient transaction is bound to a different tenant")
+
+// ErrJoinUnscopedTx is returned by [Transactor.JoinTxPgxTenant] when the transaction in ctx
+// carries no tenant scope (platform scope, or none recorded).
+var ErrJoinUnscopedTx = errors.New("pg: ambient transaction has no tenant scope")
+
 // JoinTxPgxTenant is [Transactor.WithinTxPgxTenant] for a READ that must take part in the
 // transaction of its caller: when ctx carries one (the unit of work put it there) fn runs on
 // it and nothing is begun or committed here; otherwise it opens a tenant transaction as
 // WithinTxPgxTenant does. A read that always began its own transaction would take a second
 // connection inside the caller's (not atomic with it, and a deadlock on a small pool), which is
-// the trap ADR 0072 names.
+// the trap ADR 0072 names. A tx in ctx opened for another tenant, or without tenant scope, is
+// refused with [ErrJoinTenantMismatch] / [ErrJoinUnscopedTx] rather than silently used.
 func (t *Transactor) JoinTxPgxTenant(
 	ctx context.Context,
 	tenantID string,
 	fn func(ctx context.Context, tx pgx.Tx) error,
 ) error {
 	if tx, ok := TxFromContext(ctx); ok {
+		sc, scoped := txScopeFromContext(ctx)
+		switch {
+		case !scoped:
+			return ErrJoinUnscopedTx
+		case sc.scope != TxScopeTenant:
+			return ErrJoinUnscopedTx
+		case sc.tenant != tenantID:
+			return ErrJoinTenantMismatch
+		}
 		return fn(ctx, tx)
 	}
 	return t.WithinTxPgxTenant(ctx, tenantID, fn)
@@ -181,6 +199,6 @@ var _ TenantUnitOfWork = (*Transactor)(nil)
 // WithinTenantTx implements [TenantUnitOfWork] over [Transactor.WithinTxPgxTenant].
 func (t *Transactor) WithinTenantTx(ctx context.Context, tenantID string, fn func(ctx context.Context) error) error {
 	return t.WithinTxPgxTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		return fn(contextWithTx(ctx, tx))
+		return fn(contextWithTxScope(contextWithTx(ctx, tx), txScope{scope: TxScopeTenant, tenant: tenantID}))
 	})
 }
