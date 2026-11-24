@@ -72,7 +72,7 @@ func GetSuperAdminRole(t testing.TB, ctx context.Context, db *sql.DB, tenantID, 
 	const q = `
 		SELECT id, name, is_super_admin, is_system_default
 		FROM   identity.roles
-		WHERE  tenant_id = $1 AND name = $2 AND NOT is_deleted
+		WHERE  tenant_id = $1 AND name = $2 AND is_active
 	`
 	if err := db.QueryRowContext(ctx, q, tenantID, roleName).Scan(&id, &name, &isSuperAdmin, &isSystemDefault); err != nil {
 		t.Fatalf("seedtest.GetSuperAdminRole(%s, %s): %v", tenantID, roleName, err)
@@ -81,12 +81,12 @@ func GetSuperAdminRole(t testing.TB, ctx context.Context, db *sql.DB, tenantID, 
 }
 
 // CountSuperAdminRoles returns the number of identity.roles rows
-// flagged as super-admin (excluding soft-deleted). Used by the
+// flagged as super-admin (active ones: a role is never deleted, ADR 0073). Used by the
 // row-count assertion ("seed wrote exactly one super-admin role").
 func CountSuperAdminRoles(t testing.TB, ctx context.Context, db *sql.DB) int64 {
 	t.Helper()
 	var n int64
-	const q = `SELECT count(*) FROM identity.roles WHERE is_super_admin AND NOT is_deleted`
+	const q = `SELECT count(*) FROM identity.roles WHERE is_super_admin AND is_active`
 	if err := db.QueryRowContext(ctx, q).Scan(&n); err != nil {
 		t.Fatalf("seedtest.CountSuperAdminRoles: %v", err)
 	}
