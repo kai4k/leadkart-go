@@ -40,7 +40,10 @@ type catalogueChoice struct {
 	// the field at all (clearing is Given with "").
 	DrugSchedule  string
 	ScheduleGiven bool
-	Create        bool
+	// CurrentDrugSchedule is the product's existing class id (update): keeping it needs no check
+	// even once the class is inactive (ADR 0073).
+	CurrentDrugSchedule string
+	Create              bool
 }
 
 // resolveCatalogue checks the company-list fields against the policy and returns
@@ -74,21 +77,34 @@ func resolveCatalogue(p commercepolicy.Policy, c catalogueChoice) (rateBps int, 
 			rateBps = entry.RateBps
 		}
 	}
-	mode := p.DrugSchedule.Mode
-	switch {
-	case c.ScheduleGiven && c.DrugSchedule != "":
-		if mode == commercepolicy.DrugScheduleOff {
-			add("drug_schedule", CodeScheduleIsOff)
-		} else if _, ok := p.DrugSchedule.ScheduleClassByID(c.DrugSchedule); !ok {
-			add("drug_schedule", CodeNotInList)
-		}
-	case mode == commercepolicy.DrugScheduleRequired && (c.Create && !c.ScheduleGiven || c.ScheduleGiven && c.DrugSchedule == ""):
-		add("drug_schedule", CodeRequired)
+	if code := scheduleCode(p, c); code != "" {
+		add("drug_schedule", code)
 	}
 	if len(fields) == 0 {
 		return rateBps, nil
 	}
 	return rateBps, &FieldRefusal{Fields: fields}
+}
+
+// scheduleCode is the refusal code of the requested drug schedule class, "" when it is accepted.
+func scheduleCode(p commercepolicy.Policy, c catalogueChoice) string {
+	mode := p.DrugSchedule.Mode
+	switch {
+	case c.ScheduleGiven && c.DrugSchedule != "":
+		class, found := p.DrugSchedule.ScheduleClassByID(c.DrugSchedule)
+		switch {
+		case mode == commercepolicy.DrugScheduleOff:
+			return CodeScheduleIsOff
+		case !found:
+			return CodeNotInList
+		case !class.Active && c.DrugSchedule != c.CurrentDrugSchedule:
+			// An inactive class cannot be set on a product; a product already carrying it keeps it.
+			return CodeInactive
+		}
+	case mode == commercepolicy.DrugScheduleRequired && (c.Create && !c.ScheduleGiven || c.ScheduleGiven && c.DrugSchedule == ""):
+		return CodeRequired
+	}
+	return ""
 }
 
 func findRate(p commercepolicy.Policy, id string) (commercepolicy.GSTRate, bool) {

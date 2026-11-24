@@ -19,10 +19,12 @@ import (
 type lists struct {
 	twelve, nilRated, retired string
 	classA, classB            string
+	// classOff is a class of the list that was made inactive (ADR 0073).
+	classOff string
 }
 
 func policyLists(mode string) (sellabilitytest.Policy, lists) {
-	l := lists{twelve: uuid.NewString(), nilRated: uuid.NewString(), retired: uuid.NewString(), classA: uuid.NewString(), classB: uuid.NewString()}
+	l := lists{twelve: uuid.NewString(), nilRated: uuid.NewString(), retired: uuid.NewString(), classA: uuid.NewString(), classB: uuid.NewString(), classOff: uuid.NewString()}
 	p := commercepolicy.Default()
 	p.Tax.GSTRates = []commercepolicy.GSTRate{
 		{ID: l.twelve, RateBps: 1200, Label: "GST 12%", ConfirmedBy: "CA", ConfirmedOn: "2026-10-30", Active: true},
@@ -30,7 +32,8 @@ func policyLists(mode string) (sellabilitytest.Policy, lists) {
 		{ID: l.retired, RateBps: 500, Label: "GST 5%", ConfirmedBy: "CA", ConfirmedOn: "2026-10-30", Active: false},
 	}
 	p.DrugSchedule = commercepolicy.DrugSchedule{Mode: mode, Classes: []commercepolicy.ScheduleClass{
-		{ID: l.classA, Label: "Class A"}, {ID: l.classB, Label: "Class B"},
+		{ID: l.classA, Label: "Class A", Active: true}, {ID: l.classB, Label: "Class B", Active: true},
+		{ID: l.classOff, Label: "Class Off", Active: false},
 	}}
 	return sellabilitytest.Policy{Value: commercepolicy.Versioned{Version: 3, Policy: p}}, l
 }
@@ -123,6 +126,7 @@ func TestCreateProductHandler_DrugScheduleFollowsTheCompanyModeAndList(t *testin
 		{"optional, a class not in the list", commercepolicy.DrugScheduleOptional, ptr("x"), []string{command.CodeNotInList}},
 		{"off, none", commercepolicy.DrugScheduleOff, nil, nil},
 		{"off, a class", commercepolicy.DrugScheduleOff, ptr("A"), []string{command.CodeScheduleIsOff}},
+		{"optional, an inactive class", commercepolicy.DrugScheduleOptional, ptr("off"), []string{command.CodeInactive}},
 		{"required, none", commercepolicy.DrugScheduleRequired, nil, []string{command.CodeRequired}},
 		{"required, blank", commercepolicy.DrugScheduleRequired, ptr(""), []string{command.CodeRequired}},
 		{"required, a class", commercepolicy.DrugScheduleRequired, ptr("B"), nil},
@@ -139,6 +143,8 @@ func TestCreateProductHandler_DrugScheduleFollowsTheCompanyModeAndList(t *testin
 					cmd.DrugSchedule = l.classA
 				case "B":
 					cmd.DrugSchedule = l.classB
+				case "off":
+					cmd.DrugSchedule = l.classOff
 				case "x":
 					cmd.DrugSchedule = uuid.NewString()
 				}

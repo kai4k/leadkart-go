@@ -19,10 +19,6 @@ const KeyScheduleClasses = commercepolicy.ScheduleClassesKey
 // list. Map to 404.
 var ErrScheduleClassNotFound = errors.New("commercesettings: drug schedule class not found")
 
-// ErrScheduleClassInUse means a product still carries the class, so it cannot be
-// removed. Map to 409 drug_schedule_class_in_use.
-var ErrScheduleClassInUse = errors.New("commercesettings: drug schedule class is in use")
-
 // CodeScheduleInUse is the refusal of turning drug_schedule.mode off while a
 // product still carries a schedule class.
 const CodeScheduleInUse = "schedule_in_use"
@@ -58,7 +54,7 @@ func (s *Settings) AddScheduleClass(in AddScheduleClassInput) error {
 		return err
 	}
 	next := s.policy.Clone()
-	next.DrugSchedule.Classes = append(next.DrugSchedule.Classes, commercepolicy.ScheduleClass{ID: in.ID, Label: label})
+	next.DrugSchedule.Classes = append(next.DrugSchedule.Classes, commercepolicy.ScheduleClass{ID: in.ID, Label: label, Active: true})
 	commercepolicy.SortScheduleClasses(next.DrugSchedule.Classes)
 	s.policy = next
 	s.commit(in.Actor, reason, []string{KeyScheduleClasses}, in.Now)
@@ -103,32 +99,44 @@ func (s *Settings) RenameScheduleClass(in RenameScheduleClassInput) error {
 	return nil
 }
 
-// RemoveScheduleClassInput removes a class. InUse is whether any product still
-// carries it, read by the caller from Inventory (this module cannot).
-type RemoveScheduleClassInput struct {
+// SetScheduleClassActiveInput moves a class between active and inactive. A class is never
+// deleted (ADR 0073): products refer to it by id and keep it.
+type SetScheduleClassActiveInput struct {
 	ID     string
-	InUse  bool
+	Active bool
 	Reason string
 	Actor  Actor
 	Now    time.Time
 }
 
-// RemoveScheduleClass removes a class from the list. A class a product carries
-// cannot be removed ([ErrScheduleClassInUse]).
-func (s *Settings) RemoveScheduleClass(in RemoveScheduleClassInput) error {
+// DeactivateScheduleClass makes a class inactive: it can no longer be set on a product, and a
+// product that already carries it keeps it. Idempotent: an inactive class is a no-op (no new
+// policy version).
+func (s *Settings) DeactivateScheduleClass(in SetScheduleClassActiveInput) error {
+	in.Active = false
+	return s.setScheduleClassActive(in)
+}
+
+// ReactivateScheduleClass makes an inactive class selectable again. Idempotent.
+func (s *Settings) ReactivateScheduleClass(in SetScheduleClassActiveInput) error {
+	in.Active = true
+	return s.setScheduleClassActive(in)
+}
+
+func (s *Settings) setScheduleClassActive(in SetScheduleClassActiveInput) error {
 	idx := slices.IndexFunc(s.policy.DrugSchedule.Classes, func(c commercepolicy.ScheduleClass) bool { return c.ID == in.ID })
 	if idx < 0 {
 		return ErrScheduleClassNotFound
 	}
-	if in.InUse {
-		return ErrScheduleClassInUse
+	if s.policy.DrugSchedule.Classes[idx].Active == in.Active {
+		return nil
 	}
 	reason, err := checkReason(in.Reason, true)
 	if err != nil {
 		return err
 	}
 	next := s.policy.Clone()
-	next.DrugSchedule.Classes = slices.Delete(next.DrugSchedule.Classes, idx, idx+1)
+	next.DrugSchedule.Classes[idx].Active = in.Active
 	s.policy = next
 	s.commit(in.Actor, reason, []string{KeyScheduleClasses}, in.Now)
 	return nil

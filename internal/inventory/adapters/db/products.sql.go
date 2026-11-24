@@ -32,27 +32,6 @@ func (q *Queries) CountProductsByStatus(ctx context.Context, tenantID pgtype.UUI
 	return i, err
 }
 
-const countProductsWithClass = `-- name: CountProductsWithClass :one
-SELECT count(*)::bigint
-FROM   inventory.products
-WHERE  tenant_id = $1
-AND    drug_schedule_class_id = $2
-`
-
-type CountProductsWithClassParams struct {
-	TenantID            pgtype.UUID
-	DrugScheduleClassID pgtype.UUID
-}
-
-// How many products carry the given class. A class a product carries cannot
-// be removed from the company list.
-func (q *Queries) CountProductsWithClass(ctx context.Context, arg CountProductsWithClassParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countProductsWithClass, arg.TenantID, arg.DrugScheduleClassID)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
-}
-
 const countProductsWithScheduleClass = `-- name: CountProductsWithScheduleClass :one
 SELECT count(*)::bigint
 FROM   inventory.products

@@ -22,9 +22,10 @@ type Commands struct {
 	AddGSTRate     command.AddGSTRateHandler
 	UpdateGSTRate  command.UpdateGSTRateHandler
 
-	AddScheduleClass    command.AddScheduleClassHandler
-	RenameScheduleClass command.RenameScheduleClassHandler
-	RemoveScheduleClass command.RemoveScheduleClassHandler
+	AddScheduleClass        command.AddScheduleClassHandler
+	RenameScheduleClass     command.RenameScheduleClassHandler
+	DeactivateScheduleClass command.DeactivateScheduleClassHandler
+	ReactivateScheduleClass command.ReactivateScheduleClassHandler
 
 	SeedSettings command.SeedSettingsHandler
 	Republish    command.RepublishHandler

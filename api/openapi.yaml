@@ -4416,10 +4416,13 @@ paths:
         `inventory.catalog.manage` (the picker a product form reads). The company's own
         list of classes a product may carry, in label order. It starts from the
         defaults of the market the company is created in and is the company's to add
-        to, rename or remove: nothing in the API is tied to a particular class. `mode`
+        to, rename or make inactive (never delete): nothing in the API is tied to a
+        particular class. `?status=active|inactive|all` (default `active`) picks the
+        listing, and `status_counts` carries the whole list per status. `mode`
         is the current `drug_schedule.mode`; `policy_version` is the policy version the
         list was read at.
       parameters:
+        - { $ref: '#/components/parameters/StatusFilter' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
         '429': { $ref: '#/components/responses/TooManyRequests' }
@@ -4488,15 +4491,17 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
-    delete:
+  /api/v1/company/drug-schedule-classes/{classId}/deactivate:
+    post:
       tags: [company]
-      summary: Remove a drug schedule class
+      summary: Make a drug schedule class inactive
       description: |
-        Requires `company_settings.tax.manage`. The body carries the `reason` (required).
-        A class a product still carries cannot be removed: `409
-        drug_schedule_class_in_use` and nothing changes; clear it from those products
-        first. A removal moves the policy to a new version and is kept in the history.
-        Returns `200` with the updated list.
+        Requires `company_settings.tax.manage`. A class is never deleted (ADR 0073): it goes
+        inactive. An inactive class cannot be newly set on a product (`errors.drug_schedule:
+        [inactive]`); a product that already carries it keeps it, and its label still resolves.
+        The body carries the `reason` (required, kept in the settings history). Idempotent: an
+        inactive class answers 200 and the policy version stays. Returns `200` with the list and the
+        class in `class`.
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { name: classId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -4505,22 +4510,46 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/DeleteCompanyScheduleClassRequest' }
+            schema: { $ref: '#/components/schemas/CompanyScheduleClassStatusRequest' }
       responses:
         '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
-          description: The list after the removal
+          description: The list after the change
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CompanyScheduleClassesDto' }
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '409':
-          description: '`drug_schedule_class_in_use`: a product still carries the class'
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/company/drug-schedule-classes/{classId}/reactivate:
+    post:
+      tags: [company]
+      summary: Make an inactive drug schedule class active again
+      description: |
+        Requires `company_settings.tax.manage`. The body carries the `reason` (required).
+        Idempotent: an active class answers 200 and the policy version stays. Returns `200` with the
+        list and the class in `class`.
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { name: classId, in: path, required: true, schema: { type: string, format: uuid } }
+        - $ref: '#/components/parameters/XTenantId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CompanyScheduleClassStatusRequest' }
+      responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '200':
+          description: The list after the change
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              schema: { $ref: '#/components/schemas/CompanyScheduleClassesDto' }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
 components:
@@ -5105,10 +5134,11 @@ components:
 
     CompanyScheduleClassDto:
       type: object
-      required: [id, label]
+      required: [id, label, active]
       properties:
         id: { type: string, format: uuid, description: 'What a product stores; stable across renames.' }
         label: { type: string, maxLength: 40 }
+        active: { type: boolean, description: 'false: the class cannot be newly set on a product; a product that already carries it keeps it (ADR 0073).' }
 
     CompanyScheduleClassesDto:
       type: object
@@ -5118,6 +5148,7 @@ components:
         mode: { type: string, enum: [off, optional, required] }
         items: { type: array, items: { $ref: '#/components/schemas/CompanyScheduleClassDto' } }
         class: { $ref: '#/components/schemas/CompanyScheduleClassDto' }
+        status_counts: { $ref: '#/components/schemas/StatusCounts' }
 
     CreateCompanyScheduleClassRequest:
       type: object
@@ -5137,7 +5168,7 @@ components:
         label: { type: string, maxLength: 40 }
         reason: { type: string, maxLength: 500 }
 
-    DeleteCompanyScheduleClassRequest:
+    CompanyScheduleClassStatusRequest:
       type: object
       required: [reason]
       properties:
@@ -6406,7 +6437,7 @@ components:
         composition:      { type: string, maxLength: 1000, description: 'Optional free text.' }
         storage_condition: { type: string, maxLength: 200, description: 'Optional free text.' }
         default_sale_rate_paise: { type: integer, format: int64, minimum: 0, description: 'Optional. The rate offered on a quotation line, in paise (Rs 100 crore cap). 0 or absent: none.' }
-        drug_schedule: { type: string, format: uuid, description: 'Optional. The id of a class of the COMPANY OWN list (`GET /company/drug-schedule-classes`); nothing in the API is tied to a particular class. Nullable at every `drug_schedule.mode` except where the company chose `required` (then it is needed: `errors.drug_schedule: [required]`). Under mode `off` a class is refused (`schedule_off`). A class that is not in the list is `not_in_list`.' }
+        drug_schedule: { type: string, format: uuid, description: 'Optional. The id of a class of the COMPANY OWN list (`GET /company/drug-schedule-classes`); nothing in the API is tied to a particular class. Nullable at every `drug_schedule.mode` except where the company chose `required` (then it is needed: `errors.drug_schedule: [required]`). Under mode `off` a class is refused (`schedule_off`). A class that is not in the list is `not_in_list`; an INACTIVE class is `inactive` (ADR 0073).' }
         product_category:            { type: string, maxLength: 64, description: 'Optional. Absent or blank: `General`. Trimmed; at most 64 characters.' }
         reorder_level:               { type: integer, minimum: 0, maximum: 2147483647, default: 0, description: 'Optional. Units below which the product is low on stock; 0 (the default) switches the low-stock alert off. 422 `validation_failed`, `errors.reorder_level`: `too_small` (below 0), `too_large` (above 2147483647).' }
         expiry_alert_threshold_days: { type: integer, minimum: 0, maximum: 36500, default: 90, description: 'Optional. Absent: 90. An explicit 0 switches the expiry alert off and is stored as 0. 422 `validation_failed`, `errors.expiry_alert_threshold_days`: `too_small` (below 0), `too_large` (above 36500).' }
@@ -6428,7 +6459,7 @@ components:
         composition:      { type: string, maxLength: 1000, description: 'Optional free text.' }
         storage_condition: { type: string, maxLength: 200, description: 'Optional free text.' }
         default_sale_rate_paise: { type: integer, format: int64, minimum: 0, description: 'Optional. The rate offered on a quotation line, in paise (Rs 100 crore cap). 0 or absent: none.' }
-        drug_schedule: { type: string, description: 'The id of a class of the COMPANY OWN list (`GET /company/drug-schedule-classes`). A blank string clears it. Clearing is refused only where the company chose mode `required` (`errors.drug_schedule: [required]`); a class is refused under mode `off` (`schedule_off`) and when not in the list (`not_in_list`).' }
+        drug_schedule: { type: string, description: 'The id of a class of the COMPANY OWN list (`GET /company/drug-schedule-classes`). A blank string clears it. Clearing is refused only where the company chose mode `required` (`errors.drug_schedule: [required]`); a class is refused under mode `off` (`schedule_off`) when not in the list (`not_in_list`) and when the class is inactive (`inactive`) unless the product already carries it.' }
         product_category:            { type: string, maxLength: 64, description: 'A blank value stores `General`. Changing the category never changes the GST rate. 422 `validation_failed`, `errors.product_category`: `too_long` (over 64 characters), `invalid_characters` (holds the NUL character).' }
         reorder_level:               { type: integer, minimum: 0, maximum: 2147483647, description: '0 switches the low-stock alert off. 422 `validation_failed`, `errors.reorder_level`: `too_small`, `too_large`.' }
         expiry_alert_threshold_days: { type: integer, minimum: 0, maximum: 36500, description: '0 switches the expiry alert off. 422 `validation_failed`, `errors.expiry_alert_threshold_days`: `too_small`, `too_large`.' }

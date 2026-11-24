@@ -3,6 +3,7 @@
 package ports
 
 import (
+	"github.com/leadkart/leadkart-go/internal/common/lifecycle"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/commercepolicy"
@@ -107,6 +108,9 @@ type PatchGSTRateRequest struct {
 type ScheduleClassDto struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
+	// Active is false for an inactive class: it cannot be set on a product, and a product that
+	// carries it keeps it (ADR 0073).
+	Active bool `json:"active"`
 }
 
 // ScheduleClassesDto is the company class list, the schedule mode and the
@@ -115,8 +119,10 @@ type ScheduleClassesDto struct {
 	PolicyVersion int64              `json:"policy_version"`
 	Mode          string             `json:"mode,omitzero"`
 	Items         []ScheduleClassDto `json:"items"`
-	// Class is the class a create or rename acted on.
+	// Class is the class a create, rename, deactivate or reactivate acted on.
 	Class *ScheduleClassDto `json:"class,omitzero"`
+	// StatusCounts is on the list only: the classes per status, whatever ?status= is.
+	StatusCounts *lifecycle.Counts `json:"status_counts,omitzero"`
 }
 
 // CreateScheduleClassRequest adds a class. reason is required.
@@ -131,8 +137,9 @@ type PatchScheduleClassRequest struct {
 	Reason string `json:"reason"`
 }
 
-// DeleteScheduleClassRequest removes a class. reason is required.
-type DeleteScheduleClassRequest struct {
+// ScheduleClassStatusRequest is the body of deactivate and reactivate. reason is required (it is
+// kept in the settings history).
+type ScheduleClassStatusRequest struct {
 	Reason string `json:"reason"`
 }
 
@@ -164,6 +171,6 @@ const (
 	ErrCodeUnauthenticated         = "unauthenticated"
 	ErrCodeForbidden               = "forbidden"
 	ErrCodeSettingsVersionConflict = "settings_version_conflict"
-	ErrCodeScheduleClassInUse      = "drug_schedule_class_in_use"
+	ErrCodeInvalidStatusFilter     = "invalid_status_filter"
 	ErrCodeInternalError           = "internal_error"
 )

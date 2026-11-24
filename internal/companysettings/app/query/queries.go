@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/leadkart/leadkart-go/internal/common/lifecycle"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/commercepolicy"
@@ -122,11 +123,16 @@ type ScheduleClassesView struct {
 	PolicyVersion int64
 	Mode          string
 	Items         []commercepolicy.ScheduleClass
+	// Counts is the whole list per status, whatever Status is (the status chips).
+	Counts lifecycle.Counts
 }
 
 // ListScheduleClassesQuery selects the tenant's class list.
 type ListScheduleClassesQuery struct {
 	TenantID tenant.ID
+	// Status picks the listing: active (the zero value and the default), inactive or all. A
+	// class is never deleted (ADR 0073).
+	Status lifecycle.StatusFilter
 }
 
 // ListScheduleClassesHandler reads the list.
@@ -142,7 +148,7 @@ func NewListScheduleClassesHandler(settings commercesettings.Repository) ListSch
 	return ListScheduleClassesHandler{settings: settings}
 }
 
-// Handle returns the list in label order.
+// Handle returns the list in label order, filtered by status.
 func (h ListScheduleClassesHandler) Handle(ctx context.Context, q ListScheduleClassesQuery) (ScheduleClassesView, error) {
 	if q.TenantID == "" {
 		return ScheduleClassesView{}, errors.New("list drug schedule classes: tenant id required")
@@ -152,7 +158,18 @@ func (h ListScheduleClassesHandler) Handle(ctx context.Context, q ListScheduleCl
 		return ScheduleClassesView{}, fmt.Errorf("list drug schedule classes: %w", err)
 	}
 	p := s.Policy()
-	return ScheduleClassesView{PolicyVersion: s.Version(), Mode: p.DrugSchedule.Mode, Items: p.DrugSchedule.Classes}, nil
+	view := ScheduleClassesView{PolicyVersion: s.Version(), Mode: p.DrugSchedule.Mode, Items: []commercepolicy.ScheduleClass{}}
+	for _, c := range p.DrugSchedule.Classes {
+		if c.Active {
+			view.Counts.Active++
+		} else {
+			view.Counts.Inactive++
+		}
+		if (c.Active && q.Status.IncludesActive()) || (!c.Active && q.Status.IncludesInactive()) {
+			view.Items = append(view.Items, c)
+		}
+	}
+	return view, nil
 }
 
 // ----- ListHistory ------------------------------------------------------------

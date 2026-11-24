@@ -3,6 +3,7 @@ package ports
 import (
 	"encoding/json"
 	"errors"
+	"github.com/leadkart/leadkart-go/internal/common/lifecycle"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -54,7 +55,8 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 	mux.Handle("GET /api/v1/company/drug-schedule-classes", classesRead(handleListScheduleClasses(log, a)))
 	mux.Handle("POST /api/v1/company/drug-schedule-classes", taxManage(handleCreateScheduleClass(log, a)))
 	mux.Handle("PATCH /api/v1/company/drug-schedule-classes/{classId}", taxManage(handlePatchScheduleClass(log, a)))
-	mux.Handle("DELETE /api/v1/company/drug-schedule-classes/{classId}", taxManage(handleDeleteScheduleClass(log, a)))
+	mux.Handle("POST /api/v1/company/drug-schedule-classes/{classId}/deactivate", taxManage(handleChangeScheduleClassStatus(log, a, false)))
+	mux.Handle("POST /api/v1/company/drug-schedule-classes/{classId}/reactivate", taxManage(handleChangeScheduleClassStatus(log, a, true)))
 }
 
 // ----- Handlers --------------------------------------------------------------
@@ -273,13 +275,19 @@ func handleListScheduleClasses(log *slog.Logger, a app.Application) http.Handler
 			writeError(w, http.StatusUnauthorized, ErrCodeUnauthenticated, "")
 			return
 		}
-		view, err := a.Queries.ListScheduleClasses.Handle(r.Context(), query.ListScheduleClassesQuery{TenantID: tenant.ID(effTenant)})
+		status, ok := lifecycle.ParseStatusFilter(r.URL.Query().Get("status"))
+		if !ok {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidStatusFilter, "status must be one of active, inactive, all")
+			return
+		}
+		view, err := a.Queries.ListScheduleClasses.Handle(r.Context(), query.ListScheduleClassesQuery{TenantID: tenant.ID(effTenant), Status: status})
 		if err != nil {
 			log.ErrorContext(r.Context(), "list drug schedule classes failed", "err", err)
 			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
 			return
 		}
-		writeJSON(w, http.StatusOK, ScheduleClassesDto{PolicyVersion: view.PolicyVersion, Mode: view.Mode, Items: classesToDto(view.Items)})
+		counts := view.Counts
+		writeJSON(w, http.StatusOK, ScheduleClassesDto{PolicyVersion: view.PolicyVersion, Mode: view.Mode, Items: classesToDto(view.Items), StatusCounts: &counts})
 	})
 }
 
@@ -350,7 +358,10 @@ func handlePatchScheduleClass(log *slog.Logger, a app.Application) http.Handler 
 	})
 }
 
-func handleDeleteScheduleClass(log *slog.Logger, a app.Application) http.Handler {
+// handleChangeScheduleClassStatus serves POST .../deactivate (reactivate=false) and
+// .../reactivate (reactivate=true). A class is never deleted (ADR 0073): both answer 200 with the
+// class and the list, and repeating either changes nothing (no new policy version).
+func handleChangeScheduleClassStatus(log *slog.Logger, a app.Application, reactivate bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tid, actor, op, ok := scheduleActor(w, r)
 		if !ok {
@@ -360,15 +371,24 @@ func handleDeleteScheduleClass(log *slog.Logger, a app.Application) http.Handler
 		if !ok {
 			return
 		}
-		var req DeleteScheduleClassRequest
+		var req ScheduleClassStatusRequest
 		if !decodeStrict(w, r, &req) {
 			return
 		}
-		out, err := a.Commands.RemoveScheduleClass.Handle(r.Context(), command.RemoveScheduleClassCommand{
+		cmd := command.ChangeScheduleClassStatusCommand{
 			TenantID: tid, ClassID: classID.String(), Reason: req.Reason, ActorMembershipID: actor, ImpersonatorOperatorID: op,
-		})
+		}
+		var out command.ScheduleClassResult
+		var err error
+		what := "deactivate drug schedule class"
+		if reactivate {
+			what = "reactivate drug schedule class"
+			out, err = a.Commands.ReactivateScheduleClass.Handle(r.Context(), cmd)
+		} else {
+			out, err = a.Commands.DeactivateScheduleClass.Handle(r.Context(), cmd)
+		}
 		if err != nil {
-			writeCommandError(w, r, log, "delete drug schedule class", err)
+			writeCommandError(w, r, log, what, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, scheduleChangedDto(out))
@@ -401,8 +421,6 @@ func writeCommandError(w http.ResponseWriter, r *http.Request, log *slog.Logger,
 		writeError(w, http.StatusNotFound, ErrCodeNotFound, "gst rate not found")
 	case errors.Is(err, commercesettings.ErrScheduleClassNotFound):
 		writeError(w, http.StatusNotFound, ErrCodeNotFound, "drug schedule class not found")
-	case errors.Is(err, commercesettings.ErrScheduleClassInUse):
-		writeError(w, http.StatusConflict, ErrCodeScheduleClassInUse, "a product still carries this class; clear it from those products first")
 	case commercepolicy.Fields(err) != nil:
 		writeFieldErrors(w, http.StatusUnprocessableEntity, ErrCodeValidationFailed, commercepolicy.Fields(err))
 	default:
@@ -433,7 +451,7 @@ func settingsViewToDto(v *query.SettingsView) SettingsDto {
 func classesToDto(in []commercepolicy.ScheduleClass) []ScheduleClassDto {
 	out := make([]ScheduleClassDto, 0, len(in))
 	for _, c := range in {
-		out = append(out, ScheduleClassDto{ID: c.ID, Label: c.Label})
+		out = append(out, ScheduleClassDto{ID: c.ID, Label: c.Label, Active: c.Active})
 	}
 	return out
 }
@@ -441,7 +459,7 @@ func classesToDto(in []commercepolicy.ScheduleClass) []ScheduleClassDto {
 func scheduleChangedDto(r command.ScheduleClassResult) ScheduleClassesDto {
 	dto := ScheduleClassesDto{PolicyVersion: r.PolicyVersion, Items: classesToDto(r.Items)}
 	if r.Class.ID != "" {
-		c := ScheduleClassDto{ID: r.Class.ID, Label: r.Class.Label}
+		c := ScheduleClassDto{ID: r.Class.ID, Label: r.Class.Label, Active: r.Class.Active}
 		dto.Class = &c
 	}
 	return dto

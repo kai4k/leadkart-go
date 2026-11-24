@@ -43,22 +43,3 @@ func (r *ScheduleUsageReader) CountWithAnyClass(ctx context.Context, tenantID te
 	})
 	return n, err
 }
-
-// CountWithClass satisfies [query.ScheduleUsageReader].
-func (r *ScheduleUsageReader) CountWithClass(ctx context.Context, tenantID tenant.ID, classID string) (int64, error) {
-	tid, err := uuid.Parse(tenantID.String())
-	if err != nil {
-		return 0, fmt.Errorf("schedule usage: tenant id: %w", err)
-	}
-	cid, err := uuid.Parse(classID)
-	if err != nil {
-		return 0, fmt.Errorf("schedule usage: class id: %w", err)
-	}
-	var n int64
-	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
-		var qerr error
-		n, qerr = r.q.WithTx(tx).CountProductsWithClass(ctx, db.CountProductsWithClassParams{TenantID: pgconv.PgUUID(tid), DrugScheduleClassID: pgconv.PgUUID(cid)})
-		return qerr
-	})
-	return n, err
-}

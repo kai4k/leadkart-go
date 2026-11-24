@@ -16,11 +16,9 @@ import (
 // module cannot read Inventory's schema, so the composition root binds this
 // interface to an Inventory query (the tasks hierarchy bridge precedent).
 type ScheduleUsageReader interface {
-	// ProductsWithSchedule counts the company's live products that carry any
+	// ProductsWithSchedule counts the company's products that carry any
 	// drug schedule class.
 	ProductsWithSchedule(ctx context.Context, tenantID tenant.ID) (int64, error)
-	// ProductsWithClass counts the company's live products carrying the class.
-	ProductsWithClass(ctx context.Context, tenantID tenant.ID, classID string) (int64, error)
 }
 
 // ScheduleClassResult is the class list after a command and the policy version
@@ -145,8 +143,9 @@ func (h RenameScheduleClassHandler) Handle(ctx context.Context, cmd RenameSchedu
 	return out, nil
 }
 
-// RemoveScheduleClassCommand removes a class from the company's list.
-type RemoveScheduleClassCommand struct {
+// ChangeScheduleClassStatusCommand moves a class between active and inactive. A class is never
+// deleted (ADR 0073).
+type ChangeScheduleClassStatusCommand struct {
 	TenantID tenant.ID
 	ClassID  string
 	Reason   string
@@ -155,51 +154,81 @@ type RemoveScheduleClassCommand struct {
 	ImpersonatorOperatorID string
 }
 
-// RemoveScheduleClassHandler removes a class that no product carries.
-type RemoveScheduleClassHandler struct {
+// DeactivateScheduleClassHandler makes a class inactive under the tenant's policy row lock.
+type DeactivateScheduleClassHandler struct {
 	settings commercesettings.Repository
-	usage    ScheduleUsageReader
 	now      func() time.Time
 }
 
-// NewRemoveScheduleClassHandler wires the handler.
-func NewRemoveScheduleClassHandler(settings commercesettings.Repository, usage ScheduleUsageReader, now func() time.Time) RemoveScheduleClassHandler {
-	if settings == nil || usage == nil {
-		panic("command: NewRemoveScheduleClassHandler settings and usage required")
+// NewDeactivateScheduleClassHandler wires the handler.
+func NewDeactivateScheduleClassHandler(settings commercesettings.Repository, now func() time.Time) DeactivateScheduleClassHandler {
+	if settings == nil {
+		panic("command: NewDeactivateScheduleClassHandler settings required")
 	}
 	if now == nil {
 		now = time.Now
 	}
-	return RemoveScheduleClassHandler{settings: settings, usage: usage, now: now}
+	return DeactivateScheduleClassHandler{settings: settings, now: now}
 }
 
-// Handle removes the class. A class a product carries is
-// [commercesettings.ErrScheduleClassInUse]. Inventory is asked BEFORE the policy
-// row is locked (no second connection under the lock); a product that takes the
-// class in the meantime still resolves, because Inventory refuses a class that
-// is not in its replica and never deletes a product's stored class.
-func (h RemoveScheduleClassHandler) Handle(ctx context.Context, cmd RemoveScheduleClassCommand) (ScheduleClassResult, error) {
-	if cmd.TenantID == "" {
-		return ScheduleClassResult{}, errors.New("remove drug schedule class: tenant id required")
+// Handle deactivates the class; an unknown id is [commercesettings.ErrScheduleClassNotFound]. Repeating
+// it changes nothing (no new policy version).
+func (h DeactivateScheduleClassHandler) Handle(ctx context.Context, cmd ChangeScheduleClassStatusCommand) (ScheduleClassResult, error) {
+	return changeScheduleClassStatus(ctx, h.settings, h.now, cmd, false)
+}
+
+// ReactivateScheduleClassHandler makes an inactive class selectable again.
+type ReactivateScheduleClassHandler struct {
+	settings commercesettings.Repository
+	now      func() time.Time
+}
+
+// NewReactivateScheduleClassHandler wires the handler.
+func NewReactivateScheduleClassHandler(settings commercesettings.Repository, now func() time.Time) ReactivateScheduleClassHandler {
+	if settings == nil {
+		panic("command: NewReactivateScheduleClassHandler settings required")
 	}
-	n, err := h.usage.ProductsWithClass(ctx, cmd.TenantID, cmd.ClassID)
-	if err != nil {
-		return ScheduleClassResult{}, fmt.Errorf("remove drug schedule class: read usage: %w", err)
+	if now == nil {
+		now = time.Now
+	}
+	return ReactivateScheduleClassHandler{settings: settings, now: now}
+}
+
+// Handle reactivates the class. Repeating it changes nothing.
+func (h ReactivateScheduleClassHandler) Handle(ctx context.Context, cmd ChangeScheduleClassStatusCommand) (ScheduleClassResult, error) {
+	return changeScheduleClassStatus(ctx, h.settings, h.now, cmd, true)
+}
+
+func changeScheduleClassStatus(ctx context.Context, settings commercesettings.Repository, now func() time.Time, cmd ChangeScheduleClassStatusCommand, active bool) (ScheduleClassResult, error) {
+	what := "deactivate drug schedule class"
+	if active {
+		what = "reactivate drug schedule class"
+	}
+	if cmd.TenantID == "" {
+		return ScheduleClassResult{}, fmt.Errorf("%s: tenant id required", what)
 	}
 	var out ScheduleClassResult
-	err = h.settings.UpdateByID(ctx, cmd.TenantID, func(s *commercesettings.Settings) (bool, error) {
-		if err := s.RemoveScheduleClass(commercesettings.RemoveScheduleClassInput{
-			ID: cmd.ClassID, InUse: n > 0, Reason: cmd.Reason,
+	err := settings.UpdateByID(ctx, cmd.TenantID, func(s *commercesettings.Settings) (bool, error) {
+		before := s.Version()
+		in := commercesettings.SetScheduleClassActiveInput{
+			ID: cmd.ClassID, Reason: cmd.Reason,
 			Actor: commercesettings.Actor{MembershipID: cmd.ActorMembershipID, ImpersonatorOperatorID: cmd.ImpersonatorOperatorID},
-			Now:   h.now(),
-		}); err != nil {
+			Now:   now(),
+		}
+		var err error
+		if active {
+			err = s.ReactivateScheduleClass(in)
+		} else {
+			err = s.DeactivateScheduleClass(in)
+		}
+		if err != nil {
 			return false, err
 		}
 		out = scheduleResult(s, cmd.ClassID)
-		return true, nil
+		return s.Version() != before, nil
 	})
 	if err != nil {
-		return ScheduleClassResult{}, fmt.Errorf("remove drug schedule class: %w", err)
+		return ScheduleClassResult{}, fmt.Errorf("%s: %w", what, err)
 	}
 	return out, nil
 }

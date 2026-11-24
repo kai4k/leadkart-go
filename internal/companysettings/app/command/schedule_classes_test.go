@@ -14,32 +14,28 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// fakeUsage answers the schedule usage questions from fixed counts.
+// fakeUsage answers the schedule usage question from a fixed count.
 type fakeUsage struct {
 	scheduled int64
-	byClass   map[string]int64
 }
 
 func (f fakeUsage) ProductsWithSchedule(_ context.Context, _ tenant.ID) (int64, error) {
 	return f.scheduled, nil
 }
 
-func (f fakeUsage) ProductsWithClass(_ context.Context, _ tenant.ID, classID string) (int64, error) {
-	return f.byClass[classID], nil
-}
-
-func TestScheduleClasses_DefaultsThenAddRenameRemove(t *testing.T) {
+func TestScheduleClasses_DefaultsThenAddRenameDeactivateReactivate(t *testing.T) {
 	t.Parallel()
 	repo := commercesettingstest.NewFakeRepository()
 	add := command.NewAddScheduleClassHandler(repo, now, uuid.NewString)
 	rename := command.NewRenameScheduleClassHandler(repo, now)
-	remove := command.NewRemoveScheduleClassHandler(repo, fakeUsage{}, now)
+	deactivate := command.NewDeactivateScheduleClassHandler(repo, now)
+	reactivate := command.NewReactivateScheduleClassHandler(repo, now)
 
 	added, err := add.Handle(t.Context(), command.AddScheduleClassCommand{TenantID: tenantID, Label: "Controlled", Reason: "local rule", ActorMembershipID: member})
 	if err != nil {
 		t.Fatalf("add: %v", err)
 	}
-	if added.Class.ID == "" || added.Class.Label != "Controlled" || added.PolicyVersion != 1 {
+	if added.Class.ID == "" || added.Class.Label != "Controlled" || !added.Class.Active || added.PolicyVersion != 1 {
 		t.Fatalf("added = %+v", added)
 	}
 	defaults := commercepolicy.Default().DrugSchedule.Classes
@@ -56,30 +52,43 @@ func TestScheduleClasses_DefaultsThenAddRenameRemove(t *testing.T) {
 		t.Fatalf("a no-op rename must not move the version: %+v %v", same, err)
 	}
 
-	removed, err := remove.Handle(t.Context(), command.RemoveScheduleClassCommand{TenantID: tenantID, ClassID: added.Class.ID, Reason: "unused"})
-	if err != nil || removed.PolicyVersion != 3 || len(removed.Items) != len(defaults) {
-		t.Fatalf("remove: %+v %v", removed, err)
+	// ADR 0073: a class is made inactive and back, never deleted. The list keeps it either way.
+	st := command.ChangeScheduleClassStatusCommand{TenantID: tenantID, ClassID: added.Class.ID, Reason: "retired", ActorMembershipID: member}
+	off, err := deactivate.Handle(t.Context(), st)
+	if err != nil || off.Class.Active || off.PolicyVersion != 3 || len(off.Items) != len(defaults)+1 {
+		t.Fatalf("deactivate: %+v %v", off, err)
 	}
-	if len(repo.DrainedEvents) != 3 {
-		t.Fatalf("events = %d, want one per change", len(repo.DrainedEvents))
+	again, err := deactivate.Handle(t.Context(), st)
+	if err != nil || again.PolicyVersion != 3 {
+		t.Fatalf("deactivating an inactive class must not move the version: %+v %v", again, err)
+	}
+	on, err := reactivate.Handle(t.Context(), st)
+	if err != nil || !on.Class.Active || on.PolicyVersion != 4 {
+		t.Fatalf("reactivate: %+v %v", on, err)
+	}
+	if again, err = reactivate.Handle(t.Context(), st); err != nil || again.PolicyVersion != 4 {
+		t.Fatalf("reactivating an active class must not move the version: %+v %v", again, err)
+	}
+	if len(repo.DrainedEvents) != 4 {
+		t.Fatalf("events = %d, want one per real change", len(repo.DrainedEvents))
 	}
 }
 
-func TestScheduleClasses_AClassInUseCannotBeRemoved(t *testing.T) {
+func TestScheduleClasses_DeactivateRefusals(t *testing.T) {
 	t.Parallel()
 	repo := commercesettingstest.NewFakeRepository()
-	inUse := commercepolicy.Default().DrugSchedule.Classes[0].ID
-	remove := command.NewRemoveScheduleClassHandler(repo, fakeUsage{byClass: map[string]int64{inUse: 2}}, now)
+	deactivate := command.NewDeactivateScheduleClassHandler(repo, now)
+	first := commercepolicy.Default().DrugSchedule.Classes[0].ID
 
-	_, err := remove.Handle(t.Context(), command.RemoveScheduleClassCommand{TenantID: tenantID, ClassID: inUse, Reason: "cleanup"})
-	if !errors.Is(err, commercesettings.ErrScheduleClassInUse) {
-		t.Fatalf("err = %v, want ErrScheduleClassInUse", err)
+	if _, err := deactivate.Handle(t.Context(), command.ChangeScheduleClassStatusCommand{TenantID: tenantID, ClassID: uuid.NewString(), Reason: "x"}); !errors.Is(err, commercesettings.ErrScheduleClassNotFound) {
+		t.Fatalf("unknown class: %v", err)
+	}
+	_, err := deactivate.Handle(t.Context(), command.ChangeScheduleClassStatusCommand{TenantID: tenantID, ClassID: first})
+	if got := commercepolicy.Fields(err)["reason"]; len(got) != 1 || got[0] != commercepolicy.CodeRequired {
+		t.Fatalf("missing reason: %v", err)
 	}
 	if len(repo.DrainedEvents) != 0 {
-		t.Fatal("a refused removal must change nothing")
-	}
-	if _, err := remove.Handle(t.Context(), command.RemoveScheduleClassCommand{TenantID: tenantID, ClassID: uuid.NewString(), Reason: "x"}); !errors.Is(err, commercesettings.ErrScheduleClassNotFound) {
-		t.Fatalf("unknown class: %v", err)
+		t.Fatal("a refused change must store nothing")
 	}
 }
 

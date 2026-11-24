@@ -23,9 +23,13 @@ const (
 // ScheduleClass is one entry of a company's drug schedule class list. A
 // product stores the class ID, so a class can be renamed without touching a
 // product. Which classes exist is company data: nothing in the code names one.
+//
+// A class is made inactive, never deleted (ADR 0073): an inactive class cannot be set on a
+// product, and a product that already carries it keeps it.
 type ScheduleClass struct {
-	ID    string `json:"id"`
-	Label string `json:"label"`
+	ID     string `json:"id"`
+	Label  string `json:"label"`
+	Active bool   `json:"active"`
 }
 
 // defaults is the embedded data that is specific to the market LeadKart
@@ -55,7 +59,7 @@ func defaultData() defaults { return loadDefaults() }
 func (d defaults) scheduleClasses() []ScheduleClass {
 	out := make([]ScheduleClass, 0, len(d.DrugScheduleClasses))
 	for _, c := range d.DrugScheduleClasses {
-		out = append(out, ScheduleClass{ID: c.ID, Label: c.Label})
+		out = append(out, ScheduleClass{ID: c.ID, Label: c.Label, Active: true})
 	}
 	return out
 }

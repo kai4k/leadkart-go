@@ -31,8 +31,9 @@ func labelsOf(l csports.ScheduleClassesDto) []string {
 }
 
 // The drug schedule is the company's own data: the list starts from the market
-// defaults, the company adds, renames and removes classes, a class a product
-// carries cannot be removed, and the mode cannot go off while a product carries one.
+// defaults, the company adds, renames and deactivates classes (never deletes), an inactive
+// class cannot be newly set on a product but one that carries it keeps it, and the mode
+// cannot go off while a product carries one.
 func TestE2E_DrugSchedule_TheCompanyOwnsTheClassListAndTheModeRules(t *testing.T) {
 	f := newE2EFixture(t)
 	reg := f.registerAndLogin(t, "drugsched")
@@ -69,14 +70,62 @@ func TestE2E_DrugSchedule_TheCompanyOwnsTheClassListAndTheModeRules(t *testing.T
 	invWant(t, pr, "drug_schedule", added.Class.ID)
 	invWant(t, pr, "drug_schedule_label", "Restricted")
 
-	// In use: the class cannot be removed; the refusal changes nothing.
-	r := f.authedJSON(t, http.MethodDelete, csClasses+"/"+added.Class.ID, tok, map[string]any{"reason": "cleanup"})
-	if r.status != http.StatusConflict || errorCode(t, r.body) != "drug_schedule_class_in_use" {
-		t.Fatalf("removing a class in use: %d %s", r.status, r.body)
+	// ADR 0073: deactivating a class in use is allowed. It is idempotent (the policy version only
+	// moves once), the product keeps it and its label, and the default list hides it.
+	deact := func(id string) csports.ScheduleClassesDto {
+		return csDecode[csports.ScheduleClassesDto](t, f.authedJSON(t, http.MethodPost, csClasses+"/"+id+"/deactivate", tok, map[string]any{"reason": "retired"}), http.StatusOK)
 	}
-	if got := csClassList(t, f, tok); len(got.Items) != len(defaults)+1 {
-		t.Fatalf("a refused removal changed the list: %v", labelsOf(got))
+	off1 := deact(added.Class.ID)
+	if off1.Class == nil || off1.Class.Active {
+		t.Fatalf("deactivate answers the class, now inactive: %+v", off1.Class)
 	}
+	if off2 := deact(added.Class.ID); off2.PolicyVersion != off1.PolicyVersion {
+		t.Fatalf("a repeated deactivate moved the policy version %d -> %d", off1.PolicyVersion, off2.PolicyVersion)
+	}
+	if r := f.authedJSON(t, http.MethodPost, csClasses+"/"+defaults[0].ID+"/deactivate", tok, map[string]any{}); r.status != http.StatusUnprocessableEntity {
+		t.Fatalf("a deactivate needs a reason: %d", r.status)
+	}
+	if got := csClassList(t, f, tok); len(got.Items) != len(defaults) || got.StatusCounts == nil || got.StatusCounts.Inactive != 1 || got.StatusCounts.Active != len(defaults) {
+		t.Fatalf("default list %v counts %+v: want the active classes only and 1 inactive in the counts", labelsOf(got), got.StatusCounts)
+	}
+	inactive := csDecode[csports.ScheduleClassesDto](t, f.authedJSON(t, http.MethodGet, csClasses+"?status=inactive", tok, nil), http.StatusOK)
+	if len(inactive.Items) != 1 || inactive.Items[0].ID != added.Class.ID || inactive.Items[0].Active {
+		t.Fatalf("status=inactive: %+v", inactive.Items)
+	}
+	if all := csDecode[csports.ScheduleClassesDto](t, f.authedJSON(t, http.MethodGet, csClasses+"?status=all", tok, nil), http.StatusOK); len(all.Items) != len(defaults)+1 {
+		t.Fatalf("status=all: %v", labelsOf(all))
+	}
+	if r := f.authedJSON(t, http.MethodGet, csClasses+"?status=deleted", tok, nil); r.status != http.StatusBadRequest {
+		t.Fatalf("status=deleted: %d, want 400", r.status)
+	}
+	if r := f.authedJSON(t, http.MethodDelete, csClasses+"/"+added.Class.ID, tok, map[string]any{"reason": "x"}); r.status != http.StatusNotFound && r.status != http.StatusMethodNotAllowed {
+		t.Fatalf("DELETE a class: %d, want the route gone", r.status)
+	}
+
+	// Effect: the product that carries the class keeps it and its label; nobody else can take it.
+	syncInventoryReplica(t, f, tok)
+	pr = invGetProduct(t, f, tok, p)
+	invWant(t, pr, "drug_schedule", added.Class.ID)
+	invWant(t, pr, "drug_schedule_label", "Restricted")
+	if r := f.authedJSON(t, http.MethodPatch, "/api/v1/inventory/products/"+p, tok, map[string]any{"drug_schedule": added.Class.ID}); r.status != http.StatusNoContent {
+		t.Fatalf("a product keeps its inactive class: %d %s", r.status, r.body)
+	}
+	r := f.authedJSON(t, http.MethodPost, "/api/v1/inventory/products", tok, invProductBody("SCH-IN", map[string]any{"gst_rate_id": rate, "drug_schedule": added.Class.ID}))
+	if r.status != http.StatusUnprocessableEntity || !slices.Equal(invFieldCodes(t, r.body, "drug_schedule"), []string{"inactive"}) {
+		t.Fatalf("a new product takes an inactive class: %d %s, want 422 drug_schedule [inactive]", r.status, r.body)
+	}
+
+	// Reactivate: selectable again, and back in the default list.
+	react := csDecode[csports.ScheduleClassesDto](t, f.authedJSON(t, http.MethodPost, csClasses+"/"+added.Class.ID+"/reactivate", tok, map[string]any{"reason": "back in use"}), http.StatusOK)
+	if react.Class == nil || !react.Class.Active {
+		t.Fatalf("reactivate: %+v", react.Class)
+	}
+	syncInventoryReplica(t, f, tok)
+	back := f.authedJSON(t, http.MethodPost, "/api/v1/inventory/products", tok, invProductBody("SCH-BACK", map[string]any{"gst_rate_id": rate, "drug_schedule": added.Class.ID}))
+	if back.status != http.StatusCreated {
+		t.Fatalf("a reactivated class is selectable: %d %s", back.status, back.body)
+	}
+	backID, _ := invObj(t, back.body)["product_id"].(string)
 
 	// The schedule mode cannot go off while a product carries a class; the SAVE is refused.
 	cur := csDecode[csports.SettingsDto](t, f.authedJSON(t, http.MethodGet, csSettings, tok, nil), http.StatusOK)
@@ -85,13 +134,15 @@ func TestE2E_DrugSchedule_TheCompanyOwnsTheClassListAndTheModeRules(t *testing.T
 		t.Fatalf("mode off while a product carries a class: %d %s", off.status, off.body)
 	}
 
-	// Clear the product class: the class can then go, and the mode can go off.
-	if r := f.authedJSON(t, http.MethodPatch, "/api/v1/inventory/products/"+p, tok, map[string]any{"drug_schedule": ""}); r.status != http.StatusNoContent {
-		t.Fatalf("clearing the class: %d %s", r.status, r.body)
+	// Clear the product class (and the other product that took the reactivated class); the mode can then go off.
+	for _, id := range []string{p, backID} {
+		if r := f.authedJSON(t, http.MethodPatch, "/api/v1/inventory/products/"+id, tok, map[string]any{"drug_schedule": ""}); r.status != http.StatusNoContent {
+			t.Fatalf("clearing the class: %d %s", r.status, r.body)
+		}
 	}
-	removed := csDecode[csports.ScheduleClassesDto](t, f.authedJSON(t, http.MethodDelete, csClasses+"/"+added.Class.ID, tok, map[string]any{"reason": "cleanup"}), http.StatusOK)
-	if len(removed.Items) != len(defaults) {
-		t.Fatalf("after the removal: %v", labelsOf(removed))
+	deact(added.Class.ID)
+	if got := csClassList(t, f, tok); len(got.Items) != len(defaults) {
+		t.Fatalf("after the deactivation: %v", labelsOf(got))
 	}
 	cur = csDecode[csports.SettingsDto](t, f.authedJSON(t, http.MethodGet, csSettings, tok, nil), http.StatusOK)
 	csDecode[csports.SettingsDto](t, f.authedJSON(t, http.MethodPatch, csSettings, tok, csPatch(cur.Version, "retiring the field", map[string]map[string]any{"drug_schedule": {"mode": "off"}})), http.StatusOK)
@@ -99,7 +150,7 @@ func TestE2E_DrugSchedule_TheCompanyOwnsTheClassListAndTheModeRules(t *testing.T
 	// Inventory refuses a class under mode off as well: its replica lags the company
 	// settings, so the two refusals are paired.
 	syncInventoryReplica(t, f, tok)
-	r = f.authedJSON(t, http.MethodPost, "/api/v1/inventory/products", tok, invProductBody("SCH-2", map[string]any{"gst_rate_id": rate, "drug_schedule": removed.Items[0].ID}))
+	r = f.authedJSON(t, http.MethodPost, "/api/v1/inventory/products", tok, invProductBody("SCH-2", map[string]any{"gst_rate_id": rate, "drug_schedule": defaults[0].ID}))
 	if r.status != http.StatusUnprocessableEntity || !slices.Equal(invFieldCodes(t, r.body, "drug_schedule"), []string{"schedule_off"}) {
 		t.Fatalf("a class under mode off: %d %s", r.status, r.body)
 	}
@@ -113,30 +164,39 @@ func TestE2E_DrugSchedule_TheCompanyOwnsTheClassListAndTheModeRules(t *testing.T
 		t.Fatalf("required without a class: %d %s", r.status, r.body)
 	}
 	// Every default class is just data: any of them is accepted, none is special-cased.
-	for i, c := range removed.Items {
+	for i, c := range csClassList(t, f, tok).Items {
 		if r := f.authedJSON(t, http.MethodPost, "/api/v1/inventory/products", tok, invProductBody("SCH-C"+string(rune('A'+i)), map[string]any{"gst_rate_id": rate, "drug_schedule": c.ID})); r.status != http.StatusCreated {
 			t.Fatalf("class %q: %d %s", c.Label, r.status, r.body)
 		}
 	}
 }
 
-// The company may remove every default class; the product form then has none to pick.
-func TestE2E_DrugSchedule_AnUnusedDefaultClassCanBeRemoved(t *testing.T) {
+// The company may deactivate every default class; the product form then has none to pick, and
+// every class is still there under status=all (nothing is deleted).
+func TestE2E_DrugSchedule_EveryClassCanBeDeactivatedAndNoneIsDeleted(t *testing.T) {
 	f := newE2EFixture(t)
 	tok := f.registerAndLogin(t, "drugsched2").AccessToken
-	for _, c := range csClassList(t, f, tok).Items {
-		csDecode[csports.ScheduleClassesDto](t, f.authedJSON(t, http.MethodDelete, csClasses+"/"+c.ID, tok, map[string]any{"reason": "this company does not use them"}), http.StatusOK)
+	all := csClassList(t, f, tok).Items
+	for _, c := range all {
+		csDecode[csports.ScheduleClassesDto](t, f.authedJSON(t, http.MethodPost, csClasses+"/"+c.ID+"/deactivate", tok, map[string]any{"reason": "this company does not use them"}), http.StatusOK)
 	}
-	if got := csClassList(t, f, tok); len(got.Items) != 0 {
-		t.Fatalf("list after removing every class: %v", labelsOf(got))
+	got := csClassList(t, f, tok)
+	if len(got.Items) != 0 || got.StatusCounts == nil || got.StatusCounts.Inactive != len(all) || got.StatusCounts.Active != 0 {
+		t.Fatalf("list after deactivating every class: %v counts %+v", labelsOf(got), got.StatusCounts)
 	}
-	if r := f.authedJSON(t, http.MethodDelete, csClasses+"/00000000-0000-4000-8000-0000000000aa", tok, map[string]any{"reason": "x"}); r.status != http.StatusNotFound {
-		t.Fatalf("an unknown class: %d", r.status)
+	every := csDecode[csports.ScheduleClassesDto](t, f.authedJSON(t, http.MethodGet, csClasses+"?status=all", tok, nil), http.StatusOK)
+	if len(every.Items) != len(all) {
+		t.Fatalf("status=all %v, want every class kept", labelsOf(every))
+	}
+	for _, verb := range []string{"deactivate", "reactivate"} {
+		if r := f.authedJSON(t, http.MethodPost, csClasses+"/00000000-0000-4000-8000-0000000000aa/"+verb, tok, map[string]any{"reason": "x"}); r.status != http.StatusNotFound {
+			t.Fatalf("%s an unknown class: %d", verb, r.status)
+		}
 	}
 }
 
 // Review G2 mutant: the class list is company data guarded by tax.manage on every write.
-// A member without it is refused on create, rename and remove (403), and the list is untouched.
+// A member without it is refused on create, rename, deactivate and reactivate (403), and the list is untouched.
 func TestE2E_DrugSchedule_ClassWritesNeedTheTaxManagePermission(t *testing.T) {
 	f := newE2EFixture(t)
 	owner := f.registerAndLogin(t, "classgate")
@@ -155,8 +215,10 @@ func TestE2E_DrugSchedule_ClassWritesNeedTheTaxManagePermission(t *testing.T) {
 	if r := f.authedJSON(t, http.MethodPatch, csClasses+"/"+before.Items[0].ID, plain, map[string]any{"label": "Renamed", "reason": "no right"}); r.status != http.StatusForbidden {
 		t.Fatalf("rename without tax.manage: %d %s, want 403", r.status, r.body)
 	}
-	if r := f.authedJSON(t, http.MethodDelete, csClasses+"/"+before.Items[0].ID, plain, map[string]any{"reason": "no right"}); r.status != http.StatusForbidden {
-		t.Fatalf("remove without tax.manage: %d %s, want 403", r.status, r.body)
+	for _, verb := range []string{"deactivate", "reactivate"} {
+		if r := f.authedJSON(t, http.MethodPost, csClasses+"/"+before.Items[0].ID+"/"+verb, plain, map[string]any{"reason": "no right"}); r.status != http.StatusForbidden {
+			t.Fatalf("%s without tax.manage: %d %s, want 403", verb, r.status, r.body)
+		}
 	}
 	after := csDecode[csports.ScheduleClassesDto](t, f.authedJSON(t, http.MethodGet, csClasses, owner.AccessToken, nil), http.StatusOK)
 	if len(after.Items) != len(before.Items) {

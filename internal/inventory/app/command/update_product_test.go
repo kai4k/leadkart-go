@@ -111,6 +111,43 @@ func TestUpdateProductHandler_GSTMovesToAnotherListEntry(t *testing.T) {
 	}
 }
 
+// ADR 0073: an inactive class cannot be newly set on a product, but a product that already
+// carries it keeps it (an update that names the same class passes) and can clear it or move to an
+// active class.
+func TestUpdateProductHandler_InactiveDrugScheduleClassIsKeptNotNewlySet(t *testing.T) {
+	t.Parallel()
+	repo := newFakeProductRepo()
+	tid, actor := newTenantID(t), newMembershipID(t)
+	pol, l := policyLists(commercepolicy.DrugScheduleOptional)
+	h := command.NewUpdateProductHandler(repo, pol, func() time.Time { return fixedNow })
+	set := func(p *product.Product, id string) error {
+		return h.Handle(t.Context(), command.UpdateProductCommand{TenantID: tid, ProductID: p.ID(), ActorMembershipID: actor, DrugSchedule: &id})
+	}
+
+	fresh := seedProduct(t, repo, tid, actor, "INACT-NEW")
+	if got := fieldCodes(t, set(fresh, l.classOff), "drug_schedule"); !slices.Equal(got, []string{command.CodeInactive}) {
+		t.Fatalf("newly setting an inactive class: %v, want inactive", got)
+	}
+
+	carrying := seedProduct(t, repo, tid, actor, "INACT-HAS")
+	cls := l.classOff
+	if err := carrying.Update(actor, product.UpdateSpec{DrugScheduleClassID: &cls}, fixedNow); err != nil {
+		t.Fatalf("seed class: %v", err)
+	}
+	if err := set(carrying, l.classOff); err != nil {
+		t.Fatalf("a product that already carries the inactive class keeps it: %v", err)
+	}
+	if got, _ := repo.GetByID(t.Context(), tid, carrying.ID()); got.DrugScheduleClassID() != l.classOff {
+		t.Fatalf("the carried class changed to %q", got.DrugScheduleClassID())
+	}
+	if err := set(carrying, l.classA); err != nil {
+		t.Fatalf("moving to an active class: %v", err)
+	}
+	if err := set(carrying, l.classOff); err == nil {
+		t.Fatal("moving back to the inactive class must be refused once it was left")
+	}
+}
+
 // The schedule is set, changed and cleared through the company list, and the company
 // mode decides what is allowed. Clearing is always allowed except under required.
 func TestUpdateProductHandler_DrugScheduleFollowsTheCompanyModeAndList(t *testing.T) {

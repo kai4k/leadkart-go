@@ -80,7 +80,7 @@ func (h UpdateProductHandler) Handle(ctx context.Context, cmd UpdateProductComma
 			}
 			bps, refusal := resolveCatalogue(pol.Policy, catalogueChoice{
 				CurrentGSTRateID: p.GSTRateID(), GSTRateID: derefString(cmd.GSTRateID),
-				ScheduleGiven: cmd.DrugSchedule != nil, DrugSchedule: derefString(cmd.DrugSchedule),
+				ScheduleGiven: cmd.DrugSchedule != nil, DrugSchedule: derefString(cmd.DrugSchedule), CurrentDrugSchedule: p.DrugScheduleClassID(),
 			})
 			if refusal != nil {
 				return false, refusal

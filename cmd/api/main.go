@@ -1067,9 +1067,10 @@ func buildCompanySettingsApp(pool *pgxpool.Pool, now func() time.Time) companyse
 			AddGSTRate:     companysettingscommand.NewAddGSTRateHandler(repo, now, newRateID),
 			UpdateGSTRate:  companysettingscommand.NewUpdateGSTRateHandler(repo, now),
 
-			AddScheduleClass:    companysettingscommand.NewAddScheduleClassHandler(repo, now, newRateID),
-			RenameScheduleClass: companysettingscommand.NewRenameScheduleClassHandler(repo, now),
-			RemoveScheduleClass: companysettingscommand.NewRemoveScheduleClassHandler(repo, usage, now),
+			AddScheduleClass:        companysettingscommand.NewAddScheduleClassHandler(repo, now, newRateID),
+			RenameScheduleClass:     companysettingscommand.NewRenameScheduleClassHandler(repo, now),
+			DeactivateScheduleClass: companysettingscommand.NewDeactivateScheduleClassHandler(repo, now),
+			ReactivateScheduleClass: companysettingscommand.NewReactivateScheduleClassHandler(repo, now),
 
 			SeedSettings: companysettingscommand.NewSeedSettingsHandler(repo, now),
 			Republish:    companysettingscommand.NewRepublishHandler(repo, now),
@@ -1237,8 +1238,4 @@ type scheduleUsageBridge struct {
 
 func (b scheduleUsageBridge) ProductsWithSchedule(ctx context.Context, tenantID tenant.ID) (int64, error) {
 	return b.usage.ProductsWithAnyClass(ctx, tenantID)
-}
-
-func (b scheduleUsageBridge) ProductsWithClass(ctx context.Context, tenantID tenant.ID, classID string) (int64, error) {
-	return b.usage.ProductsWithClass(ctx, tenantID, classID)
 }

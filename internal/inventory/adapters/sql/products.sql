@@ -194,14 +194,6 @@ FROM   inventory.products
 WHERE  tenant_id = $1
 AND    drug_schedule_class_id IS NOT NULL;
 
--- name: CountProductsWithClass :one
--- How many products carry the given class. A class a product carries cannot
--- be removed from the company list.
-SELECT count(*)::bigint
-FROM   inventory.products
-WHERE  tenant_id = $1
-AND    drug_schedule_class_id = $2;
-
 -- name: CountProductsByStatus :one
 -- The product list's status chips: how many products the tenant has per status, whatever the
 -- list's filter is. One grouped read.
