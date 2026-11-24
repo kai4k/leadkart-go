@@ -101,7 +101,7 @@ func (r *fakeBatchRepo) GetByID(_ context.Context, _ tenant.ID, id batch.ID) (*b
 		return nil, r.getErr
 	}
 	b, ok := r.batches[id]
-	if !ok || b.IsDeleted() {
+	if !ok {
 		return nil, batch.ErrNotFound
 	}
 	return b, nil

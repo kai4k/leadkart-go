@@ -15,7 +15,9 @@ import (
 // DELETE route for a product, a role or a drug schedule class in ANY non-test file of the three
 // modules' ports (the lifecycle is POST .../deactivate and .../reactivate), that the two schema
 // tables do not carry a soft-delete column again, that the product and role domain types hold no
-// deleted state, and that the company settings domain never removes a class from the list.
+// deleted state, that the batch domain and table carry none either (a batch is written off or
+// quarantined by a stock movement, never deleted), and that the company settings domain never
+// removes a class from the list.
 //
 // arch-test:no-negative-fixture — assertion target is the shipping route files and migrations.
 func TestArch_InactiveNotDeleted_NoDeleteRouteOnTheThreeResources(t *testing.T) {
@@ -40,12 +42,14 @@ func TestArch_InactiveNotDeleted_NoDeleteRouteOnTheThreeResources(t *testing.T) 
 		}
 	}
 	// The soft-delete flags the delete routes served stay dropped: the sqlc models are the schema.
-	models := map[string]string{
-		"internal/inventory/adapters/db/models.go": "InventoryProduct",
-		"internal/identity/adapters/db/models.go":  "IdentityRole",
+	models := [][2]string{
+		{"internal/inventory/adapters/db/models.go", "InventoryProduct"},
+		{"internal/inventory/adapters/db/models.go", "InventoryBatch"},
+		{"internal/identity/adapters/db/models.go", "IdentityRole"},
 	}
 	field := regexp.MustCompile(`(?m)^\s+(IsDeleted|DeletedAt|DeletedBy)\b`)
-	for rel, typ := range models {
+	for _, m := range models {
+		rel, typ := m[0], m[1]
 		body := mustReadFile(t, filepath.Join(root, rel))
 		loc := regexp.MustCompile(`(?s)type ` + typ + ` struct \{(.*?)\n\}`).FindStringSubmatch(body)
 		if loc == nil {
@@ -56,14 +60,14 @@ func TestArch_InactiveNotDeleted_NoDeleteRouteOnTheThreeResources(t *testing.T) 
 		}
 	}
 	// The domain types hold no deleted state (a field, a getter or a Delete / SoftDelete method).
-	deleted := regexp.MustCompile(`(?m)^\s+(deleted|deletedAt|deletedBy)\s|func \([a-z]+ \*?(Product|Role)\) (IsDeleted|DeletedAt|DeletedBy|Delete|SoftDelete)\(`)
-	for _, dir := range []string{"internal/inventory/domain/product", "internal/identity/domain/role"} {
+	deleted := regexp.MustCompile(`(?m)^\s+(deleted|deletedAt|deletedBy)\s|func \([a-z]+ \*?(Product|Role|Batch)\) (IsDeleted|DeletedAt|DeletedBy|Delete|SoftDelete)\(`)
+	for _, dir := range []string{"internal/inventory/domain/product", "internal/inventory/domain/batch", "internal/identity/domain/role"} {
 		for _, f := range goFiles(dir) {
 			if strings.Contains(f, "test") { // the producttest / roletest fakes are not the domain
 				continue
 			}
 			if m := deleted.FindString(mustReadFile(t, f)); m != "" {
-				t.Errorf("%s holds deleted state (%q): products and roles are made inactive, never deleted (ADR 0073)", f, strings.TrimSpace(m))
+				t.Errorf("%s holds deleted state (%q): products, roles and batches are never deleted (ADR 0073)", f, strings.TrimSpace(m))
 			}
 		}
 	}

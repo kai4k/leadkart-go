@@ -604,9 +604,6 @@ func handleLogStockMovement(log *slog.Logger, a app.Application) http.Handler {
 		case errors.Is(err, batch.ErrExpired):
 			writeError(w, http.StatusConflict, ErrCodeBatchExpired, err.Error())
 			return
-		case errors.Is(err, batch.ErrDeleted):
-			writeError(w, http.StatusConflict, ErrCodeConflict, "batch is deleted")
-			return
 		case errors.Is(err, batch.ErrConcurrencyConflict):
 			writeError(w, http.StatusConflict, ErrCodeConcurrencyConflict,
 				"batch was modified concurrently; retry")

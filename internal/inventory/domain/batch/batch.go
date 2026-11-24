@@ -147,9 +147,6 @@ var ErrInsufficientQuarantined = errs.New(errs.KindConflict, "batch", "insuffici
 // day: a batch cannot have been made tomorrow.
 var ErrManufactureDateInFuture = errs.New(errs.KindInvalidInput, "batch", "manufacture_date is in the future")
 
-// ErrDeleted — operation rejected on a soft-deleted batch.
-var ErrDeleted = errs.New(errs.KindConflict, "batch", "batch is deleted")
-
 // ErrConcurrencyConflict — the optimistic concurrency check failed:
 // another writer modified the batch between load + persist. Adapter
 // surfaces this; the application handler retries with the fresh row.
@@ -205,9 +202,6 @@ type Batch struct {
 	version                    int64
 	createdAt                  time.Time
 	updatedAt                  time.Time
-	deleted                    bool
-	deletedAt                  time.Time
-	deletedBy                  string
 	events                     []Event
 }
 
@@ -402,16 +396,6 @@ func (a Buckets) Add(o Buckets) Buckets {
 // surfaces as ErrConcurrencyConflict.
 func (b *Batch) Version() int64 { return b.version }
 
-// IsDeleted reports whether the batch has been soft-deleted.
-func (b *Batch) IsDeleted() bool { return b.deleted }
-
-// DeletedAt returns the soft-delete timestamp.
-func (b *Batch) DeletedAt() time.Time { return b.deletedAt }
-
-// DeletedBy returns the membership id (or operator id) that performed
-// the soft-delete.
-func (b *Batch) DeletedBy() string { return b.deletedBy }
-
 // CreatedAt returns the creation timestamp.
 func (b *Batch) CreatedAt() time.Time { return b.createdAt }
 
@@ -445,7 +429,6 @@ func (b *Batch) IsPastPrintedExpiry(today time.Time) bool {
 //     positive for count correction). Zero rejected.
 //
 // Rejections:
-//   - ErrDeleted              — batch is soft-deleted.
 //   - ErrExpired              — Inbound against an expired batch.
 //   - ErrInsufficientStock    — Outbound/Adjustment would drive on-hand below reserved.
 //   - ErrInsufficientAvailable — Reservation exceeds available (on-hand − reserved).
@@ -461,9 +444,6 @@ func (b *Batch) IsPastPrintedExpiry(today time.Time) bool {
 // StockMovement.New so the ledger row + the batch row share one moment
 // in audit / reconciliation queries.
 func (b *Batch) ApplyMovement(movement MovementType, quantity int64, now, today time.Time) error {
-	if b.deleted {
-		return fmt.Errorf("%w: %s", ErrDeleted, b.id)
-	}
 	if !movement.IsValid() {
 		return fmt.Errorf("%w: unknown movement type %q", ErrInvalid, movement)
 	}
@@ -574,28 +554,6 @@ func (b *Batch) applyQuarantineMovement(movement MovementType, quantity int64, t
 	return nil
 }
 
-// SoftDelete marks the batch deleted, recording who did it. Idempotent.
-//
-// CALLER INVARIANT (application layer): SoftDelete should be REJECTED
-// when quantity_on_hand > 0. The domain doesn't enforce that — the
-// SoftDeleteBatchHandler does (so the handler can return a friendly
-// 409 message rather than the bare invariant).
-func (b *Batch) SoftDelete(actorID membership.ID, now time.Time) error {
-	if b.deleted {
-		return nil
-	}
-	if actorID.IsZero() {
-		return fmt.Errorf("%w: actor_id required for audit", ErrInvalid)
-	}
-	now = now.UTC()
-	b.deleted = true
-	b.deletedAt = now
-	b.deletedBy = actorID.String()
-	b.updatedAt = now
-	b.version++
-	return nil
-}
-
 // ----- Persistence DTO ------------------------------------------------------
 
 // Snapshot is the persistence-layer projection consumed by [UnmarshalFromDB].
@@ -616,9 +574,6 @@ type Snapshot struct {
 	Version                    int64
 	CreatedAt                  time.Time
 	UpdatedAt                  time.Time
-	IsDeleted                  bool
-	DeletedAt                  time.Time
-	DeletedBy                  string
 }
 
 // UnmarshalFromDB re-hydrates a Batch from persistence. Repository-only.
@@ -641,9 +596,6 @@ func UnmarshalFromDB(s Snapshot) *Batch {
 		version:                    s.Version,
 		createdAt:                  s.CreatedAt,
 		updatedAt:                  s.UpdatedAt,
-		deleted:                    s.IsDeleted,
-		deletedAt:                  s.DeletedAt,
-		deletedBy:                  s.DeletedBy,
 	}
 }
 

@@ -107,7 +107,6 @@ LEFT   JOIN LATERAL (
            FROM   inventory.batches b
            WHERE  b.product_id = p.id
            AND    b.tenant_id  = p.tenant_id
-           AND    NOT b.is_deleted
        ) s ON true
 WHERE  p.id = sqlc.arg('id');
 
@@ -160,7 +159,6 @@ LEFT   JOIN LATERAL (
            FROM   inventory.batches b
            WHERE  b.product_id = p.id
            AND    b.tenant_id  = p.tenant_id
-           AND    NOT b.is_deleted
        ) s ON true
 WHERE  p.tenant_id = sqlc.arg('tenant_id')
 AND    (

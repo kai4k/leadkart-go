@@ -337,18 +337,6 @@ func TestApplyMovement_OutboundCannotShipReservedStock(t *testing.T) {
 	}
 }
 
-func TestApplyMovement_RejectsAfterSoftDelete(t *testing.T) {
-	t.Parallel()
-	b := freshBatch(t)
-	actor := membership.ID(ids.NewV7().String())
-	if err := b.SoftDelete(actor, fixedNow); err != nil {
-		t.Fatalf("SoftDelete: %v", err)
-	}
-	if err := b.ApplyMovement(batch.MovementInbound, 1, fixedNow, fixedNow); !errors.Is(err, batch.ErrDeleted) {
-		t.Fatalf("want ErrDeleted, got %v", err)
-	}
-}
-
 func TestApplyMovement_RejectsZeroQuantityForMutatingTypes(t *testing.T) {
 	t.Parallel()
 	b := freshBatch(t)
@@ -359,36 +347,6 @@ func TestApplyMovement_RejectsZeroQuantityForMutatingTypes(t *testing.T) {
 				t.Fatalf("%v: want ErrInvalid, got %v", tp, err)
 			}
 		})
-	}
-}
-
-func TestSoftDelete_IsIdempotent(t *testing.T) {
-	t.Parallel()
-	b := freshBatch(t)
-	actor := membership.ID(ids.NewV7().String())
-	if err := b.SoftDelete(actor, fixedNow); err != nil {
-		t.Fatalf("first SoftDelete: %v", err)
-	}
-	if !b.IsDeleted() {
-		t.Fatal("IsDeleted should be true")
-	}
-	if b.DeletedBy() != actor.String() {
-		t.Fatalf("DeletedBy: got %q want %q", b.DeletedBy(), actor.String())
-	}
-	pulled := b.PullEvents()
-	if err := b.SoftDelete(actor, fixedNow); err != nil {
-		t.Fatalf("second SoftDelete: %v", err)
-	}
-	if len(b.PullEvents()) != 0 {
-		t.Fatalf("second SoftDelete should emit no event (pulled-after-first: %d)", len(pulled))
-	}
-}
-
-func TestSoftDelete_RejectsZeroActor(t *testing.T) {
-	t.Parallel()
-	b := freshBatch(t)
-	if err := b.SoftDelete(membership.ID(""), fixedNow); !errors.Is(err, batch.ErrInvalid) {
-		t.Fatalf("want ErrInvalid, got %v", err)
 	}
 }
 

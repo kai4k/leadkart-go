@@ -26,38 +26,32 @@ SELECT id, product_id, tenant_id, batch_number,
        mrp_paise, purchase_price_paise,
        quantity_on_hand, version,
        created_at, updated_at,
-       is_deleted, deleted_at, deleted_by, created_by_membership_id,
+       created_by_membership_id,
        quantity_reserved, quantity_quarantined
 FROM   inventory.batches
-WHERE  id = $1
-AND    NOT is_deleted;
+WHERE  id = $1;
 
 -- name: LockBatchForUpdate :one
 -- Pessimistic row-level lock for the UpdateByID path. Concurrent
 -- callers block here until the holding tx commits/rolls back. Returns
--- ErrNoRows (→ batch.ErrNotFound) on missing or soft-deleted rows —
--- same visibility filter as GetBatchByID.
+-- ErrNoRows (→ batch.ErrNotFound) on a missing row.
 SELECT id
 FROM   inventory.batches
 WHERE  id = $1
-AND    NOT is_deleted
 FOR UPDATE;
 
 -- name: UpdateBatchWithVersionCheck :execrows
 -- Optimistic-concurrency UPDATE. Returns rows-affected so the adapter
--- can branch on 0 → ErrConcurrencyConflict. The `version = $11`
+-- can branch on 0 → ErrConcurrencyConflict. The `version_expected`
 -- predicate is the load-bearing concurrency token; `version + 1` ships
 -- the bumped value back.
 UPDATE inventory.batches
 SET    quantity_on_hand = $2,
        version          = $3,
        updated_at       = $4,
-       is_deleted       = $5,
-       deleted_at       = $6,
-       deleted_by       = $7,
-       batch_number     = $8,
-       manufacturer_name = $9,
-       manufacturing_licence_number = $10,
+       batch_number     = $5,
+       manufacturer_name = $6,
+       manufacturing_licence_number = $7,
        quantity_reserved = sqlc.arg(quantity_reserved),
        quantity_quarantined = sqlc.arg(quantity_quarantined)
 WHERE  id = $1
@@ -75,11 +69,10 @@ SELECT id, product_id, tenant_id, batch_number,
        mrp_paise, purchase_price_paise,
        quantity_on_hand, version,
        created_at, updated_at,
-       is_deleted, deleted_at, deleted_by, created_by_membership_id,
+       created_by_membership_id,
        quantity_reserved, quantity_quarantined
 FROM   inventory.batches
 WHERE  product_id = $1
-AND    NOT is_deleted
 AND    (sqlc.arg(include_expired)::boolean OR expiry_date >= sqlc.arg(min_sellable)::date)
 AND    (expiry_date, id) < (sqlc.arg(cursor_expiry_date)::date, sqlc.arg(cursor_id)::uuid)
 ORDER  BY expiry_date DESC, id DESC
@@ -100,11 +93,10 @@ SELECT id, product_id, tenant_id, batch_number,
        mrp_paise, purchase_price_paise,
        quantity_on_hand, version,
        created_at, updated_at,
-       is_deleted, deleted_at, deleted_by, created_by_membership_id,
+       created_by_membership_id,
        quantity_reserved, quantity_quarantined
 FROM   inventory.batches
 WHERE  product_id = $1
-AND    NOT is_deleted
 AND    quantity_on_hand - quantity_reserved - quantity_quarantined > 0
 AND    expiry_date >= sqlc.arg('min_sellable')::date
 ORDER  BY expiry_date ASC, id ASC;
@@ -123,7 +115,6 @@ JOIN   inventory.products p
     ON p.id        = b.product_id
    AND p.tenant_id = b.tenant_id
 WHERE  b.tenant_id = $1
-AND    NOT b.is_deleted
 AND    b.quantity_on_hand - b.quantity_quarantined > 0
 ORDER  BY b.expiry_date ASC, b.id ASC;
 
@@ -140,7 +131,6 @@ FROM   inventory.products p
 LEFT JOIN inventory.batches b
     ON  b.product_id = p.id
     AND b.tenant_id  = p.tenant_id
-    AND NOT b.is_deleted
     AND b.quantity_on_hand - b.quantity_quarantined > 0
     AND b.expiry_date >= sqlc.arg('min_sellable')::date
 WHERE  p.tenant_id = $1

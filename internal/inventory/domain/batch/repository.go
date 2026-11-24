@@ -15,11 +15,11 @@ import (
 var ErrNotFound = errs.New(errs.KindNotFound, "batch", "batch not found")
 
 // ErrBatchNumberTaken — adapter surfaces this on the partial-unique-
-// index violation for (product_id, batch_number) WHERE NOT is_deleted.
+// index violation for (product_id, batch_number).
 var ErrBatchNumberTaken = errs.New(errs.KindAlreadyExists, "batch", "batch_number already exists for this product")
 
 // ListFilter is the filter set the GET /v1/inventory/products/{id}/batches
-// endpoint surfaces. SoftDeleted batches are always excluded.
+// endpoint surfaces. A batch is never deleted (ADR 0073).
 type ListFilter struct {
 	// MinSellable is the one expiry bound (common/expiry.MinSellableExpiry): a
 	// batch is sellable exactly when its expiry_date >= MinSellable. Unless

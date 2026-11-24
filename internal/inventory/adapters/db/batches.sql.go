@@ -18,11 +18,10 @@ SELECT id, product_id, tenant_id, batch_number,
        mrp_paise, purchase_price_paise,
        quantity_on_hand, version,
        created_at, updated_at,
-       is_deleted, deleted_at, deleted_by, created_by_membership_id,
+       created_by_membership_id,
        quantity_reserved, quantity_quarantined
 FROM   inventory.batches
 WHERE  id = $1
-AND    NOT is_deleted
 `
 
 func (q *Queries) GetBatchByID(ctx context.Context, id pgtype.UUID) (InventoryBatch, error) {
@@ -43,9 +42,6 @@ func (q *Queries) GetBatchByID(ctx context.Context, id pgtype.UUID) (InventoryBa
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.IsDeleted,
-		&i.DeletedAt,
-		&i.DeletedBy,
 		&i.CreatedByMembershipID,
 		&i.QuantityReserved,
 		&i.QuantityQuarantined,
@@ -119,11 +115,10 @@ SELECT id, product_id, tenant_id, batch_number,
        mrp_paise, purchase_price_paise,
        quantity_on_hand, version,
        created_at, updated_at,
-       is_deleted, deleted_at, deleted_by, created_by_membership_id,
+       created_by_membership_id,
        quantity_reserved, quantity_quarantined
 FROM   inventory.batches
 WHERE  product_id = $1
-AND    NOT is_deleted
 AND    ($2::boolean OR expiry_date >= $3::date)
 AND    (expiry_date, id) < ($4::date, $5::uuid)
 ORDER  BY expiry_date DESC, id DESC
@@ -175,9 +170,6 @@ func (q *Queries) ListBatchesByProductPage(ctx context.Context, arg ListBatchesB
 			&i.Version,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.IsDeleted,
-			&i.DeletedAt,
-			&i.DeletedBy,
 			&i.CreatedByMembershipID,
 			&i.QuantityReserved,
 			&i.QuantityQuarantined,
@@ -201,7 +193,6 @@ JOIN   inventory.products p
     ON p.id        = b.product_id
    AND p.tenant_id = b.tenant_id
 WHERE  b.tenant_id = $1
-AND    NOT b.is_deleted
 AND    b.quantity_on_hand - b.quantity_quarantined > 0
 ORDER  BY b.expiry_date ASC, b.id ASC
 `
@@ -262,11 +253,10 @@ SELECT id, product_id, tenant_id, batch_number,
        mrp_paise, purchase_price_paise,
        quantity_on_hand, version,
        created_at, updated_at,
-       is_deleted, deleted_at, deleted_by, created_by_membership_id,
+       created_by_membership_id,
        quantity_reserved, quantity_quarantined
 FROM   inventory.batches
 WHERE  product_id = $1
-AND    NOT is_deleted
 AND    quantity_on_hand - quantity_reserved - quantity_quarantined > 0
 AND    expiry_date >= $2::date
 ORDER  BY expiry_date ASC, id ASC
@@ -309,9 +299,6 @@ func (q *Queries) ListFefoBatchesForProduct(ctx context.Context, arg ListFefoBat
 			&i.Version,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.IsDeleted,
-			&i.DeletedAt,
-			&i.DeletedBy,
 			&i.CreatedByMembershipID,
 			&i.QuantityReserved,
 			&i.QuantityQuarantined,
@@ -333,7 +320,6 @@ FROM   inventory.products p
 LEFT JOIN inventory.batches b
     ON  b.product_id = p.id
     AND b.tenant_id  = p.tenant_id
-    AND NOT b.is_deleted
     AND b.quantity_on_hand - b.quantity_quarantined > 0
     AND b.expiry_date >= $2::date
 WHERE  p.tenant_id = $1
@@ -393,14 +379,12 @@ const lockBatchForUpdate = `-- name: LockBatchForUpdate :one
 SELECT id
 FROM   inventory.batches
 WHERE  id = $1
-AND    NOT is_deleted
 FOR UPDATE
 `
 
 // Pessimistic row-level lock for the UpdateByID path. Concurrent
 // callers block here until the holding tx commits/rolls back. Returns
-// ErrNoRows (→ batch.ErrNotFound) on missing or soft-deleted rows —
-// same visibility filter as GetBatchByID.
+// ErrNoRows (→ batch.ErrNotFound) on a missing row.
 func (q *Queries) LockBatchForUpdate(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
 	row := q.db.QueryRow(ctx, lockBatchForUpdate, id)
 	var id_2 pgtype.UUID
@@ -413,16 +397,13 @@ UPDATE inventory.batches
 SET    quantity_on_hand = $2,
        version          = $3,
        updated_at       = $4,
-       is_deleted       = $5,
-       deleted_at       = $6,
-       deleted_by       = $7,
-       batch_number     = $8,
-       manufacturer_name = $9,
-       manufacturing_licence_number = $10,
-       quantity_reserved = $11,
-       quantity_quarantined = $12
+       batch_number     = $5,
+       manufacturer_name = $6,
+       manufacturing_licence_number = $7,
+       quantity_reserved = $8,
+       quantity_quarantined = $9
 WHERE  id = $1
-AND    version = $13
+AND    version = $10
 `
 
 type UpdateBatchWithVersionCheckParams struct {
@@ -430,9 +411,6 @@ type UpdateBatchWithVersionCheckParams struct {
 	QuantityOnHand             int64
 	Version                    int64
 	UpdatedAt                  pgtype.Timestamptz
-	IsDeleted                  bool
-	DeletedAt                  pgtype.Timestamptz
-	DeletedBy                  *string
 	BatchNumber                string
 	ManufacturerName           string
 	ManufacturingLicenceNumber string
@@ -442,7 +420,7 @@ type UpdateBatchWithVersionCheckParams struct {
 }
 
 // Optimistic-concurrency UPDATE. Returns rows-affected so the adapter
-// can branch on 0 → ErrConcurrencyConflict. The `version = $11`
+// can branch on 0 → ErrConcurrencyConflict. The `version_expected`
 // predicate is the load-bearing concurrency token; `version + 1` ships
 // the bumped value back.
 func (q *Queries) UpdateBatchWithVersionCheck(ctx context.Context, arg UpdateBatchWithVersionCheckParams) (int64, error) {
@@ -451,9 +429,6 @@ func (q *Queries) UpdateBatchWithVersionCheck(ctx context.Context, arg UpdateBat
 		arg.QuantityOnHand,
 		arg.Version,
 		arg.UpdatedAt,
-		arg.IsDeleted,
-		arg.DeletedAt,
-		arg.DeletedBy,
 		arg.BatchNumber,
 		arg.ManufacturerName,
 		arg.ManufacturingLicenceNumber,

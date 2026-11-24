@@ -52,7 +52,7 @@ Deactivate keeps every one of those rules and loosens none:
 
 * The web: remove the three delete actions; add Deactivate / Reactivate; add the status chips and `status=` filter to the three lists; rename `identity.roles.delete` to `identity.roles.manage` in its permission catalogue; `RoleDto.is_active`, `ScheduleClassDto.active`; `PATCH /inventory/products` no longer takes `is_active`. The route table is in `docs/BFF_API_CHANGES.md` section 4e.
 * Quotations already follow this: a draft is cancelled with `POST /orders/quotations/{id}/reject`, which keeps the row (state `rejected`); nothing to build.
-* `inventory.batches` keeps its soft delete: batches were not part of the ruling and stock is corrected by movements.
+* Batches are never deleted either (controller ruling on the owner's never-delete rule): `Batch.SoftDelete` (called only by domain tests; no handler, route or job ever used it), `ErrDeleted` and the `inventory.batches` columns `is_deleted`, `deleted_at`, `deleted_by` are removed (migration 20261125000007; a batch deleted earlier is visible again, a duplicate batch number takes its id). Stock is corrected by movements: write-off, quarantine, adjustment. The arch gate covers the batch table model and domain type.
 * A stored company policy written before this change has no `active` on its drug schedule classes and would read every class as inactive; there is no live data, so no shim was written.
 
 ## Fitness function

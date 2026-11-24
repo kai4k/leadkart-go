@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
@@ -76,7 +75,7 @@ func (r *BatchRepository) UpdateByID(ctx context.Context, tenantID tenant.ID, id
 // lockBatchRowForUpdate acquires SELECT ... FOR UPDATE on the batches row.
 // Concurrent callers block until this tx commits or rolls back; Postgres
 // releases the lock on tx end or connection drop automatically.
-// Returns batch.ErrNotFound for a missing or soft-deleted row.
+// Returns batch.ErrNotFound for a missing row.
 func (r *BatchRepository) lockBatchRowForUpdate(ctx context.Context, tx pgx.Tx, id batch.ID) error {
 	bid, err := uuid.Parse(id.String())
 	if err != nil {
@@ -295,12 +294,6 @@ func persistBatchState(ctx context.Context, q *db.Queries, b *batch.Batch, expec
 	if err != nil {
 		return 0, fmt.Errorf("batch repo: parse id: %w", err)
 	}
-	var deletedAt pgtype.Timestamptz
-	var deletedBy *string
-	if b.IsDeleted() {
-		deletedAt = pgconv.PgRequiredTimestamp(b.DeletedAt())
-		deletedBy = pgconv.ZeroToNil(b.DeletedBy())
-	}
 	rowsAffected, err := q.UpdateBatchWithVersionCheck(ctx, db.UpdateBatchWithVersionCheckParams{
 		ID:                         pgconv.PgUUID(bid),
 		QuantityOnHand:             b.QuantityOnHand(),
@@ -308,9 +301,6 @@ func persistBatchState(ctx context.Context, q *db.Queries, b *batch.Batch, expec
 		QuantityQuarantined:        b.QuantityQuarantined(),
 		Version:                    b.Version(),
 		UpdatedAt:                  pgconv.PgRequiredTimestamp(b.UpdatedAt()),
-		IsDeleted:                  b.IsDeleted(),
-		DeletedAt:                  deletedAt,
-		DeletedBy:                  deletedBy,
 		BatchNumber:                b.BatchNumber(),
 		ManufacturerName:           b.ManufacturerName(),
 		ManufacturingLicenceNumber: b.ManufacturingLicenceNumber(),
@@ -346,10 +336,6 @@ func rowToBatch(row db.InventoryBatch) (*batch.Batch, error) {
 	bid := batch.ID(pgconv.UUIDFromPg(row.ID).String())
 	pid := product.ID(pgconv.UUIDFromPg(row.ProductID).String())
 	tid := tenant.ID(pgconv.UUIDFromPg(row.TenantID).String())
-	deletedBy := ""
-	if row.DeletedBy != nil {
-		deletedBy = *row.DeletedBy
-	}
 	return batch.UnmarshalFromDB(batch.Snapshot{
 		ID:                         bid,
 		ProductID:                  pid,
@@ -367,13 +353,10 @@ func rowToBatch(row db.InventoryBatch) (*batch.Batch, error) {
 		Version:                    row.Version,
 		CreatedAt:                  pgconv.TimeFromPg(row.CreatedAt),
 		UpdatedAt:                  pgconv.TimeFromPg(row.UpdatedAt),
-		IsDeleted:                  row.IsDeleted,
-		DeletedAt:                  pgconv.TimeFromPg(row.DeletedAt),
-		DeletedBy:                  deletedBy,
 	}), nil
 }
 
-const constraintBatchNumber = "uq_batches_product_number_live"
+const constraintBatchNumber = "uq_batches_product_number"
 
 // isBatchNumberUniqueViolation reports whether err is a unique-constraint
 // violation on the (product_id, batch_number) partial index.

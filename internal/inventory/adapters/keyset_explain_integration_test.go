@@ -34,7 +34,7 @@ import (
 
 // TestKeysetBatchesPage_UsesIndexUnderRLS asserts the per-product keyset
 // query plans as an Index Scan against idx_batches_product
-// (product_id, expiry_date DESC, id DESC) WHERE NOT is_deleted —
+// (product_id, expiry_date DESC, id DESC) —
 // ADR 0061 amendment 1 (finding M7).
 func TestKeysetBatchesPage_UsesIndexUnderRLS(t *testing.T) {
 	t.Parallel()
@@ -88,10 +88,9 @@ func TestKeysetBatchesPage_UsesIndexUnderRLS(t *testing.T) {
 		SELECT id, product_id, tenant_id, batch_number, manufacture_date, expiry_date,
 		       manufacturer_name, manufacturing_licence_number,
 		       mrp_paise, purchase_price_paise, quantity_on_hand, version,
-		       created_at, updated_at, is_deleted, deleted_at, deleted_by
+		       created_at, updated_at
 		FROM   inventory.batches
-		WHERE  NOT is_deleted
-		  AND  product_id = $1::uuid
+		WHERE  product_id = $1::uuid
 		  AND  (expiry_date, id) < ($2::date, $3::uuid)
 		ORDER  BY expiry_date DESC, id DESC
 		LIMIT  51
@@ -108,7 +107,7 @@ func TestKeysetBatchesPage_UsesIndexUnderRLS(t *testing.T) {
 
 	// Guard: any index scan is acceptable; the bug class is "planner
 	// ignored every index". At 200 rows the planner may pick
-	// uq_batches_product_number_live (also product_id-leading) instead
+	// uq_batches_product_number (also product_id-leading) instead
 	// of idx_batches_product — both are correct.
 	if !strings.Contains(planText, "Index Scan") &&
 		!strings.Contains(planText, "Bitmap Index Scan") {

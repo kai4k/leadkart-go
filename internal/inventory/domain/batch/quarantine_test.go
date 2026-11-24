@@ -92,8 +92,8 @@ func TestWriteOff_RemovesQuarantinedUnitsAndKeepsTheRow(t *testing.T) {
 	if err := b.ApplyMovement(batch.MovementWriteOff, 4, fixedNow, fixedNow); err != nil {
 		t.Fatal(err)
 	}
-	if b.QuantityOnHand() != 46 || b.QuantityQuarantined() != 6 || b.IsDeleted() {
-		t.Fatalf("on-hand %d quarantined %d deleted %v: a write-off is a state change, never a delete", b.QuantityOnHand(), b.QuantityQuarantined(), b.IsDeleted())
+	if b.QuantityOnHand() != 46 || b.QuantityQuarantined() != 6 {
+		t.Fatalf("on-hand %d quarantined %d: a write-off is a state change, never a delete", b.QuantityOnHand(), b.QuantityQuarantined())
 	}
 	if !batch.MovementWriteOff.IsMutating() {
 		t.Fatal("a write-off changes on-hand")
@@ -168,8 +168,8 @@ func TestReturnToMaker_TakesQuarantinedUnitsOutAndIsAllowedPastExpiry(t *testing
 	if err := b.ApplyMovement(batch.MovementReturnToMaker, 7, after, after); err != nil {
 		t.Fatalf("return to the maker past expiry: %v", err)
 	}
-	if b.QuantityOnHand() != 23 || b.QuantityQuarantined() != 5 || b.IsDeleted() {
-		t.Fatalf("on-hand %d quarantined %d deleted %v", b.QuantityOnHand(), b.QuantityQuarantined(), b.IsDeleted())
+	if b.QuantityOnHand() != 23 || b.QuantityQuarantined() != 5 {
+		t.Fatalf("on-hand %d quarantined %d", b.QuantityOnHand(), b.QuantityQuarantined())
 	}
 	if !batch.MovementReturnToMaker.IsValid() || !batch.MovementReturnToMaker.IsMutating() {
 		t.Fatal("return_to_maker is a real, on-hand-changing movement type")

@@ -53,10 +53,20 @@ func TestMigration_InactiveNotDeletedKeepsDeletedDuplicates(t *testing.T) {
 			VALUES ($1, $2, $3, 'Product', 'Tablet', '10', '3004', 1200, $4, $4, $5, CASE WHEN $5 THEN $4::timestamptz END)`, id, tenantID, sku, at, deleted)
 		return id
 	}
+	batch := func(productID, number string, deleted bool) string {
+		id := uuid.NewString()
+		exec(ctx, t, db, `INSERT INTO inventory.batches (id, product_id, tenant_id, batch_number, manufacture_date, expiry_date, manufacturer_name,
+			manufacturing_licence_number, mrp_paise, purchase_price_paise, quantity_on_hand, created_at, updated_at, is_deleted, deleted_at)
+			VALUES ($1, $2, $3, $4, '2025-01-01', '2026-10-31', 'Acme', 'ML-1', 100, 50, 0, $5, $5, $6, CASE WHEN $6 THEN $5::timestamptz END)`, id, productID, tenantID, number, at, deleted)
+		return id
+	}
 	liveRole, goneRole := role("Sales", false), role("Sales", true)
 	oldA, oldB := role("Old", true), role("Old", true)
 	liveSKU, goneSKU := product("DUP-1", false), product("DUP-1", true)
 	delA, delB := product("DEL-2", true), product("DEL-2", true)
+
+	batchProduct := product("BATCH-OWNER", false)
+	liveBatch, goneBatch := batch(batchProduct, "LOT-1", false), batch(batchProduct, "LOT-1", true)
 
 	if err := goose.UpContext(ctx, db, dir); err != nil {
 		t.Fatalf("up over soft-deleted duplicates: %v", err)
@@ -90,5 +100,12 @@ func TestMigration_InactiveNotDeletedKeepsDeletedDuplicates(t *testing.T) {
 		if got := str(`SELECT is_active::text FROM inventory.products WHERE id = $1`, id); got != "false" {
 			t.Errorf("deleted product %s is_active = %s, want false", id, got)
 		}
+	}
+	// Batches (ADR 0073): the same, and a batch that was deleted is visible again (never hidden).
+	if got := str(`SELECT batch_number FROM inventory.batches WHERE id = $1`, liveBatch); got != "LOT-1" {
+		t.Errorf("the live batch number became %q", got)
+	}
+	if got := str(`SELECT batch_number FROM inventory.batches WHERE id = $1`, goneBatch); !strings.HasSuffix(got, "~"+goneBatch) {
+		t.Errorf("deleted batch %s is numbered %q, want its id appended", goneBatch, got)
 	}
 }

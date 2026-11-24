@@ -13,8 +13,8 @@
 //     not a mock-with-canned-responses. It honors every contract
 //     guarantee: ErrBatchNumberTaken on duplicate live (product_id,
 //     batch_number) per the partial unique index
-//     `uq_batches_product_number_live`, ErrNotFound on missing /
-//     soft-deleted GetByID.
+//     `uq_batches_product_number`, ErrNotFound on missing /
+//     GetByID.
 //   - Optimistic-concurrency drill: [FakeRepository.ConflictsBeforeSuccess]
 //     lets a test simulate the optimistic-version UPDATE returning 0
 //     rows ([batch.ErrConcurrencyConflict]) the first N commits before
@@ -53,9 +53,7 @@ import (
 // internal map is initialised. Single-test-owner: do NOT share one
 // instance across tests; each test creates its own.
 type FakeRepository struct {
-	// Batches is the live + soft-deleted batch index by ID. Soft-
-	// deleted rows stay in the map so re-create-with-same-ID flows
-	// work; GetByID filters them.
+	// Batches is the batch index by ID. A batch is never deleted (ADR 0073).
 	Batches map[batch.ID]*batch.Batch
 
 	// AddErr, when non-nil, is returned by Add INSTEAD of the normal
@@ -97,10 +95,8 @@ func NewFakeRepository() *FakeRepository {
 var _ batch.Repository = (*FakeRepository)(nil)
 
 // Add persists a brand-new Batch. Returns [batch.ErrBatchNumberTaken]
-// when a LIVE row with the same (product_id, batch_number) already
-// exists — mirrors the partial unique index
-// `uq_batches_product_number_live` semantics (soft-deleted homonyms
-// do NOT block). Drains aggregate events via PullEvents to match the
+// when a row with the same (product_id, batch_number) already
+// exists — mirrors the unique index `uq_batches_product_number`. Drains aggregate events via PullEvents to match the
 // adapter's outbox-drain on commit.
 func (r *FakeRepository) Add(_ context.Context, b *batch.Batch) error {
 
@@ -109,7 +105,7 @@ func (r *FakeRepository) Add(_ context.Context, b *batch.Batch) error {
 		return r.AddErr
 	}
 	for _, existing := range r.Batches {
-		if existing.ProductID() == b.ProductID() && existing.BatchNumber() == b.BatchNumber() && !existing.IsDeleted() {
+		if existing.ProductID() == b.ProductID() && existing.BatchNumber() == b.BatchNumber() {
 			return batch.ErrBatchNumberTaken
 		}
 	}
@@ -164,13 +160,12 @@ func (r *FakeRepository) UpdateByID(_ context.Context, tenantID tenant.ID, id ba
 	return nil
 }
 
-// GetByID returns the LIVE batch (scoped to tenantID) or
-// [batch.ErrNotFound]. Soft-deleted rows + batches in other tenants
-// are hidden — mirrors the SQL adapter's RLS-bound behavior.
+// GetByID returns the batch (scoped to tenantID) or
+// [batch.ErrNotFound]. Batches in other tenants are hidden — mirrors the SQL adapter's RLS-bound behavior.
 func (r *FakeRepository) GetByID(_ context.Context, tenantID tenant.ID, id batch.ID) (*batch.Batch, error) {
 
 	b, ok := r.Batches[id]
-	if !ok || b.IsDeleted() {
+	if !ok {
 		return nil, batch.ErrNotFound
 	}
 	if b.TenantID() != tenantID {
@@ -200,9 +195,6 @@ func (r *FakeRepository) ListByProductPage(_ context.Context, _ tenant.ID, _ pro
 func (r *FakeRepository) ListFefoForProduct(_ context.Context, tenantID tenant.ID, productID product.ID, minSellable time.Time) ([]*batch.Batch, error) {
 	out := make([]*batch.Batch, 0)
 	for _, b := range r.Batches {
-		if b.IsDeleted() {
-			continue
-		}
 		if b.TenantID() != tenantID {
 			continue
 		}
