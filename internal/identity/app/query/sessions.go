@@ -23,6 +23,9 @@ import (
 // PersonID comes from the verified JWT Subject; HTTP port sets it after RequireAuth.
 type ListSessionsQuery struct {
 	PersonID person.ID
+	// CurrentFamilyID is the session the caller's access token was minted for (its
+	// family_id claim). Empty when the token does not name one: no row is then current.
+	CurrentFamilyID string
 }
 
 // SessionView is the wire-shape of a single active session.
@@ -34,7 +37,7 @@ type SessionView struct {
 	TenantID    string
 	CreatedAt   time.Time
 	LastUsedAt  time.Time
-	IsCurrent   bool // populated when caller marks the current family
+	IsCurrent   bool // true for the row of the caller's own session (ListSessionsQuery.CurrentFamilyID)
 }
 
 // ListSessionsHandler is the read-side handler.
@@ -68,6 +71,7 @@ func (h ListSessionsHandler) Handle(ctx context.Context, q ListSessionsQuery) ([
 			TenantID:    f.TenantID().String(),
 			CreatedAt:   f.CreatedAt().UTC(),
 			LastUsedAt:  f.LastUsedAt().UTC(),
+			IsCurrent:   q.CurrentFamilyID != "" && f.ID().String() == q.CurrentFamilyID,
 		})
 	}
 	return out, nil

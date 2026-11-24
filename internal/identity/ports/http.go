@@ -703,7 +703,8 @@ func handleListSessions(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		views, err := a.Queries.ListSessions.Handle(r.Context(), query.ListSessionsQuery{
-			PersonID: person.ID(c.Subject),
+			PersonID:        person.ID(c.Subject),
+			CurrentFamilyID: c.FamilyID,
 		})
 		if err != nil {
 			log.ErrorContext(r.Context(), "list sessions failed", "err", err)
@@ -718,6 +719,7 @@ func handleListSessions(log *slog.Logger, a app.Application) http.Handler {
 				DeviceLabel: v.DeviceLabel,
 				CreatedAt:   v.CreatedAt,
 				LastUsedAt:  v.LastUsedAt,
+				IsCurrent:   v.IsCurrent,
 			})
 		}
 		writeJSON(w, http.StatusOK, out)

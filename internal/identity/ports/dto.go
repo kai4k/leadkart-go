@@ -633,6 +633,8 @@ type SessionDto struct {
 	DeviceLabel string    `json:"device_label"`
 	CreatedAt   time.Time `json:"created_at"`
 	LastUsedAt  time.Time `json:"last_used_at"`
+	// IsCurrent is true on the caller's own session (the one its access token was minted for).
+	IsCurrent bool `json:"is_current"`
 }
 
 // ListSessionsResponse — GET /api/v1/auth/sessions.

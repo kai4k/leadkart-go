@@ -3,6 +3,7 @@ package query_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -74,6 +75,46 @@ func TestListSessions_ReturnsViews(t *testing.T) {
 	}
 	if views[0].CreatedAt.IsZero() {
 		t.Error("CreatedAt zero")
+	}
+}
+
+func TestListSessions_MarksOnlyTheCallersOwnSession(t *testing.T) {
+	t.Parallel()
+	fixedAt := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
+	mk := func(id string) *refreshtoken.Family {
+		hash, err := refreshtoken.NewTokenHash(strings.Repeat("ab", 32))
+		if err != nil {
+			t.Fatalf("NewTokenHash: %v", err)
+		}
+		f, err := refreshtoken.NewFamily(refreshtoken.FamilyID(id), person.ID("p1"),
+			tenant.ID("22222222-2222-2222-2222-222222222222"), "dev", hash, 14*24*time.Hour, fixedAt)
+		if err != nil {
+			t.Fatalf("NewFamily: %v", err)
+		}
+		return f
+	}
+	const a, b = "11111111-1111-1111-1111-111111111111", "33333333-3333-3333-3333-333333333333"
+	h := query.NewListSessionsHandler(&stubFamilyRepo{families: []*refreshtoken.Family{mk(a), mk(b)}})
+
+	for _, c := range []struct {
+		name, current string
+		want          []bool
+	}{
+		{"first is current", a, []bool{true, false}},
+		{"second is current", b, []bool{false, true}},
+		{"token names no session", "", []bool{false, false}},
+		{"token names a session not in the list", "99999999-9999-9999-9999-999999999999", []bool{false, false}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			views, err := h.Handle(t.Context(), query.ListSessionsQuery{PersonID: person.ID("p1"), CurrentFamilyID: c.current})
+			if err != nil {
+				t.Fatalf("Handle: %v", err)
+			}
+			if len(views) != 2 || views[0].IsCurrent != c.want[0] || views[1].IsCurrent != c.want[1] {
+				t.Fatalf("IsCurrent = %v %v, want %v", views[0].IsCurrent, views[1].IsCurrent, c.want)
+			}
+		})
 	}
 }
 

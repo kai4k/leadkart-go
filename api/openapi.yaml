@@ -5325,13 +5325,16 @@ components:
     # ===== Sessions ====================================================
     SessionDto:
       type: object
-      required: [family_id, tenant_id, device_label, created_at, last_used_at]
+      required: [family_id, tenant_id, device_label, created_at, last_used_at, is_current]
       properties:
         family_id:    { type: string, format: uuid }
         tenant_id:    { type: string, format: uuid }
         device_label: { type: string }
         created_at:   { type: string, format: date-time }
         last_used_at: { type: string, format: date-time }
+        is_current:
+          type: boolean
+          description: True on the caller's own session, the one the access token was minted for (its `family_id` claim); false on every other row, and on every row when the token does not name a session. Label it "this device" and do not offer Revoke on it.
 
     ListSessionsResponse:
       type: object

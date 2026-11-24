@@ -76,3 +76,52 @@ func TestE2E_RevokeSession_OwnIsIdempotent204_UnknownAndForeignAre404(t *testing
 		t.Fatalf("another person's session after the probes: refresh %d, want 200", st)
 	}
 }
+
+// GET /auth/sessions marks the caller's own session (is_current) so the web can label it and
+// not offer Revoke on it: the token of each of two logins sees exactly its own row marked,
+// and the id comes from the token's family_id claim, never from the request.
+func TestE2E_ListSessions_MarksTheCallersOwnSession(t *testing.T) {
+	f := newE2EFixture(t)
+	reg := f.registerAndLogin(t, "sesscur")
+	second := f.loginPair(t, reg.Email, reg.Password)
+
+	list := func(token string) map[string]bool {
+		t.Helper()
+		r := f.authedJSON(t, http.MethodGet, "/api/v1/auth/sessions", token, nil)
+		if r.status != http.StatusOK {
+			t.Fatalf("list sessions: %d %s", r.status, r.body)
+		}
+		var raw struct {
+			Sessions []map[string]any `json:"sessions"`
+		}
+		if err := json.Unmarshal(r.body, &raw); err != nil {
+			t.Fatalf("decode sessions: %v", err)
+		}
+		out := map[string]bool{}
+		for _, s := range raw.Sessions {
+			cur, present := s["is_current"].(bool)
+			if !present {
+				t.Fatalf("session row has no boolean is_current: %v", s)
+			}
+			out[s["family_id"].(string)] = cur
+		}
+		return out
+	}
+	currentOf := func(rows map[string]bool) (cur []string) {
+		for id, c := range rows {
+			if c {
+				cur = append(cur, id)
+			}
+		}
+		return cur
+	}
+
+	firstView, secondView := list(reg.AccessToken), list(second.AccessToken)
+	if len(firstView) != 2 || len(secondView) != 2 {
+		t.Fatalf("want 2 sessions, got %d and %d", len(firstView), len(secondView))
+	}
+	a, b := currentOf(firstView), currentOf(secondView)
+	if len(a) != 1 || len(b) != 1 || a[0] == b[0] {
+		t.Fatalf("each token must mark exactly its own, different, session: %v vs %v", a, b)
+	}
+}
