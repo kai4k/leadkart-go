@@ -162,7 +162,8 @@ COMMENT ON TABLE crm.reminders IS
 -- +goose Down
 -- +goose StatementBegin
 
-ALTER TABLE crm.crm_leads DROP CONSTRAINT IF EXISTS uq_crm_leads_id_tenant;
+-- The table first: its foreign key depends on the unique constraint below.
 DROP TABLE IF EXISTS crm.reminders CASCADE;
+ALTER TABLE crm.crm_leads DROP CONSTRAINT IF EXISTS uq_crm_leads_id_tenant;
 
 -- +goose StatementEnd
