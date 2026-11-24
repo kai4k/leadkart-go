@@ -14,8 +14,8 @@ import (
 // when no row of the tenant matches the supplied identifier.
 var ErrNotFound = errs.New(errs.KindNotFound, "role", "role not found")
 
-// ErrNameTaken is returned by [Repository.Add] when a Role with the
-// same (tenant_id, name) already exists, inactive or not. The DB-level unique
+// ErrNameTaken is returned by [Repository.Add] / a rename / a reactivation when an ACTIVE Role with the
+// same (tenant_id, name) already exists (an inactive role frees its name, ADR 0073 addendum). The DB-level unique
 // index `uq_roles_tenant_name` raises 23505;
 // repos translate via [pg.SQLStateUniqueViolation] mapping.
 var ErrNameTaken = errs.New(errs.KindAlreadyExists, "role", "role name already taken in this tenant")
@@ -41,7 +41,7 @@ type Repository interface {
 	// aggregate's PullEvents are drained inside the same transaction
 	// and appended to the outbox table per ADR 0004 + ADR 0008.
 	//
-	// Returns [ErrNameTaken] if a Role (active or inactive) with the same (tenant_id,
+	// Returns [ErrNameTaken] if an ACTIVE Role with the same (tenant_id,
 	// name) already exists. SQLSTATE 23505 from the partial unique
 	// index is translated by the adapter.
 	Add(ctx context.Context, r *Role) error
@@ -62,7 +62,8 @@ type Repository interface {
 	GetByID(ctx context.Context, tenantID tenant.ID, id ID) (*Role, error)
 
 	// GetByTenantAndName returns the role (any status) with the given name
-	// in the given tenant, or [ErrNotFound]. Used by [DefaultRoleCatalog]
+	// in the given tenant, or [ErrNotFound]. The ACTIVE holder of the name comes first, then the
+	// newest inactive one (names are unique among active roles only). Used by [DefaultRoleCatalog]
 	// seeding (Task 19) for re-seed detection + admin "lookup-by-name".
 	GetByTenantAndName(ctx context.Context, tenantID tenant.ID, name string) (*Role, error)
 

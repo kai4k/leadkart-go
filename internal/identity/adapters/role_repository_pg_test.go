@@ -243,9 +243,28 @@ func TestRoleRepository_UpdateByID_Deactivate_KeepsTheRowAndDropsItFromTheResolv
 	if live, err := roles.GetByIDs(ctx, tn.ID(), []role.ID{r.ID()}); err != nil || len(live) != 0 {
 		t.Fatalf("GetByIDs of an inactive role: %v %d rows, want 0", err, len(live))
 	}
-	// The name stays taken: a role is never deleted, so its name is not freed.
+	// The name is free (ADR 0073 addendum): a new active role may take it, and then the old one cannot
+	// come back (409 role_name_taken at the HTTP edge), nor can a second active one be added.
+	replacement := newRole(t, tn.ID(), "Sales")
+	if err := roles.Add(ctx, replacement); err != nil {
+		t.Fatalf("Add with an inactive role's name: %v, want success", err)
+	}
 	if err := roles.Add(ctx, newRole(t, tn.ID(), "Sales")); !errors.Is(err, role.ErrNameTaken) {
-		t.Fatalf("Add with an inactive role's name: %v, want ErrNameTaken", err)
+		t.Fatalf("Add with an active role's name: %v, want ErrNameTaken", err)
+	}
+	if err := roles.UpdateByID(ctx, tn.ID(), r.ID(), func(loaded *role.Role) (bool, error) {
+		return true, loaded.Activate("admin@example.test", time.Now().UTC())
+	}); !errors.Is(err, role.ErrNameTaken) {
+		t.Fatalf("reactivate over a taken name: %v, want ErrNameTaken", err)
+	}
+	if got, err := roles.GetByTenantAndName(ctx, tn.ID(), "Sales"); err != nil || got.ID() != replacement.ID() {
+		t.Fatalf("GetByTenantAndName: %v %v, want the active holder", got, err)
+	}
+	// Free the name again, then the old one can come back.
+	if err := roles.UpdateByID(ctx, tn.ID(), replacement.ID(), func(loaded *role.Role) (bool, error) {
+		return true, loaded.Deactivate("admin@example.test", time.Now().UTC())
+	}); err != nil {
+		t.Fatalf("deactivate replacement: %v", err)
 	}
 
 	if err := roles.UpdateByID(ctx, tn.ID(), r.ID(), func(loaded *role.Role) (bool, error) {

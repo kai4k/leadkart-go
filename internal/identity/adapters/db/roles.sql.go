@@ -44,6 +44,8 @@ SELECT id, tenant_id, name, is_system_default, is_super_admin,
 FROM   identity.roles
 WHERE  tenant_id = $1
   AND  name      = $2
+ORDER  BY is_active DESC, created_at DESC, id DESC
+LIMIT  1
 `
 
 type GetRoleByTenantAndNameParams struct {
@@ -52,8 +54,8 @@ type GetRoleByTenantAndNameParams struct {
 }
 
 // Used by DefaultRoleCatalog seeding (Task 19) to detect re-seeds and
-// by RoleRepository for "lookup-by-name" admin flows. Any status: a role name is held by
-// inactive roles too (ADR 0073).
+// by RoleRepository for "lookup-by-name" admin flows. Any status, the ACTIVE holder first (a name
+// is unique among active roles only, ADR 0073 addendum), then the newest inactive one.
 func (q *Queries) GetRoleByTenantAndName(ctx context.Context, arg GetRoleByTenantAndNameParams) (IdentityRole, error) {
 	row := q.db.QueryRow(ctx, getRoleByTenantAndName, arg.TenantID, arg.Name)
 	var i IdentityRole

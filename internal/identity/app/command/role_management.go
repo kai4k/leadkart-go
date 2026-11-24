@@ -489,6 +489,9 @@ func (h ReactivateRoleHandler) Handle(ctx context.Context, cmd ChangeRoleStatusC
 		if err := decide(r, holders.set); err != nil {
 			return err
 		}
+		// A name is unique among ACTIVE roles only (ADR 0073 addendum): if a newer role took it while
+		// this one was inactive, the repository refuses the write with [role.ErrNameTaken] (the partial
+		// unique index decides, race-free), which becomes 409 role_name_taken.
 		return r.Activate(cmd.ChangedBy, now)
 	})
 	return translateAuthorityWrite("reactivate_role", err)

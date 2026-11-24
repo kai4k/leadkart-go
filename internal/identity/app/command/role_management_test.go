@@ -511,3 +511,30 @@ func TestReactivateRole_AConferralNeedsADurableHold(t *testing.T) {
 		})
 	}
 }
+
+// Owner ruling 2026-11-25 (ADR 0073 addendum): a deactivated role frees its name; bringing the old
+// one back while a newer active role holds the name is a name conflict, not a raw unique violation.
+func TestRoleNames_AreUniqueAmongActiveRolesOnly(t *testing.T) {
+	t.Parallel()
+	w := newAuthzWorld(t)
+	h := w.roleHandlers()
+	ctx := t.Context()
+	admin := w.adminActor(t)
+
+	old := w.customRole(t, "Area Manager", 60)
+	if err := h.del.Handle(ctx, command.ChangeRoleStatusCommand{TenantID: awTenant, RoleID: old.ID(), Actor: admin}); err != nil {
+		t.Fatalf("deactivate: %v", err)
+	}
+	// The name is free again: a new active role takes it.
+	if _, err := h.create.Handle(ctx, command.CreateRoleCommand{TenantID: awTenant, Name: "Area Manager", HierarchyLevel: 60, Actor: admin}); err != nil {
+		t.Fatalf("create with a deleted role's name: %v, want success", err)
+	}
+	// An active collision is still refused.
+	if _, err := h.create.Handle(ctx, command.CreateRoleCommand{TenantID: awTenant, Name: "Area Manager", HierarchyLevel: 60, Actor: admin}); !errors.Is(err, command.ErrRoleNameTaken) {
+		t.Fatalf("create with an active role's name: %v, want ErrRoleNameTaken", err)
+	}
+	// Reactivating the old one now collides.
+	if err := h.react.Handle(ctx, command.ChangeRoleStatusCommand{TenantID: awTenant, RoleID: old.ID(), Actor: admin}); !errors.Is(err, command.ErrRoleNameTaken) {
+		t.Fatalf("reactivate over a taken name: %v, want ErrRoleNameTaken", err)
+	}
+}

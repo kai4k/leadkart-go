@@ -11,7 +11,7 @@
 //     plumbing.
 //   - The fake is a FAITHFUL implementation of [role.Repository] — not
 //     a mock-with-canned-responses. It honors every contract guarantee:
-//     ErrNotFound on missing IDs, ErrNameTaken on duplicate live name,
+//     ErrNotFound on missing IDs, ErrNameTaken on a duplicate ACTIVE name,
 //     soft-delete filtering on GetByID, hierarchy_level + name ordering
 //     on ListByTenant.
 //   - Single-test-owner pattern: each test creates its OWN
@@ -46,11 +46,6 @@ import (
 type FakeRepository struct {
 	// rows is the role index by ID, active and inactive (a role is never deleted, ADR 0073).
 	rows map[role.ID]*role.Role
-
-	// names is the (tenant_id|name) → role.ID index for ErrNameTaken
-	// enforcement. Mirrors the unique index `uq_roles_tenant_name`: an inactive
-	// role still holds its name.
-	names map[string]role.ID
 }
 
 // NewFakeRepository returns an empty in-memory role repository.
@@ -58,8 +53,7 @@ type FakeRepository struct {
 // do NOT share one fake across parallel tests (no internal sync).
 func NewFakeRepository() *FakeRepository {
 	return &FakeRepository{
-		rows:  make(map[role.ID]*role.Role),
-		names: make(map[string]role.ID),
+		rows: make(map[role.ID]*role.Role),
 	}
 }
 
@@ -68,19 +62,24 @@ func NewFakeRepository() *FakeRepository {
 // any test runs.
 var _ role.Repository = (*FakeRepository)(nil)
 
-// Add persists a brand-new role. Returns [role.ErrNameTaken] if a row (active or
-// inactive) with the same (tenant_id, name) already exists.
+// Add persists a brand-new role. Returns [role.ErrNameTaken] if an ACTIVE role with the same
+// (tenant_id, name) already exists (the unique index `uq_roles_tenant_name` is partial on is_active).
 func (f *FakeRepository) Add(_ context.Context, r *role.Role) error {
-
-	k := nameKey(r.TenantID(), r.Name())
-	if existingID, taken := f.names[k]; taken {
-		if _, ok := f.rows[existingID]; ok {
-			return role.ErrNameTaken
-		}
+	if r.IsActive() && f.activeHolder(r.TenantID(), r.Name(), r.ID()) {
+		return role.ErrNameTaken
 	}
 	f.rows[r.ID()] = r
-	f.names[k] = r.ID()
 	return nil
+}
+
+// activeHolder reports whether an active role other than except holds the name.
+func (f *FakeRepository) activeHolder(tid tenant.ID, name string, except role.ID) bool {
+	for id, o := range f.rows {
+		if id != except && o.IsActive() && o.TenantID() == tid && o.Name() == name {
+			return true
+		}
+	}
+	return false
 }
 
 // UpdateByID loads (scoped to tenantID), mutates via fn, then persists
@@ -107,14 +106,10 @@ func (f *FakeRepository) UpdateByID(_ context.Context, tenantID tenant.ID, id ro
 	if !commit {
 		return nil
 	}
-	// Re-key in names index if the name changed (rename flow).
-	for k, kID := range f.names {
-		if kID == id {
-			delete(f.names, k)
-			break
-		}
+	// Mirror the partial unique index: an active role's name must be free among the active ones.
+	if r.IsActive() && f.activeHolder(r.TenantID(), r.Name(), id) {
+		return role.ErrNameTaken
 	}
-	f.names[nameKey(r.TenantID(), r.Name())] = id
 	return nil
 }
 
@@ -133,19 +128,23 @@ func (f *FakeRepository) GetByID(_ context.Context, tenantID tenant.ID, id role.
 	return r, nil
 }
 
-// GetByTenantAndName returns the role (any status) with the supplied
-// (tenant, name) or [role.ErrNotFound].
+// GetByTenantAndName returns the role with the supplied (tenant, name), the active holder first,
+// then the newest inactive one, or [role.ErrNotFound].
 func (f *FakeRepository) GetByTenantAndName(_ context.Context, tid tenant.ID, name string) (*role.Role, error) {
-
-	id, ok := f.names[nameKey(tid, name)]
-	if !ok {
+	var best *role.Role
+	for _, r := range f.rows {
+		if r.TenantID() != tid || r.Name() != name {
+			continue
+		}
+		if best == nil || (r.IsActive() && !best.IsActive()) ||
+			(r.IsActive() == best.IsActive() && r.CreatedAt().After(best.CreatedAt())) {
+			best = r
+		}
+	}
+	if best == nil {
 		return nil, role.ErrNotFound
 	}
-	r, ok := f.rows[id]
-	if !ok {
-		return nil, role.ErrNotFound
-	}
-	return r, nil
+	return best, nil
 }
 
 // GetByIDs hydrates the supplied IDs scoped to tenantID. Inactive
@@ -200,10 +199,4 @@ func (f *FakeRepository) ListByTenant(_ context.Context, tid tenant.ID) ([]*role
 		)
 	})
 	return out, nil
-}
-
-// nameKey is the (tenant_id, name) composite used for ErrNameTaken
-// enforcement. Mirrors the unique index keyspace.
-func nameKey(tid tenant.ID, name string) string {
-	return tid.String() + "|" + name
 }
