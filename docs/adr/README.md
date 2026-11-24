@@ -61,6 +61,7 @@ One decision per file, Michael Nygard format (Context / Decision / Consequences 
 | 0070 | Company commerce settings — one owner module, a versioned policy with full history, event-fed replicas in Orders and Inventory | Accepted |
 | 0071 | Data is retained: people active or inactive, companies pending, active or suspended; privacy erasure deferred | Accepted |
 | 0072 | Dispatch is one database transaction: stock, order and consignment note change together, or none of them change (amends 0063 §4 and 0071) | Accepted |
+| 0073 | Inactive, never deleted: products, roles and drug schedule classes are deactivated and reactivated, never deleted (extends 0071) | Accepted |
 
 Companion to 0068 and 0069 (not an ADR): [every API change the web BFF must handle](../BFF_API_CHANGES.md).
 
