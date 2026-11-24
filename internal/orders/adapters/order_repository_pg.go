@@ -55,14 +55,15 @@ func (r *OrderRepository) addOnTx(ctx context.Context, tx pgx.Tx, o *order.Order
 	return drainOrderEvents(ctx, tx, o)
 }
 
-// GetByID returns the order or [order.ErrNotFound], tenant-scoped.
+// GetByID returns the order or [order.ErrNotFound], tenant-scoped. Joins the transaction in
+// ctx when there is one.
 func (r *OrderRepository) GetByID(ctx context.Context, tenantID tenant.ID, id order.ID) (*order.Order, error) {
 	lid, err := uuid.Parse(id.String())
 	if err != nil {
 		return nil, fmt.Errorf("orders repo: parse order id %q: %w", id, err)
 	}
 	var out *order.Order
-	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.JoinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		row, gerr := r.q.WithTx(tx).GetOrderByID(ctx, pgconv.PgUUID(lid))
 		if gerr != nil {
 			if errors.Is(gerr, pgx.ErrNoRows) {

@@ -151,6 +151,23 @@ func (t *Transactor) WithinTxPgxTenant(
 	return nil
 }
 
+// JoinTxPgxTenant is [Transactor.WithinTxPgxTenant] for a READ that must take part in the
+// transaction of its caller: when ctx carries one (the unit of work put it there) fn runs on
+// it and nothing is begun or committed here; otherwise it opens a tenant transaction as
+// WithinTxPgxTenant does. A read that always began its own transaction would take a second
+// connection inside the caller's (not atomic with it, and a deadlock on a small pool), which is
+// the trap ADR 0072 names.
+func (t *Transactor) JoinTxPgxTenant(
+	ctx context.Context,
+	tenantID string,
+	fn func(ctx context.Context, tx pgx.Tx) error,
+) error {
+	if tx, ok := TxFromContext(ctx); ok {
+		return fn(ctx, tx)
+	}
+	return t.WithinTxPgxTenant(ctx, tenantID, fn)
+}
+
 // TenantUnitOfWork is [UnitOfWork] for handlers that carry the tenant as an
 // explicit value (ADR 0062) rather than in the context: the transaction binds
 // that tenant's GUC and the closure's ctx carries the tx, so every adapter

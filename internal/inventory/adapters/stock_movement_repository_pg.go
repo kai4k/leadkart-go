@@ -57,7 +57,7 @@ func (r *StockMovementRepository) addOnTx(ctx context.Context, tx pgx.Tx, m *sto
 // GetByID satisfies [stockmovement.Repository]. GUC bound from tenantID (ADR 0062).
 func (r *StockMovementRepository) GetByID(ctx context.Context, tenantID tenant.ID, id stockmovement.ID) (*stockmovement.Movement, error) {
 	var out *stockmovement.Movement
-	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+	err := r.tx.JoinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		mid, perr := uuid.Parse(id.String())
 		if perr != nil {
@@ -101,7 +101,7 @@ func (r *StockMovementRepository) ListByBatchPage(ctx context.Context, tenantID 
 	filterType := string(req.Filter.Type)
 
 	var out []*stockmovement.Movement
-	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.JoinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		rows, err := q.ListMovementsByBatchPage(ctx, db.ListMovementsByBatchPageParams{
 			BatchID:          pgconv.PgUUID(bid),

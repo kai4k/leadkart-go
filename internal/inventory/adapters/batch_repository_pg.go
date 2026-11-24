@@ -124,10 +124,11 @@ func (r *BatchRepository) updateOnTx(ctx context.Context, tx pgx.Tx, id batch.ID
 	return drainBatchEvents(ctx, tx, b)
 }
 
-// GetByID satisfies [batch.Repository]. GUC bound from tenantID (ADR 0062).
+// GetByID satisfies [batch.Repository]. GUC bound from tenantID (ADR 0062). Joins the
+// transaction in ctx when there is one.
 func (r *BatchRepository) GetByID(ctx context.Context, tenantID tenant.ID, id batch.ID) (*batch.Batch, error) {
 	var out *batch.Batch
-	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+	err := r.tx.JoinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		got, err := loadBatch(ctx, q, id)
 		if err != nil {
@@ -162,7 +163,7 @@ func (r *BatchRepository) ListByProductPage(ctx context.Context, tenantID tenant
 	}
 
 	var out []*batch.Batch
-	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.JoinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		rows, err := q.ListBatchesByProductPage(ctx, db.ListBatchesByProductPageParams{
 			ProductID:        pgconv.PgUUID(pid),
@@ -207,7 +208,7 @@ func (r *BatchRepository) ListFefoForProduct(ctx context.Context, tenantID tenan
 		return nil, fmt.Errorf("batch repo: parse product id: %w", err)
 	}
 	var out []*batch.Batch
-	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.JoinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		rows, err := q.ListFefoBatchesForProduct(ctx, db.ListFefoBatchesForProductParams{
 			ProductID:   pgconv.PgUUID(pid),
@@ -236,7 +237,7 @@ func (r *BatchRepository) AnyLiveWithStockForProduct(ctx context.Context, tenant
 		return false, fmt.Errorf("batch repo: parse product id: %w", err)
 	}
 	var exists bool
-	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.JoinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		got, err := q.AnyLiveBatchWithStockForProduct(ctx, pgconv.PgUUID(pid))
 		if err != nil {
