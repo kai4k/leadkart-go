@@ -35,7 +35,11 @@ func Handlers(
 		handlers = append(handlers, cqrs.NewEventHandler(HandlerConsumeStock, consume.Handle))
 	}
 	if release != nil {
-		handlers = append(handlers, cqrs.NewEventHandler(HandlerReleaseStock, release.Handle))
+		// Replay-safe: a release only follows a cancellation, cancellation is terminal, and the
+		// release drains only what is still held (nothing held, nothing to do). A late run is
+		// therefore always right, and a lost one leaves a cancelled order holding stock for
+		// good (no route releases a hold).
+		handlers = append(handlers, messaging.ReplaySafe(cqrs.NewEventHandler(HandlerReleaseStock, release.Handle)))
 	}
 	if policyChanged != nil {
 		// Replay-safe: the replica stores a policy only when its version is newer than

@@ -211,7 +211,7 @@ func TestE2E_Orders_ALateEventIsNeverReplayedOntoAnOrderThatMovedOn(t *testing.T
 		}
 	})
 
-	t.Run("consume and release both time out: no unit leaves the books", func(t *testing.T) {
+	t.Run("consume and release both time out: the release is replayed and frees the hold", func(t *testing.T) {
 		// arch-test:serial — the scenarios share one stack and one set of gates; each runs to completion first.
 		s := newScenario("LATE-3")
 		confirm(&s, "LATE-3")
@@ -224,9 +224,35 @@ func TestE2E_Orders_ALateEventIsNeverReplayedOntoAnOrderThatMovedOn(t *testing.T
 		})
 		cancel(s)
 		waitFor(t, "the release is dead-lettered", func() bool { return deadLetters(release) == rBase+1 })
-		untouchedByTheReplayJob(s, consume, release, invoice, noteSlot)
-		if w := look(s); w.onHand != 20 || w.reserved != 10 || w.state != "cancelled" || w.invoiceID != "" || w.notes != 0 {
-			t.Fatalf("world %+v; want on hand 20, 10 still reserved (for a person to release), cancelled, no invoice, no note", w)
+		// Review G2d B3: the release IS replayed (cancellation is terminal and a release only
+		// drains what is still held), so the cancelled order's hold is freed. The consume, the
+		// invoice and the note are not: nothing else is delivered again.
+		g.set(true, reserve, consume, release, invoice, noteSlot)
+		replayed, err := stack.replayer.ReplayDue(t.Context(), time.Now().Add(24*time.Hour), 100)
+		if err != nil || replayed != 1 {
+			t.Fatalf("the replay job replayed %d, %v; want exactly the release", replayed, err)
+		}
+		waitFor(t, "the replayed release frees the hold", func() bool { return look(s).reserved == 0 })
+		if w := look(s); w.onHand != 20 || w.state != "cancelled" || w.invoiceID != "" || w.notes != 0 {
+			t.Fatalf("world %+v; want on hand 20, nothing reserved, cancelled, no invoice, no note", w)
+		}
+		if n := messagingtest.ReplayCount(t.Context(), t, f.Pool, release); n != 1 {
+			t.Fatalf("release replays recorded: %d, want 1", n)
+		}
+		// A second run does nothing: the dead letter is replayed once, and the others never.
+		before := look(s)
+		again, err := stack.replayer.ReplayDue(t.Context(), time.Now().Add(48*time.Hour), 100)
+		if err != nil || again != 0 {
+			t.Fatalf("a second replay run replayed %d, %v; want none", again, err)
+		}
+		time.Sleep(1500 * time.Millisecond) // arch-test:wait-justified — negative proof: a delivery that must not happen has no event to wait for
+		if after := look(s); after != before {
+			t.Fatalf("the second replay run changed the world: before %+v after %+v", before, after)
+		}
+		for _, h := range []string{consume, invoice, noteSlot} {
+			if n := messagingtest.ReplayCount(t.Context(), t, f.Pool, h); n != 0 {
+				t.Fatalf("%s: %d replays recorded, want 0", h, n)
+			}
 		}
 	})
 
