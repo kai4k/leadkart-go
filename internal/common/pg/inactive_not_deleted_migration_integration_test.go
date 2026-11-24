@@ -68,6 +68,15 @@ func TestMigration_InactiveNotDeletedKeepsDeletedDuplicates(t *testing.T) {
 	batchProduct := product("BATCH-OWNER", false)
 	liveBatch, goneBatch := batch(batchProduct, "LOT-1", false), batch(batchProduct, "LOT-1", true)
 
+	// Max-length values: the rename keeps the id suffix whole and trims the PREFIX, so it stays
+	// within the column limit and two rows that differ only past the trimmed part still get
+	// different names (the ids differ).
+	longRole, longSKU, longLot := strings.Repeat("r", 100), strings.Repeat("s", 64), strings.Repeat("l", 100)
+	liveLongRole, goneLongRole := role(longRole, false), role(longRole, true)
+	goneLongRole2 := role(longRole, true)
+	liveLongSKU, goneLongSKU, goneLongSKU2 := product(longSKU, false), product(longSKU, true), product(longSKU, true)
+	liveLongLot, goneLongLot := batch(batchProduct, longLot, false), batch(batchProduct, longLot, true)
+
 	if err := goose.UpContext(ctx, db, dir); err != nil {
 		t.Fatalf("up over soft-deleted duplicates: %v", err)
 	}
@@ -107,5 +116,27 @@ func TestMigration_InactiveNotDeletedKeepsDeletedDuplicates(t *testing.T) {
 	}
 	if got := str(`SELECT batch_number FROM inventory.batches WHERE id = $1`, goneBatch); !strings.HasSuffix(got, "~"+goneBatch) {
 		t.Errorf("deleted batch %s is numbered %q, want its id appended", goneBatch, got)
+	}
+	for _, c := range []struct {
+		table, col, live string
+		gone             []string
+		max              int
+		liveWant         string
+	}{
+		{"identity.roles", "name", liveLongRole, []string{goneLongRole, goneLongRole2}, 100, longRole},
+		{"inventory.products", "sku", liveLongSKU, []string{goneLongSKU, goneLongSKU2}, 64, longSKU},
+		{"inventory.batches", "batch_number", liveLongLot, []string{goneLongLot}, 100, longLot},
+	} {
+		if got := str(`SELECT `+c.col+` FROM `+c.table+` WHERE id = $1`, c.live); got != c.liveWant {
+			t.Errorf("%s: the live max-length value changed", c.table)
+		}
+		seen := map[string]bool{}
+		for _, id := range c.gone {
+			got := str(`SELECT `+c.col+` FROM `+c.table+` WHERE id = $1`, id)
+			if !strings.HasSuffix(got, "~"+id) || len(got) > c.max || seen[got] {
+				t.Errorf("%s: deleted max-length row %s is %q (len %d): want the whole id suffix, within %d, unique", c.table, id, got, len(got), c.max)
+			}
+			seen[got] = true
+		}
 	}
 }
