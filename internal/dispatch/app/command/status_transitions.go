@@ -132,6 +132,10 @@ func (h MarkDispatchedHandler) Handle(ctx context.Context, cmd MarkDispatchedCom
 				if err != nil {
 					return false, fmt.Errorf("mark dispatched: %w", err)
 				}
+				if len(confirmed) == 0 {
+					// Nothing confirmed: nothing can leave, and no hold can equal it.
+					return false, fmt.Errorf("mark dispatched: %w: the order has no confirmed items", ErrStockMismatch)
+				}
 				if err := h.stock.ShipOrderStock(ctx, cmd.TenantID, orderID, confirmed, cmd.TransitionedByMembership); err != nil {
 					return false, fmt.Errorf("mark dispatched: %w", err)
 				}

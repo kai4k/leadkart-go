@@ -39,14 +39,18 @@ func (u fakeTenantUoW) WithinTenantTx(ctx context.Context, _ string, fn func(con
 // fakeOrderStep is Orders' step: it logs, notes whether it ran inside the transaction, and
 // answers err.
 type fakeOrderStep struct {
-	log *stepLog
-	err error
+	log   *stepLog
+	err   error
+	empty bool // the order has no confirmed items
 }
 
 func (f fakeOrderStep) MarkOrderDispatched(ctx context.Context, _ tenant.ID, _, _ string, _ membership.ID) ([]command.ProductQuantity, error) {
 	f.log.add("order")
 	if ctx.Value(txMarker{}) == nil {
 		f.log.add("order-outside-tx")
+	}
+	if f.empty {
+		return nil, f.err
 	}
 	return []command.ProductQuantity{{ProductID: "p1", Quantity: 10}}, f.err
 }
@@ -135,6 +139,23 @@ func TestMarkDispatchedHandler_AStepRefusalRollsBackAndLeavesTheNotePending(t *t
 			requireStatus(t, repo, tID, cnID, consignmentnote.StatusPending)
 		})
 	}
+}
+
+// An order with no confirmed items has nothing to ship: 409 (the mismatch refusal), not a 500,
+// and the stock step is never asked.
+func TestMarkDispatchedHandler_AnOrderWithNoConfirmedItemsIsAMismatchNotAnInternalError(t *testing.T) {
+	t.Parallel()
+	repo := consignmentnotetest.NewFakeRepository()
+	tID, cnID, actor := seedPending(t, repo)
+	log := &stepLog{}
+	h := command.NewMarkDispatchedHandler(fakeTenantUoW{log: log}, repo,
+		fakeOrderStep{log: log, empty: true}, fakeStockStep{log: log}, fixedNow)
+
+	err := dispatch(t, h, tID, cnID, actor)
+
+	require.ErrorIs(t, err, command.ErrStockMismatch)
+	require.Equal(t, []string{"begin", "order", "rollback"}, log.events)
+	requireStatus(t, repo, tID, cnID, consignmentnote.StatusPending)
 }
 
 // A note already past pending is not judged again and moves nothing: the same docket is a
