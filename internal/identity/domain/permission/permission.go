@@ -96,7 +96,7 @@ type rolesPermissions struct {
 	// operators ALSO satisfy this gate via is_platform=true so they
 	// can approve requests for orphan / root memberships with no manager.
 	// Manage gates deactivating and reactivating a role (ADR 0073: roles are never deleted); it is
-	// held exactly where identity.roles.manage was.
+	// held exactly where identity.roles.delete was (the permission it replaced).
 	View, Create, Update, Manage, Assign, Revoke, Approve string
 }
 
