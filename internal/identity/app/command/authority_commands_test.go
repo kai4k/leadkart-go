@@ -645,3 +645,21 @@ func TestReplaceOverrides_DuplicateGrantedNamesStillApplyTheRemoval(t *testing.T
 		t.Fatalf("repeat: %v", err)
 	}
 }
+
+// Authority is answered before an inactive role is reported (review G2j M3): a caller who may not
+// touch the role learns nothing about its status.
+func TestAssignUserRole_AuthorityIsAnsweredBeforeRoleInactive(t *testing.T) {
+	t.Parallel()
+	w := newAuthzWorld(t)
+	h := w.handlers().assign
+	senior := w.addRoleSnap(t, role.Snapshot{ID: role.ID(awID(790)), TenantID: awTenant, Name: "Senior Gone", HierarchyLevel: 10, CreatedAt: testNow})
+	exec := w.member(t)
+	mgr := actorAs(t, w.member(t, w.manager).ID(), authority.RankManager, permission.IdentityPermissions.Crm.Leads.Read)
+	err := h.Handle(t.Context(), command.AssignUserRoleCommand{TenantID: awTenant, MembershipID: exec.ID(), RoleID: senior.ID(), Actor: mgr})
+	if errors.Is(err, role.ErrInactive) || !errors.Is(err, authority.ErrInsufficientRank) {
+		t.Fatalf("a manager assigning an inactive role above their rank: %v, want ErrInsufficientRank (not role_inactive)", err)
+	}
+	if err := h.Handle(t.Context(), command.AssignUserRoleCommand{TenantID: awTenant, MembershipID: exec.ID(), RoleID: senior.ID(), Actor: w.adminActor(t)}); !errors.Is(err, role.ErrInactive) && !errors.Is(err, authority.ErrInsufficientRank) {
+		t.Fatalf("control: %v", err)
+	}
+}

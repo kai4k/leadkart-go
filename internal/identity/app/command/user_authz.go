@@ -70,14 +70,13 @@ func (h AssignUserRoleHandler) Handle(ctx context.Context, cmd AssignUserRoleCom
 		if err != nil {
 			return err
 		}
-		if !r.IsActive() {
-			return role.ErrInactive // an inactive role is not assignable (ADR 0073)
-		}
 		return h.w.facts.memberships.UpdateByID(ctx, cmd.TenantID, cmd.MembershipID, func(m *membership.Membership) (bool, error) {
 			target, err := h.w.facts.member(ctx, cmd.TenantID, m, now)
 			if err != nil {
 				return false, err
 			}
+			// Authority first, then the role's status: MayAssignRole refuses an inactive role
+			// (role.ErrInactive, ADR 0073) only to a caller who may touch it.
 			if err := actor.MayAssignRole(target, r); err != nil {
 				return false, err
 			}
