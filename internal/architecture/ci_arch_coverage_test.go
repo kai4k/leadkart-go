@@ -167,3 +167,43 @@ func repoRootDir(t *testing.T) string {
 		dir = parent
 	}
 }
+
+// TestArch_EveryModuleWithIntegrationTestsHasACIShard asserts every module under internal/ that
+// has integration tests (a *_integration_test.go file, or a file with the integration build tag)
+// has a row in the ci.yml integration matrix whose pkg is ./internal/<module>/...; otherwise its
+// tests run only on a developer machine (review G2i S2).
+//
+// arch-test:no-negative-fixture — assertion target is the shipping ci.yml and the shipping tree.
+func TestArch_EveryModuleWithIntegrationTestsHasACIShard(t *testing.T) {
+	t.Parallel()
+	root := repoRootDir(t)
+	ci := mustReadFile(t, filepath.Join(root, ".github", "workflows", "ci.yml"))
+	block := extractCIJobBlock(t, ci, "integration")
+	if block == "" {
+		t.Fatal("ci.yml: could not locate `integration:` job block")
+	}
+	mods, err := os.ReadDir(filepath.Join(root, "internal"))
+	if err != nil {
+		t.Fatalf("read internal: %v", err)
+	}
+	tagRE := regexp.MustCompile(`(?m)^//go:build\s+.*\bintegration\b`)
+	for _, m := range mods {
+		if !m.IsDir() {
+			continue
+		}
+		dir := filepath.Join(root, "internal", m.Name())
+		has := false
+		_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() || has || !strings.HasSuffix(p, "_test.go") {
+				return nil
+			}
+			if strings.HasSuffix(p, "_integration_test.go") || tagRE.MatchString(mustReadFile(t, p)) {
+				has = true
+			}
+			return nil
+		})
+		if has && !strings.Contains(block, "pkg: ./internal/"+m.Name()+"/...") {
+			t.Errorf("internal/%s has integration tests but the ci.yml integration matrix has no `pkg: ./internal/%s/...` row: they would never run in CI", m.Name(), m.Name())
+		}
+	}
+}

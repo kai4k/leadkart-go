@@ -206,6 +206,11 @@ jobs:
           - { name: cmd-api-5,      pkg: ./cmd/api/..., slice: '5', slices: '5' }
           - { name: platform,       pkg: ./internal/platform/... }
           - { name: crm,            pkg: ./internal/crm/... }
+          - { name: orders,         pkg: ./internal/orders/... }
+          - { name: dispatch,       pkg: ./internal/dispatch/... }
+          - { name: notifications,  pkg: ./internal/notifications/... }
+          - { name: tasks,          pkg: ./internal/tasks/... }
+          - { name: companysettings, pkg: ./internal/companysettings/... }
           - { name: cmd-bootstrap,  pkg: ./cmd/bootstrap/... }
     uses: ./.github/workflows/_go-test.yml
     with:
