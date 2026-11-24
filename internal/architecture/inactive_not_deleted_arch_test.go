@@ -12,7 +12,7 @@ import (
 )
 
 // TestArch_InactiveNotDeleted_NoDeleteRouteOnTheThreeResources asserts no module registers a
-// DELETE route for a product, a role or a drug schedule class in ANY non-test file of the three
+// DELETE route for a product, a batch, a role or a drug schedule class in ANY non-test file of the three
 // modules' ports (the lifecycle is POST .../deactivate and .../reactivate), that the two schema
 // tables do not carry a soft-delete column again, that the product and role domain types hold no
 // deleted state, that the batch domain and table carry none either (a batch is written off or
@@ -33,7 +33,7 @@ func TestArch_InactiveNotDeleted_NoDeleteRouteOnTheThreeResources(t *testing.T) 
 		})
 		return out
 	}
-	deleteRoute := regexp.MustCompile(`"DELETE /api/v1/(inventory/products|roles|company/drug-schedule-classes)\b`)
+	deleteRoute := regexp.MustCompile(`"DELETE /api/v1/(inventory/products|inventory/batches|roles|company/drug-schedule-classes)\b`)
 	for _, dir := range []string{"internal/inventory/ports", "internal/identity/ports", "internal/companysettings/ports"} {
 		for _, f := range goFiles(dir) {
 			if m := deleteRoute.FindString(mustReadFile(t, f)); m != "" {
