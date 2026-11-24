@@ -68,18 +68,17 @@ func (h ReleaseOrderStockHandler) Handle(ctx context.Context, cmd ReleaseOrderSt
 	if cmd.OrderID == "" {
 		return ReleaseOrderStockResult{}, fmt.Errorf("%w: order id required", batch.ErrInvalid)
 	}
-	outstanding, err := h.ledger.ListOutstandingReservationsForOrder(ctx, cmd.TenantID, cmd.OrderID)
-	if err != nil {
-		return ReleaseOrderStockResult{}, fmt.Errorf("release order stock: load outstanding: %w", err)
-	}
-	if len(outstanding) == 0 {
-		return ReleaseOrderStockResult{}, nil
-	}
-
 	now := h.now()
 	ref := cmd.OrderID
 	reason := truncateReason(fmt.Sprintf("order release: %s: %s", cmd.OrderID, cmd.Reason))
-	err = h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
+	var outstanding []stockmovement.OutstandingReservation
+	err := h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
+		// Lock the batches, THEN read the hold: see lockedOrderHold.
+		held, herr := lockedOrderHold(ctx, h.batches, h.ledger, cmd.TenantID, cmd.OrderID)
+		if herr != nil {
+			return fmt.Errorf("release order stock: %w", herr)
+		}
+		outstanding = held
 		for _, o := range outstanding {
 			var onHandAfter int64
 			updErr := h.batches.UpdateByID(ctx, cmd.TenantID, o.BatchID, func(b *batch.Batch) (bool, error) {
@@ -114,6 +113,9 @@ func (h ReleaseOrderStockHandler) Handle(ctx context.Context, cmd ReleaseOrderSt
 	})
 	if err != nil {
 		return ReleaseOrderStockResult{}, err
+	}
+	if len(outstanding) == 0 {
+		return ReleaseOrderStockResult{}, nil
 	}
 	return ReleaseOrderStockResult{Released: true, BatchCount: len(outstanding)}, nil
 }

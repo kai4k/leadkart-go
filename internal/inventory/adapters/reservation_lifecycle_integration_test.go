@@ -67,13 +67,13 @@ func (r reservationRig) seedStockedBatch(t *testing.T, onHand int64) (*product.P
 	products := adapters.NewProductRepository(repoFixture(t), tx)
 	batches := adapters.NewBatchRepository(repoFixture(t), tx)
 	p, err := product.New(product.ID(ids.NewV7().String()), r.tid, r.actor,
-		product.Spec{SKU: "RES-" + ids.NewV7().String()[:8], Name: "Res Drug", DosageForm: "Tablet",
+		product.Spec{SKU: "RES-" + ids.NewV7().String()[28:], Name: "Res Drug", DosageForm: "Tablet",
 			PackSize: "10", HSNCode: "3004", GSTRateBps: 1200}, fixedNow)
 	require.NoError(t, err)
 	require.NoError(t, products.Add(r.ctx, p))
 
 	b, err := batch.New(batch.ID(ids.NewV7().String()), p.ID(), r.tid, r.actor,
-		batch.Spec{BatchNumber: "LOT-" + ids.NewV7().String()[:8],
+		batch.Spec{BatchNumber: "LOT-" + ids.NewV7().String()[28:],
 			ManufactureDate:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 			ExpiryDate:       time.Date(2028, 1, 31, 0, 0, 0, 0, time.UTC),
 			ManufacturerName: "Acme", ManufacturingLicenceNumber: "ML-1",
