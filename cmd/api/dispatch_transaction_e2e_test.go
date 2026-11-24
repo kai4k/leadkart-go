@@ -610,6 +610,15 @@ func TestE2E_Dispatch_OneTransaction_DispatchRacingCancelIsShippedOrReleasedNeve
 		switch dStatus {
 		case http.StatusNoContent: // shipped (a cancel after it keeps the deduction until returns, G8)
 			shipped++
+			// Never both: the order left `invoiced` BEFORE it was cancelled. A cancelled order
+			// that shipped has no dispatched_at, or one later than its cancelled_at.
+			var dispatchedFirst bool
+			r.inCompany(t, func(tx pgx.Tx) error {
+				return tx.QueryRow(t.Context(), `SELECT dispatched_at IS NOT NULL AND cancelled_at IS NOT NULL AND dispatched_at <= cancelled_at FROM orders.orders WHERE id = $1`, o.orderID).Scan(&dispatchedFirst)
+			})
+			if !dispatchedFirst {
+				t.Fatalf("round %d: the dispatch answered 204 but the order was not dispatched before it was cancelled", round)
+			}
 			if onHand != 10 || outRows != 1 || relRows != 1 || relSum != 10 {
 				t.Fatalf("round %d: shipped, but on hand %d outbound rows %d release rows %d (sum %d); want 10, 1, 1 (10)", round, onHand, outRows, relRows, relSum)
 			}
