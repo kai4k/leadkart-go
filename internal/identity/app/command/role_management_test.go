@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
@@ -475,4 +476,38 @@ type failingTxUoW struct {
 
 func (u failingTxUoW) WithinTx(_ context.Context, _ pg.TxScope, _ func(context.Context) error) error {
 	return u.err
+}
+
+// ReactivateRoleHandler decides with MayReactivateRole (review G2j V-m1): giving an inactive role
+// back is a conferral, so an actor who holds the role's permission only until a date is refused,
+// while one who holds it durably is allowed. Mutant: the handler on MayDeactivateRole passes both.
+func TestReactivateRole_AConferralNeedsADurableHold(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	x := p.Crm.Leads.Assign
+	for name, c := range map[string]struct {
+		expires time.Time
+		wantErr error
+	}{
+		"durable hold of X":   {time.Time{}, nil},
+		"X only until a date": {testNow.Add(time.Hour), authority.ErrGrantExceedsAuthority},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			w := newAuthzWorld(t)
+			w.next++
+			inactive := w.addRoleSnap(t, role.Snapshot{ID: role.ID(awID(w.next + 3000)), TenantID: awTenant, Name: "Inactive carries X", HierarchyLevel: 60, CreatedAt: testNow}, x)
+			actorM := w.memberSnap(t, membership.Snapshot{RoleAssignments: []role.ID{w.manager.ID()},
+				GrantedPermissions: []membership.GrantedOverride{{Permission: permission.FromConstant(x), ExpiresAt: c.expires}}})
+			actor := actorAs(t, actorM.ID(), authority.RankManager, p.Roles.Manage, x)
+
+			err := w.roleHandlers().react.Handle(t.Context(), command.ChangeRoleStatusCommand{TenantID: awTenant, RoleID: inactive.ID(), Actor: actor})
+			if !errors.Is(err, c.wantErr) && (c.wantErr != nil || err != nil) {
+				t.Fatalf("reactivate: %v, want %v", err, c.wantErr)
+			}
+			if got := inactive.IsActive(); got != (c.wantErr == nil) {
+				t.Fatalf("role active = %v after the call, want %v", got, c.wantErr == nil)
+			}
+		})
+	}
 }
