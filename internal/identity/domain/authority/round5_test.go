@@ -73,7 +73,7 @@ func TestRoleEdits_ActOnEveryActiveHolder(t *testing.T) {
 			"grant":   a.MayGrantRolePermission(w.c, perm, h),
 			"revoke":  a.MayRevokeRolePermission(w.c, perm, h),
 			"replace": a.MayReplaceRolePermissions(w.c, nil, h),
-			"delete":  a.MayChangeRoleStatus(w.c, h),
+			"delete":  a.MayDeactivateRole(w.c, h),
 			"relevel": a.MayEditRole(w.c, 40, h),
 		}
 	}

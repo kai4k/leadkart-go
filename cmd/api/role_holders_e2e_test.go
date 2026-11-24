@@ -253,3 +253,60 @@ func TestE2E_RoleEdits_EndHoldersStaleTokens(t *testing.T) {
 		t.Errorf("a rename ended the holder's token: %d %s, want 200", r.status, r.body)
 	}
 }
+
+// TestE2E_RoleReactivate_NeedsADurableHold (review G2j B1): reactivating an inactive role gives its
+// permissions back to its holders, which is a conferral. An actor who holds P only through a
+// time-bound approved override cannot make P durable for others that way, exactly as they cannot
+// by assigning a role that carries P; the owner can.
+func TestE2E_RoleReactivate_NeedsADurableHold(t *testing.T) {
+	f := newE2EFixtureAt(t, time.Now)
+	owner := f.registerAndLogin(t, "reactconf")
+	p := permission.IdentityPermissions
+	perm := p.Tasks.WorkItems.Reassign
+	roleID := func(name string) string { return f.roleIDByName(t, owner.AccessToken, name) }
+
+	sm := f.createMember(t, owner, "teamlead")
+	f.assignRole(t, owner.AccessToken, sm.membershipID, roleID(role.SystemRoles.Tenant.TeamLead))
+	a := f.createMember(t, owner, "a")
+	f.assignRole(t, owner.AccessToken, a.membershipID, roleID(role.SystemRoles.Tenant.SalesExecutive))
+	f.setManager(t, owner.AccessToken, a.membershipID, sm.membershipID)
+	f.grantOverrides(t, owner.AccessToken, a.membershipID, []string{p.Roles.Update, p.Roles.Manage}, nil)
+
+	// R carries P and is held by H, whose membership is inactive when R goes inactive.
+	h := f.createMember(t, owner, "holder")
+	r := f.customRole(t, owner.AccessToken, "Carries P", 60)
+	if g := f.grantRolePerm(t, owner.AccessToken, r, perm); g.status != http.StatusNoContent {
+		t.Fatalf("grant P to R: %d %s", g.status, g.body)
+	}
+	f.assignRole(t, owner.AccessToken, h.membershipID, r)
+	if d := f.authedJSON(t, http.MethodPost, "/api/v1/users/"+h.membershipID+"/deactivate", owner.AccessToken, ports.DeactivateUserRequest{Reason: "reactivate conferral"}); d.status != http.StatusNoContent {
+		t.Fatalf("deactivate the holder: %d %s", d.status, d.body)
+	}
+	if d := f.authedJSON(t, http.MethodPost, "/api/v1/roles/"+r+"/deactivate", owner.AccessToken, nil); d.status != http.StatusOK {
+		t.Fatalf("deactivate R: %d %s", d.status, d.body)
+	}
+	if d := f.authedJSON(t, http.MethodPost, "/api/v1/users/"+h.membershipID+"/reactivate", owner.AccessToken, nil); d.status != http.StatusNoContent {
+		t.Fatalf("reactivate the holder: %d %s", d.status, d.body)
+	}
+
+	// A holds P only until the approval expires.
+	aTok := f.loginToken(t, a.email, a.password)
+	sub, reqID := f.requestElevation(t, aTok, perm)
+	if sub.status != http.StatusCreated {
+		t.Fatalf("A requests P: %d %s", sub.status, sub.body)
+	}
+	if ap := f.approveRequest(t, f.loginToken(t, sm.email, sm.password), reqID); ap.status != http.StatusNoContent {
+		t.Fatalf("the manager approves P for A: %d %s", ap.status, ap.body)
+	}
+	f.evictStamp(t, a.personID)
+	aTok = f.loginToken(t, a.email, a.password)
+
+	res := f.authedJSON(t, http.MethodPost, "/api/v1/roles/"+r+"/reactivate", aTok, nil)
+	f.wantForbidden(t, "A reactivates a role carrying its time-bound P", res, http.StatusForbidden, "grant_exceeds_authority")
+	if f.roleDto(t, owner.AccessToken, r).IsActive {
+		t.Fatal("the role was reactivated by a refused call")
+	}
+	if got := f.authedJSON(t, http.MethodPost, "/api/v1/roles/"+r+"/reactivate", owner.AccessToken, nil); got.status != http.StatusOK {
+		t.Fatalf("the owner (durable hold) reactivates R: %d %s", got.status, got.body)
+	}
+}

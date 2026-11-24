@@ -429,7 +429,7 @@ func NewDeactivateRoleHandler(uow pg.UnitOfWork, lock AuthorityLocker, m members
 	return DeactivateRoleHandler{roleWriter{newAuthorityWriter("NewDeactivateRoleHandler", uow, lock, m, r, p, now)}}
 }
 
-// Handle decides [authority.Actor.MayChangeRoleStatus] (authority first), then applies the
+// Handle decides [authority.Actor.MayDeactivateRole] (authority first), then applies the
 // role-in-use rule, which is exactly what deleting a role used to enforce: an ACTIVE holder
 // refuses it ([RoleInUseError], nothing changes). Otherwise the role goes inactive. An inactive
 // role confers nothing (every authority read skips it), so deactivating can never leave a member
@@ -443,7 +443,7 @@ func (h DeactivateRoleHandler) Handle(ctx context.Context, cmd ChangeRoleStatusC
 	}
 	now := h.now()
 	err := h.updateRole(ctx, cmd.TenantID, cmd.RoleID, cmd.Actor, now, holdersOnly, func(actor authority.Actor, r *role.Role, holders loadedHolders) error {
-		if err := actor.MayChangeRoleStatus(r, holders.set); err != nil {
+		if err := actor.MayDeactivateRole(r, holders.set); err != nil {
 			return err
 		}
 		if !r.IsActive() {
@@ -471,9 +471,9 @@ func NewReactivateRoleHandler(uow pg.UnitOfWork, lock AuthorityLocker, m members
 	return ReactivateRoleHandler{roleWriter{newAuthorityWriter("NewReactivateRoleHandler", uow, lock, m, r, p, now)}}
 }
 
-// Handle decides [authority.Actor.MayChangeRoleStatus] over the role and every holder it has
-// (reactivating gives the role's permissions back to all of them, so it needs the same authority
-// as deactivating), then makes the role active. Every ACTIVE holder's security stamp rotates in the
+// Handle decides [authority.Actor.MayReactivateRole] over the role and every holder it has
+// (reactivating gives the role's permissions back to all of them: it needs the authority of
+// deactivating AND the durable hold every conferral needs), then makes the role active. Every ACTIVE holder's security stamp rotates in the
 // same transaction (the role definition changed), so their tokens are refreshed. An active role is
 // a no-op (idempotent).
 func (h ReactivateRoleHandler) Handle(ctx context.Context, cmd ChangeRoleStatusCommand) error {
@@ -482,7 +482,11 @@ func (h ReactivateRoleHandler) Handle(ctx context.Context, cmd ChangeRoleStatusC
 	}
 	now := h.now()
 	err := h.updateRole(ctx, cmd.TenantID, cmd.RoleID, cmd.Actor, now, holdersOnly, func(actor authority.Actor, r *role.Role, holders loadedHolders) error {
-		if err := actor.MayChangeRoleStatus(r, holders.set); err != nil {
+		decide := actor.MayReactivateRole
+		if r.IsActive() {
+			decide = actor.MayDeactivateRole // nothing is conferred by a no-op
+		}
+		if err := decide(r, holders.set); err != nil {
 			return err
 		}
 		return r.Activate(cmd.ChangedBy, now)

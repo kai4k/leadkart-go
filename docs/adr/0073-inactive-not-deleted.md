@@ -42,10 +42,10 @@ What delete did to the members who held the role (read from `DeleteRoleHandler`,
 
 Deactivate keeps every one of those rules and loosens none:
 
-* **Same decision, renamed:** `Actor.MayChangeRoleStatus` is `MayDeleteRole` unchanged, and the permission is renamed, not weakened: `identity.roles.delete` became `identity.roles.manage` with exactly the same holders (the `tenant.admin` implication set and the owner-only ceiling). The web's catalogue changes by that one name.
+* **Same decision, renamed:** `Actor.MayDeactivateRole` is `MayDeleteRole` unchanged, and the permission is renamed, not weakened: `identity.roles.delete` became `identity.roles.manage` with exactly the same holders (the `tenant.admin` implication set and the owner-only ceiling). The web's catalogue changes by that one name.
 * **Same in-use rule:** an active holder is `409 role_in_use`.
 * **An inactive role confers nothing**, through the same reads a deleted role was skipped by (`IsActive` replaces `IsDeleted` in each). SQL that decided who holds a permission or a super-admin role filters `is_active`.
-* **One difference, tighter on data and equal on authority:** the assignments of the INACTIVE holders are kept (nothing is deleted). Consequence: such a member may be reactivated while the role is inactive; they receive nothing from it (proved end to end). When the role is reactivated they get it back, which is why reactivating asks `MayChangeRoleStatus` again (the same authority over the role's permissions and every holder, active or not) and rotates every active holder's security stamp, so their tokens carry the restored permissions at once.
+* **One difference, tighter on data and equal on authority:** the assignments of the INACTIVE holders are kept (nothing is deleted). Consequence: such a member may be reactivated while the role is inactive; they receive nothing from it (proved end to end). When the role is reactivated they get it back, which is why reactivating asks `MayDeactivateRole` again (the same authority over the role's permissions and every holder, active or not) and rotates every active holder's security stamp, so their tokens carry the restored permissions at once.
 * A race between deactivating and assigning is serialised by the tenant authority lock: an active member never ends up holding an inactive role (asserted in the race e2e).
 
 ## Consequences

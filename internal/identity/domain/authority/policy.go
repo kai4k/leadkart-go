@@ -719,13 +719,12 @@ func (a Actor) MayRevokeRolePermission(r *role.Role, name string, holders RoleHo
 	return a.mayChangeRoleFor(holders)
 }
 
-// MayChangeRoleStatus — H3/H6: mayMutateRole + the ceiling over the role's own
-// permissions, because deactivating removes every one of them from every holder and
-// reactivating gives every one of them back, + the holders rule (answered before the
-// role-in-use rule, so a caller who may not act on the holders learns nothing about
-// them). The one decision for deactivate and reactivate: a role is never deleted
-// (ADR 0073), and this is exactly what deleting one used to ask.
-func (a Actor) MayChangeRoleStatus(r *role.Role, holders RoleHolders) error {
+// MayDeactivateRole — H3/H6: mayMutateRole + the ceiling over the role's own
+// permissions, because deactivating removes every one of them from every holder, + the
+// holders rule (answered before the role-in-use rule, so a caller who may not act on the
+// holders learns nothing about them). A role is never deleted (ADR 0073); this is exactly
+// what deleting one used to ask.
+func (a Actor) MayDeactivateRole(r *role.Role, holders RoleHolders) error {
 	if err := a.mayMutateRole(r, NoLevelChange); err != nil {
 		return err
 	}
@@ -733,6 +732,23 @@ func (a Actor) MayChangeRoleStatus(r *role.Role, holders RoleHolders) error {
 		return err
 	}
 	return a.mayChangeRoleFor(holders)
+}
+
+// MayReactivateRole is the decision for giving an inactive role back to its holders. It is a
+// CONFERRAL (every holder gets every permission of the role), so it asks everything removing
+// them asks ([Actor.MayDeactivateRole]: authority over the role, the ceiling, every holder)
+// AND what every other conferring route asks: the role-tier rule over its permission set and a
+// durable hold of each name, so a time-bound holder cannot make a permission permanent for
+// others by reactivating a role that carries it (the same rule MayAssignRole enforces).
+func (a Actor) MayReactivateRole(r *role.Role, holders RoleHolders) error {
+	if err := a.MayDeactivateRole(r, holders); err != nil {
+		return err
+	}
+	names := PermissionNames(r.Permissions())
+	if err := roleMayContain(r, names); err != nil {
+		return err
+	}
+	return a.mayConfer(names)
 }
 
 // MaySetRoleParent — ADR 0058 edges carry no authority (rank is level-only;

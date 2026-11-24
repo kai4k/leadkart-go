@@ -71,6 +71,9 @@ func TestConferral_NeedsADurableHold(t *testing.T) {
 	hasTimedX := mkMemberOv(t, 23, tA, []membership.GrantedOverride{timedGrant(x, soon)}, nil, userR)
 	hasPermanentX := mkMemberOv(t, 21, tA, []membership.GrantedOverride{permanent(x)}, nil, userR)
 	carrierHolder := mkMember(t, 22, tA, true, "", userR, carrier)
+	// an INACTIVE role carrying X, still held (ADR 0073): reactivating it gives X back to its holders
+	inactiveCarrier := role.UnmarshalFromDB(role.Snapshot{ID: role.ID(uid(43)), TenantID: tA, Name: "Inactive carries X", HierarchyLevel: 45,
+		Permissions: []*permission.Permission{permission.FromConstant(x)}, CreatedAt: t0})
 	cases := []decision{
 		// the overrides route
 		{"timed holder grants X by overrides", timedOnly.MayChangeOverrides(target, grantX), authority.ErrGrantExceedsAuthority},
@@ -89,7 +92,11 @@ func TestConferral_NeedsADurableHold(t *testing.T) {
 		{"timed holder replaces a set that already carries X, keeping it", timedOnly.MayReplaceRolePermissions(customHasX, []string{x}, hs(holder)), nil},
 		{"timed holder creates a role carrying X", timedOnly.MayCreateRole(tA, 45, []string{x}, nil), authority.ErrGrantExceedsAuthority},
 		{"durable holder creates a role carrying X", durable.MayCreateRole(tA, 45, []string{x}, nil), nil},
+		// reactivating a role gives its permissions back to its holders: a conferral
+		{"timed holder reactivates an inactive role carrying X", timedOnly.MayReactivateRole(inactiveCarrier, hs(holder)), authority.ErrGrantExceedsAuthority},
+		{"durable holder reactivates an inactive role carrying X", durable.MayReactivateRole(inactiveCarrier, hs(holder)), nil},
 		// removing is not conferring
+		{"timed holder deactivates a role carrying X", timedOnly.MayDeactivateRole(carrier, hs(holder)), nil},
 		{"timed holder revokes X from a role", timedOnly.MayRevokeRolePermission(customHasX, x, hs(holder)), nil},
 		{"timed holder removes X by overrides", timedOnly.MayChangeOverrides(hasPermanentX, authority.Overrides{}), nil},
 		{"timed holder revokes a role carrying X", timedOnly.MayRevokeRole(carrierHolder, carrier, nil), nil},
