@@ -105,7 +105,7 @@ func TestE2E_Commerce_NULInTextIs422NeverA500(t *testing.T) {
 	notes := "/api/v1/dispatch/consignment-notes"
 	want("consignment carrier", post(notes, dispatchports.CreateConsignmentNoteRequest{OrderID: uuid.NewString(), CarrierName: "Blue\x00Dart", BoxCount: 1, WeightGrams: 100}), "carrier_name_invalid_characters")
 	newNote := func() string {
-		r := post(notes, dispatchports.CreateConsignmentNoteRequest{OrderID: uuid.NewString(), CarrierName: "BlueDart", BoxCount: 1, WeightGrams: 100})
+		r := post(notes, dispatchports.CreateConsignmentNoteRequest{OrderID: invoicedOrderID(t, f, tok, "NUL-DISP"), CarrierName: "BlueDart", BoxCount: 1, WeightGrams: 100})
 		var out dispatchports.CreateConsignmentNoteResponse
 		if err := json.Unmarshal(r.body, &out); err != nil || r.status != http.StatusCreated {
 			t.Fatalf("create note: status %d body %s", r.status, r.body)
