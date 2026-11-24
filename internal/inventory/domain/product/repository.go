@@ -8,7 +8,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// ErrNotFound is returned by [Repository.GetByID] and lookup methods when no matching live product exists.
+// ErrNotFound is returned by [Repository.GetByID] and lookup methods when no matching product exists.
 var ErrNotFound = errs.New(errs.KindNotFound, "product", "product not found")
 
 // ErrSKUTaken is returned by [Repository.Add] when another live product in the same tenant holds the SKU.
@@ -18,11 +18,13 @@ var ErrSKUTaken = errs.New(errs.KindAlreadyExists, "product", "sku already taken
 // ListFilter is the filter input for [Repository.ListPage] (GET /v1/inventory/products, BRD §6.5).
 //
 //   - Search       — pg_trgm fuzzy match on (sku || name); empty = no filter.
-//   - ActiveOnly   — when true, exclude is_active = false rows.
+//   - ActiveOnly   — when true, exclude is_active = false rows (the HTTP list uses the
+//     lifecycle status filter through the product reader instead; this repository page is
+//     the narrower keyset read).
 //   - DosageForm   — exact match (case-insensitive); empty = no filter.
 //   - Manufacturer — exact match (case-insensitive); empty = no filter.
 //
-// Soft-deleted rows are never returned; use a dedicated forensic endpoint for those.
+// Inactive rows are returned unless ActiveOnly is set: nothing is deleted (ADR 0073).
 type ListFilter struct {
 	Search       string
 	ActiveOnly   bool
@@ -45,7 +47,7 @@ type Repository interface {
 	// updateFn returns (true, nil) to commit, (false, nil) to abort, (_, err) to roll back.
 	UpdateByID(ctx context.Context, tenantID tenant.ID, id ID, updateFn func(*Product) (bool, error)) error
 
-	// GetByID returns a live (non-deleted) product in the supplied tenant scope or [ErrNotFound].
+	// GetByID returns a product (active or inactive) in the supplied tenant scope or [ErrNotFound].
 	GetByID(ctx context.Context, tenantID tenant.ID, id ID) (*Product, error)
 
 	// ListPage returns a keyset-paginated page of live products in tenant scope,

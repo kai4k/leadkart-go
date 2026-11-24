@@ -499,10 +499,10 @@ func (a Actor) MayCreateRole(tenantID tenant.ID, level int, perms []string, pare
 	return parentEligible(parent, Rank(level))
 }
 
-// parentEligible: a parent role is live and strictly more senior than the child level.
+// parentEligible: a parent role is active and strictly more senior than the child level.
 func parentEligible(parent *role.Role, childLevel Rank) error {
 	if !parent.IsActive() {
-		return fmt.Errorf("%w: parent role %q is deleted", ErrRoleParentNotEligible, parent.Name())
+		return fmt.Errorf("%w: parent role %q is inactive", ErrRoleParentNotEligible, parent.Name())
 	}
 	if levelOf(parent) >= childLevel {
 		return fmt.Errorf("%w: parent level %d must be below child level %d", ErrRoleParentNotEligible, levelOf(parent), childLevel)

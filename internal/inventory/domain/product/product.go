@@ -2,7 +2,7 @@
 //
 // Tenant-scoped; identified by [ID] (UUIDv7). Carries the fields every Batch and order line
 // references: SKU, name, dosage form, pack size, HSN code, gst_rate_bps (basis points, never float
-// per Stripe canon), manufacturer, is_active, soft-delete.
+// per Stripe canon), manufacturer and is_active (a product is made inactive, never deleted: ADR 0073).
 //
 // Construct via [New] (invariants enforced) or [UnmarshalFromDB] (repo re-hydration, no re-validation
 // per TDL Wild Workouts canon). Batches reference Products by ID only (Vernon IDDD ch.10);
