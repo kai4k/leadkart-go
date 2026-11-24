@@ -1336,7 +1336,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '409':
-          description: Role name already taken in this tenant (`role_name_taken`)
+          description: An ACTIVE role of this tenant already has this name (`role_name_taken`); a deleted (inactive) role frees its name (ADR 0073 addendum)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -1455,7 +1455,7 @@ paths:
       tags: [roles]
       summary: Make an inactive role active again
       description: |
-        Requires `identity.roles.manage`. Reactivating gives the role's permissions back to every holder, so it asks the deactivate authority (the caller holds every permission the role carries and may act on every holder) PLUS a durable hold of each of those permissions: a permission held only until a date cannot be conferred this way (403 `grant_exceeds_authority`). The security stamp of every ACTIVE holder rotates (their tokens are refreshed). Idempotent: an active role answers 200. Answers the updated role.
+        Requires `identity.roles.manage`. Reactivating gives the role's permissions back to every holder, so it asks the deactivate authority (the caller holds every permission the role carries and may act on every holder) PLUS a durable hold of each of those permissions: a permission held only until a date cannot be conferred this way (403 `grant_exceeds_authority`). The security stamp of every ACTIVE holder rotates (their tokens are refreshed). Idempotent: an active role answers 200. Answers the updated role. If a newer ACTIVE role now has this role's name it cannot come back: 409 `role_name_taken` (nothing changes).
       x-required-permissions: [identity.roles.manage]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
@@ -1470,6 +1470,11 @@ paths:
               schema: { $ref: '#/components/schemas/RoleDto' }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: "`role_name_taken` - an active role already has this name (rename or deactivate that one first)"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
 
   /api/v1/roles/{roleId}/parent:
@@ -2448,7 +2453,7 @@ paths:
         '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: SKU already exists in this tenant
+          description: "`already_exists` - an ACTIVE product of this tenant has this SKU; `product_sku_taken_by_inactive` - a deactivated product used this SKU (a SKU never frees up: old invoices print it), so the web says: A deleted product used this SKU. Pick another."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -4560,7 +4565,8 @@ paths:
       description: |
         Requires `company_settings.tax.manage`. The body carries the `reason` (required).
         Idempotent: an active class answers 200 and the policy version stays. Returns `200` with the
-        list and the class in `class`.
+        list and the class in `class`. A class name is unique among ACTIVE classes only: if an active
+        class now has this label, the old one cannot come back (409 `schedule_class_name_taken`).
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { name: classId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -4580,6 +4586,11 @@ paths:
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: "`schedule_class_name_taken` - an active class already has this label (rename or deactivate that one first)"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
 components:
