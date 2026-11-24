@@ -82,7 +82,8 @@ func (r *RoleRepository) GetByID(ctx context.Context, tenantID tenant.ID, id rol
 	return out, nil
 }
 
-// GetByTenantAndName satisfies [role.Repository]. Any status: an inactive role still holds its name.
+// GetByTenantAndName satisfies [role.Repository]. Any status, the ACTIVE holder of the name first (an
+// inactive role keeps its name only until an active one takes it: names are unique among active roles).
 // GUC bound from tenantID (ADR 0062).
 func (r *RoleRepository) GetByTenantAndName(
 	ctx context.Context,

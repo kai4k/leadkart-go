@@ -1,6 +1,7 @@
 package command
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -463,26 +464,36 @@ func (h DeactivateRoleHandler) Handle(ctx context.Context, cmd ChangeRoleStatusC
 	return translateAuthorityWrite("deactivate_role", err)
 }
 
-// inUse builds the refusal: every holder counted, active ones apart, and the names of the first few.
+// inUse builds the refusal: every holder counted, active ones apart, and the names of the first few
+// by display name, then person id (a stable list: the same holders always give the same names).
 func (h DeactivateRoleHandler) inUse(ctx context.Context, holders loadedHolders) error {
 	out := &RoleInUseError{Holders: len(holders.memberships)}
-	var personIDs []person.ID
+	personIDs := make([]person.ID, 0, len(holders.memberships))
 	for _, m := range holders.memberships {
 		if m.Status() == membership.StatusActive {
 			out.ActiveHolders++
 		}
-		if len(personIDs) < MaxRoleInUseHolderNames {
-			personIDs = append(personIDs, m.PersonID())
-		}
+		personIDs = append(personIDs, m.PersonID())
 	}
 	people, err := h.facts.persons.GetByIDs(ctx, personIDs)
 	if err != nil {
 		return fmt.Errorf("deactivate_role: load holder names: %w", err)
 	}
+	type holderName struct {
+		id   person.ID
+		name string
+	}
+	named := make([]holderName, 0, len(personIDs))
 	for _, id := range personIDs {
 		if p, ok := people[id]; ok {
-			out.HolderNames = append(out.HolderNames, strings.TrimSpace(p.FirstName()+" "+p.LastName()))
+			named = append(named, holderName{id, strings.TrimSpace(p.FirstName() + " " + p.LastName())})
 		}
+	}
+	slices.SortFunc(named, func(a, b holderName) int {
+		return cmp.Or(strings.Compare(a.name, b.name), strings.Compare(string(a.id), string(b.id)))
+	})
+	for _, n := range named[:min(len(named), MaxRoleInUseHolderNames)] {
+		out.HolderNames = append(out.HolderNames, n.name)
 	}
 	return out
 }
