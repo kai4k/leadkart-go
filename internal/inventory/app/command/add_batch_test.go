@@ -78,10 +78,9 @@ func TestAddBatchHandler_MissingProduct_ReturnsErrNotFound(t *testing.T) {
 	}
 }
 
-// Soft-deleted parent → ErrNotFound (ADR 0061 amendment 1 H4). The fake's
-// GetByID filters IsDeleted, so it returns ErrNotFound directly; the H4 fix is
-// the UoW wrapping, with the explicit re-check as defence-in-depth.
-func TestAddBatchHandler_SoftDeletedParent_ReturnsErrNotFound(t *testing.T) {
+// An inactive product takes no new batch (ADR 0073): product.ErrInactive, nothing written. Once
+// reactivated, the same call succeeds.
+func TestAddBatchHandler_InactiveParent_ReturnsErrInactiveUntilReactivated(t *testing.T) {
 	t.Parallel()
 	productRepo := newFakeProductRepo()
 	batchRepo := newFakeBatchRepo()
@@ -89,14 +88,12 @@ func TestAddBatchHandler_SoftDeletedParent_ReturnsErrNotFound(t *testing.T) {
 	tid := newTenantID(t)
 	actor := newMembershipID(t)
 	p := seedProduct(t, productRepo, tid, actor, "AB-2")
-	// Soft-delete before the handler runs.
-	if err := p.SoftDelete(actor, fixedNow); err != nil {
-		t.Fatalf("SoftDelete: %v", err)
+	if err := p.Deactivate(actor, fixedNow); err != nil {
+		t.Fatalf("Deactivate: %v", err)
 	}
 	_ = p.PullEvents()
 	h := command.NewAddBatchHandler(uow, productRepo, batchRepo, newFakeMovementRepo(), sellabilitytest.Resolver(fixedNow), func() time.Time { return fixedNow }, testNewBatchID, testNewMovementID)
-
-	_, err := h.Handle(t.Context(), command.AddBatchCommand{
+	cmd := command.AddBatchCommand{
 		TenantID:                   tid,
 		ProductID:                  p.ID(),
 		ActorMembershipID:          actor,
@@ -107,12 +104,20 @@ func TestAddBatchHandler_SoftDeletedParent_ReturnsErrNotFound(t *testing.T) {
 		ManufacturingLicenceNumber: "ML-1",
 		MRPPaise:                   25000,
 		PurchasePricePaise:         18000,
-	})
-	if !errors.Is(err, product.ErrNotFound) {
-		t.Fatalf("err: got %v want ErrNotFound (soft-deleted parent)", err)
+	}
+
+	if _, err := h.Handle(t.Context(), cmd); !errors.Is(err, product.ErrInactive) {
+		t.Fatalf("err: got %v want ErrInactive", err)
 	}
 	if batchRepo.AddCalls != 0 {
-		t.Fatalf("batchRepo.AddCalls on deleted parent: got %d want 0", batchRepo.AddCalls)
+		t.Fatalf("batchRepo.AddCalls on an inactive parent: got %d want 0", batchRepo.AddCalls)
+	}
+
+	if err := p.Activate(actor, fixedNow); err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	if _, err := h.Handle(t.Context(), cmd); err != nil {
+		t.Fatalf("after reactivation: %v", err)
 	}
 }
 

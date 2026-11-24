@@ -18,11 +18,6 @@ var ErrNotFound = errs.New(errs.KindNotFound, "batch", "batch not found")
 // index violation for (product_id, batch_number) WHERE NOT is_deleted.
 var ErrBatchNumberTaken = errs.New(errs.KindAlreadyExists, "batch", "batch_number already exists for this product")
 
-// ErrAnyLiveStock — application-layer guard: cannot soft-delete the
-// parent product when any of its live batches still hold stock. Lives
-// here so the application + adapter share the sentinel.
-var ErrAnyLiveStock = errs.New(errs.KindConflict, "batch", "product has live batches with non-zero stock")
-
 // ListFilter is the filter set the GET /v1/inventory/products/{id}/batches
 // endpoint surfaces. SoftDeleted batches are always excluded.
 type ListFilter struct {
@@ -65,12 +60,6 @@ type Repository interface {
 	// supplied tenant, ordered (expiry_date ASC, id DESC) — FEFO
 	// ordering per BRD §6.5.
 	ListByProductPage(ctx context.Context, tenantID tenant.ID, productID product.ID, filter ListFilter, cursor pagination.Cursor, pageSize int) (pagination.Page[*Batch], error)
-
-	// AnyLiveWithStockForProduct reports whether any LIVE batch with
-	// quantity_on_hand > 0 exists for productID in the supplied tenant.
-	// Used by the DeleteProductHandler to enforce the "no live stock"
-	// guard.
-	AnyLiveWithStockForProduct(ctx context.Context, tenantID tenant.ID, productID product.ID) (bool, error)
 
 	// ListFefoForProduct returns live, in-stock, not-yet-expired batches
 	// for productID in tenantID, ordered by (expiry_date ASC, id ASC)

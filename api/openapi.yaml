@@ -2429,7 +2429,9 @@ paths:
       summary: List Products (cursor-paginated)
       description: |
         Requires `inventory.catalog.read` OR `inventory.catalog.manage`.
-        Returns the live (non-deleted) products for the caller's tenant.
+        Returns the caller's company products: the ACTIVE ones by default, `?status=inactive` for the
+        inactive ones and `?status=all` for both (products are never deleted, ADR 0073). The first page
+        (no `cursor`) also carries `status_counts`.
         The order is fixed: newest first, (created_at, id) DESC, keyset
         paginated with `cursor` and `page_size`; there is no `sort`
         parameter. Every item carries its stock totals and earliest expiry
@@ -2440,11 +2442,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/Cursor' }
         - { $ref: '#/components/parameters/PageSize' }
-        - name: active
-          in: query
-          required: false
-          schema: { type: string, enum: ['true', 'false'] }
-          description: When 'true', restricts to is_active products. Any other value is no filter (there is no "inactive only" filter).
+        - { $ref: '#/components/parameters/StatusFilter' }
         - name: dosage_form
           in: query
           required: false
@@ -2483,7 +2481,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ListProductsResponse' }
-        '400': { description: "`invalid_query` — a malformed cursor, or a `search`, `dosage_form` or `manufacturer` filter holding the NUL character (`%00`; it used to be a 500); or a `category`, `low_stock` or `expiring_within_days` value the server cannot read, named in `errors{<param>: [<rule>]}` (rules on each parameter)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '400': { description: "`invalid_status_filter` — `status` is not active, inactive or all; `invalid_query` — a malformed cursor, or a `search`, `dosage_form` or `manufacturer` filter holding the NUL character (`%00`; it used to be a 500); or a `category`, `low_stock` or `expiring_within_days` value the server cannot read, named in `errors{<param>: [<rule>]}` (rules on each parameter)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -2538,35 +2536,54 @@ paths:
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '409':
-          description: Product is deleted
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
-    delete:
+  /api/v1/inventory/products/{productId}/deactivate:
+    post:
       tags: [inventory]
-      summary: Soft-delete a Product
+      summary: Make a Product inactive
       description: |
-        Requires `inventory.catalog.manage`. Idempotent — repeat calls
-        return 204. REJECTED with 409 `product_has_live_stock` if any
-        live batch with quantity_on_hand > 0 exists.
+        Requires `inventory.catalog.manage`. A product is never deleted (ADR 0073): it goes inactive.
+        The product stays readable and editable, and its existing orders, batches and stock are
+        untouched; an inactive product takes no new batch (`POST .../batches` is 409
+        `product_inactive`). Idempotent: an inactive product answers 200 the same, with no event.
+        Answers the updated product.
       parameters:
+        - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/ProductId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
         '429': { $ref: '#/components/responses/TooManyRequests' }
-        '204': { description: Deleted (or already deleted) }
+        '200':
+          description: The product, now inactive
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProductDto' }
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '409':
-          description: Product has live batches with non-zero stock
+
+  /api/v1/inventory/products/{productId}/reactivate:
+    post:
+      tags: [inventory]
+      summary: Make an inactive Product active again
+      description: |
+        Requires `inventory.catalog.manage`. Idempotent: an active product answers 200 the same, with
+        no event. Answers the updated product.
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { $ref: '#/components/parameters/ProductId' }
+        - $ref: '#/components/parameters/XTenantId'
+      responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '200':
+          description: The product, now active
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
+              schema: { $ref: '#/components/schemas/ProductDto' }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /api/v1/inventory/product-categories:
     get:
@@ -2630,7 +2647,7 @@ paths:
         '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: "`already_exists` — batch_number already exists for this product; `batch_expired` — `initial_quantity` above 0 for a batch whose expiry date has passed (nothing is written)"
+          description: "`product_inactive` — the product is inactive and takes no new batch (reactivate it first; ADR 0073); `already_exists` — batch_number already exists for this product; `batch_expired` — `initial_quantity` above 0 for a batch whose expiry date has passed (nothing is written)"
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -4547,6 +4564,12 @@ components:
       in: query
       required: false
       schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+    StatusFilter:
+      name: status
+      in: query
+      required: false
+      schema: { type: string, enum: [active, inactive, all], default: active }
+      description: 'Which records the list returns (ADR 0073: records are made inactive, never deleted). Default `active`; anything else than `active`, `inactive` or `all` is 400 `invalid_status_filter`.'
     XTenantId:
       name: X-Tenant-Id
       in: header
@@ -4879,6 +4902,14 @@ components:
 
   schemas:
     # ===== Errors ======================================================
+    StatusCounts:
+      type: object
+      description: First page only (no cursor). The whole company's records per status, whatever the `status` filter is, for the status chips.
+      required: [active, inactive]
+      properties:
+        active:   { type: integer }
+        inactive: { type: integer }
+
     ErrorResponse:
       type: object
       description: |
@@ -6392,7 +6423,6 @@ components:
       properties:
         name:          { type: string, minLength: 1, maxLength: 200 }
         gst_rate_id:   { type: string, format: uuid, description: 'Moves the product to another entry of the company GST list (the entry must be active; keeping the current one is always allowed). Blank is `required`.' }
-        is_active:     { type: boolean }
         manufacturer:  { type: string, maxLength: 200 }
         generic_name:     { type: string, maxLength: 200, description: 'Optional free text.' }
         composition:      { type: string, maxLength: 1000, description: 'Optional free text.' }
@@ -6426,6 +6456,7 @@ components:
           items: { $ref: '#/components/schemas/ProductDto' }
         has_more:    { type: boolean }
         next_cursor: { type: string }
+        status_counts: { $ref: '#/components/schemas/StatusCounts' }
 
     BatchDto:
       type: object

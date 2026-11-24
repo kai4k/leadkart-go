@@ -6,6 +6,8 @@ package ports
 
 import (
 	"time"
+
+	"github.com/leadkart/leadkart-go/internal/common/lifecycle"
 )
 
 // ----- Product ---------------------------------------------------------------
@@ -116,7 +118,6 @@ type CreateProductResponse struct {
 type UpdateProductRequest struct {
 	Name         *string `json:"name,omitzero"`
 	GSTRateID    *string `json:"gst_rate_id,omitzero"`
-	IsActive     *bool   `json:"is_active,omitzero"`
 	Manufacturer *string `json:"manufacturer,omitzero"`
 	// DefaultSaleRatePaise sets the rate offered on a quotation line (0 clears it).
 	DefaultSaleRatePaise *int64  `json:"default_sale_rate_paise,omitzero"`
@@ -148,6 +149,9 @@ type ListProductsResponse struct {
 	Items      []ProductDto `json:"items"`
 	HasMore    bool         `json:"has_more"`
 	NextCursor string       `json:"next_cursor,omitzero"`
+	// StatusCounts is on the first page only (no cursor): products per status, for the
+	// status chips, whatever ?status= is.
+	StatusCounts *lifecycle.Counts `json:"status_counts,omitzero"`
 }
 
 // ----- Batch -----------------------------------------------------------------
@@ -313,7 +317,8 @@ const (
 	// quarantined units than the batch holds.
 	ErrCodeInsufficientQuarantined = "insufficient_quarantined"
 	ErrCodeBatchExpired            = "batch_expired"
-	ErrCodeProductHasStock         = "product_has_live_stock"
+	ErrCodeProductInactive         = "product_inactive"
+	ErrCodeInvalidStatusFilter     = "invalid_status_filter"
 	ErrCodeConcurrencyConflict     = "concurrency_conflict"
 	ErrCodeInternalError           = "internal_error"
 )

@@ -57,11 +57,9 @@ const WarningPastSellableCutoff = "past_sellable_cutoff"
 // AddBatchHandler resolves the parent Product, constructs the Batch, and
 // persists, all inside one UoW transaction.
 //
-// Per ADR 0061 amendment 1 (H4 race fix): running GetByID and Add as separate
-// transactions left a window where the parent could be soft-deleted between
-// load and insert, and the composite FK still accepted the orphan write.
-// Wrapping both in uow.WithinTx closes it — load, re-check, and insert share
-// one tx, so a concurrent SoftDelete serialises on the products row (MVCC).
+// Per ADR 0061 amendment 1 (H4 race fix): GetByID and Add share one tx, so the
+// load, the active check and the insert see the same product. An INACTIVE product
+// takes no new batch (product.ErrInactive, ADR 0073).
 //
 // Opening stock (audit C6): with InitialQuantity > 0 the same tx also writes
 // the inbound ledger row, so a batch and its first stock cannot half-exist.
@@ -99,8 +97,8 @@ func NewAddBatchHandler(uow pg.UnitOfWork, products product.Repository, batches 
 }
 
 // Handle adds a batch to the product inside one tenant-scoped UoW. Returns
-// product.ErrNotFound for a missing or soft-deleted parent (including the
-// read-then-write race per ADR 0061 amendment 1), batch.ErrInvalid on spec
+// product.ErrNotFound for a missing parent and product.ErrInactive for an
+// inactive one, batch.ErrInvalid on spec
 // failure or a negative InitialQuantity, batch.ErrExpired when opening stock
 // is given for a batch that is already expired, batch.ErrBatchNumberTaken on
 // (product_id, batch_number) collision. On any error nothing is written.
@@ -132,12 +130,10 @@ func (h AddBatchHandler) Handle(ctx context.Context, cmd AddBatchCommand) (AddBa
 			}
 			return fmt.Errorf("add batch: load product: %w", err)
 		}
-		// Defence-in-depth: GetByID already filters soft-deleted via the
-		// LIVE-only query (see adapter), but the re-check guards against
-		// future query changes + makes the invariant explicit at the
-		// handler boundary.
-		if p.IsDeleted() {
-			return product.ErrNotFound
+		// An inactive product takes no new batch (ADR 0073); its existing batches and
+		// stock are untouched.
+		if !p.IsActive() {
+			return product.ErrInactive
 		}
 		b, err := batch.New(
 			h.newBatchID(),

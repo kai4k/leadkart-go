@@ -2,6 +2,7 @@ package membership
 
 import (
 	"context"
+	"github.com/leadkart/leadkart-go/internal/common/lifecycle"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/errs"
@@ -167,29 +168,19 @@ type Repository interface {
 	ListReportingLinks(ctx context.Context, tenantID tenant.ID, ids []ID) ([]*Membership, error)
 }
 
-// StatusFilter selects which Memberships a tenant listing returns.
-type StatusFilter string
+// StatusFilter selects which Memberships a tenant listing returns; the one vocabulary every
+// "inactive, never deleted" list shares (ADR 0073).
+type StatusFilter = lifecycle.StatusFilter
 
 // The three listings of the users endpoint (?status=).
 const (
-	FilterActive   StatusFilter = "active"
-	FilterInactive StatusFilter = "inactive"
-	FilterAll      StatusFilter = "all"
+	FilterActive   = lifecycle.FilterActive
+	FilterInactive = lifecycle.FilterInactive
+	FilterAll      = lifecycle.FilterAll
 )
 
-// ParseStatusFilter reads the ?status= query value; an empty value is
-// [FilterActive] (the listing's default, so existing callers are unchanged).
-func ParseStatusFilter(s string) (StatusFilter, bool) {
-	switch StatusFilter(s) {
-	case "", FilterActive:
-		return FilterActive, true
-	case FilterInactive:
-		return FilterInactive, true
-	case FilterAll:
-		return FilterAll, true
-	}
-	return "", false
-}
+// ParseStatusFilter reads the ?status= query value; an empty value is [FilterActive].
+func ParseStatusFilter(s string) (StatusFilter, bool) { return lifecycle.ParseStatusFilter(s) }
 
 // StatusCounts is how many Memberships a tenant has in each status.
 type StatusCounts struct {

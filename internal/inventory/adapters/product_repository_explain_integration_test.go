@@ -32,7 +32,7 @@ import (
 
 // TestKeysetProductsPage_UsesIndexUnderRLS asserts the per-tenant keyset
 // query plans as an Index Scan against idx_products_tenant_created_keyset
-// (tenant_id, created_at DESC, id DESC) WHERE NOT is_deleted — ADR 0038.
+// (tenant_id, created_at DESC, id DESC) — ADR 0038.
 // Seeds 200 products, ANALYZEs, then EXPLAINs the ListProductsByTenantPage
 // SQL shape. Regression: planner fell back to Seq Scan OR predicate drifted.
 func TestKeysetProductsPage_UsesIndexUnderRLS(t *testing.T) {
@@ -84,11 +84,9 @@ func TestKeysetProductsPage_UsesIndexUnderRLS(t *testing.T) {
 		EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS)
 		SELECT id, tenant_id, sku, name, dosage_form, pack_size, hsn_code,
 		       gst_rate_bps, manufacturer, is_active,
-		       created_at, updated_at,
-		       is_deleted, deleted_at, deleted_by
+		       created_at, updated_at
 		FROM   inventory.products
 		WHERE  tenant_id = $1::uuid
-		AND    NOT is_deleted
 		AND    (NOT $4::boolean OR is_active = true)
 		AND    ($5::text = ''
 		        OR (lower(sku) || ' ' || lower(name)) ILIKE '%' || lower($5) || '%')

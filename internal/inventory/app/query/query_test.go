@@ -3,6 +3,7 @@ package query_test
 import (
 	"context"
 	"errors"
+	"github.com/leadkart/leadkart-go/internal/common/lifecycle"
 	"github.com/leadkart/leadkart-go/internal/inventory/app/sellability"
 	"github.com/leadkart/leadkart-go/internal/inventory/app/sellability/sellabilitytest"
 	"slices"
@@ -61,6 +62,21 @@ func (r *fakeProductReader) ListProducts(_ context.Context, _ tenant.ID, f query
 	return r.views[:min(limit, len(r.views))], nil
 }
 
+func (r *fakeProductReader) CountByStatus(context.Context, tenant.ID) (lifecycle.Counts, error) {
+	if r.err != nil {
+		return lifecycle.Counts{}, r.err
+	}
+	var c lifecycle.Counts
+	for _, v := range r.views {
+		if v.IsActive {
+			c.Active++
+		} else {
+			c.Inactive++
+		}
+	}
+	return c, nil
+}
+
 type fakeBatchRepo struct {
 	mu       sync.Mutex
 	batches  map[batch.ID]*batch.Batch
@@ -96,10 +112,6 @@ func (r *fakeBatchRepo) ListByProductPage(_ context.Context, _ tenant.ID, _ prod
 		return pagination.Page[*batch.Batch]{}, r.listErr
 	}
 	return r.listPage, nil
-}
-
-func (r *fakeBatchRepo) AnyLiveWithStockForProduct(context.Context, tenant.ID, product.ID) (bool, error) {
-	return false, nil
 }
 
 func (r *fakeBatchRepo) ListFefoForProduct(_ context.Context, _ tenant.ID, _ product.ID, _ time.Time) ([]*batch.Batch, error) {
@@ -191,7 +203,7 @@ func TestListProductsPageHandler_PassesFilterAndClockAndAsksOneExtraRow(t *testi
 	t.Parallel()
 	reader := &fakeProductReader{}
 	days := 30
-	filter := query.ProductListFilter{ActiveOnly: true, Category: "Cardiac", LowStock: true, ExpiringWithinDays: &days}
+	filter := query.ProductListFilter{Status: lifecycle.FilterInactive, Category: "Cardiac", LowStock: true, ExpiringWithinDays: &days}
 
 	page, err := query.NewListProductsPageHandler(reader, clock()).Handle(t.Context(), query.ListProductsPageQuery{
 		TenantID: newTenantID(t), PageSize: 25, Filter: filter,

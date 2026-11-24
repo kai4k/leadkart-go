@@ -13,7 +13,7 @@
 //   infrastructure + per-test logical isolation = safe parallelism.
 //
 // SQL-contract coverage (ADR 0062): SQLSTATE 23505 on
-// uq_products_tenant_sku_live → [product.ErrSKUTaken].
+// uq_products_tenant_sku → [product.ErrSKUTaken].
 //
 // Outbox-emission coverage lives in outbox_forwarder_integration_test.go;
 // business-rule + round-trip coverage in per-aggregate fakes.
@@ -34,7 +34,7 @@ import (
 )
 
 // TestProductRepository_Add_DuplicateSKU_ReturnsErrSKUTaken verifies that
-// SQLSTATE 23505 on uq_products_tenant_sku_live surfaces as [product.ErrSKUTaken].
+// SQLSTATE 23505 on uq_products_tenant_sku surfaces as [product.ErrSKUTaken].
 func TestProductRepository_Add_DuplicateSKU_ReturnsErrSKUTaken(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)

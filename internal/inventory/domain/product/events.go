@@ -44,10 +44,8 @@ type UpdatedEvent struct {
 
 func (UpdatedEvent) isProductEvent() {}
 
-// DeactivatedEvent fires on [Product.Deactivate] when is_active transitions to false.
-// Distinct from SoftDeletedEvent — deactivated products remain visible to admins;
-// soft-deleted are invisible everywhere. ADR 0061 amendment 1 split these semantics.
-// Maps to ProductDeactivatedV1.
+// DeactivatedEvent fires on [Product.Deactivate] when the product goes inactive. Maps to
+// ProductDeactivatedV1.
 type DeactivatedEvent struct {
 	ProductID ID
 	TenantID  tenant.ID
@@ -57,14 +55,13 @@ type DeactivatedEvent struct {
 
 func (DeactivatedEvent) isProductEvent() {}
 
-// SoftDeletedEvent fires on [Product.SoftDelete] — terminal hide.
-// Row is invisible to LIVE reads but kept for FK + audit integrity.
-// Distinct from DeactivatedEvent. Maps to ProductSoftDeletedV1.
-type SoftDeletedEvent struct {
+// ActivatedEvent fires on [Product.Activate] when an inactive product becomes active again.
+// Maps to ProductReactivatedV1.
+type ActivatedEvent struct {
 	ProductID ID
 	TenantID  tenant.ID
 	ActorID   membership.ID
 	At        time.Time
 }
 
-func (SoftDeletedEvent) isProductEvent() {}
+func (ActivatedEvent) isProductEvent() {}

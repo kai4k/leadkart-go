@@ -21,16 +21,16 @@ INSERT INTO inventory.products (
 -- returns the db.InventoryProduct model (not a custom row).
 SELECT id, tenant_id, sku, name, dosage_form, pack_size, hsn_code,
        gst_rate_bps, manufacturer, is_active,
-       created_at, updated_at, is_deleted, deleted_at, deleted_by,
+       created_at, updated_at,
        created_by_membership_id, reorder_level, expiry_alert_threshold_days,
        product_category,
        gst_rate_id, default_sale_rate_paise, generic_name, composition, storage_condition, drug_schedule_class_id
 FROM   inventory.products
-WHERE  id = $1
-AND    NOT is_deleted;
+WHERE  id = $1;
 
 -- name: UpdateProduct :exec
--- General-purpose update covering Product.Update mutator + SoftDelete.
+-- General-purpose update covering the Product.Update mutator and the activate / deactivate
+-- transitions.
 -- The aggregate persists ALL its current state on every write; the
 -- repo doesn't try to compute a partial UPDATE.
 UPDATE inventory.products
@@ -48,17 +48,7 @@ SET    name                        = $2,
        composition                 = $13,
        storage_condition           = $14,
        drug_schedule_class_id      = $15
-WHERE  id = $1
-AND    NOT is_deleted;
-
--- name: SoftDeleteProduct :exec
-UPDATE inventory.products
-SET    is_deleted = true,
-       deleted_at = $2,
-       deleted_by = $3,
-       updated_at = $4
-WHERE  id = $1
-AND    NOT is_deleted;
+WHERE  id = $1;
 
 -- name: ListProductsByTenantPage :many
 -- Cursor-paginated list per ADR 0038. Keyset on (created_at, id) DESC.
@@ -68,13 +58,12 @@ AND    NOT is_deleted;
 -- $6 = page_size + 1 (peek-one-extra per pagination.BuildPage).
 SELECT id, tenant_id, sku, name, dosage_form, pack_size, hsn_code,
        gst_rate_bps, manufacturer, is_active,
-       created_at, updated_at, is_deleted, deleted_at, deleted_by,
+       created_at, updated_at,
        created_by_membership_id, reorder_level, expiry_alert_threshold_days,
        product_category,
        gst_rate_id, default_sale_rate_paise, generic_name, composition, storage_condition, drug_schedule_class_id
 FROM   inventory.products
 WHERE  tenant_id = $1
-AND    NOT is_deleted
 AND    (NOT sqlc.arg(active_only)::boolean OR is_active = true)
 AND    (
         sqlc.arg(search)::text = ''
@@ -120,8 +109,7 @@ LEFT   JOIN LATERAL (
            AND    b.tenant_id  = p.tenant_id
            AND    NOT b.is_deleted
        ) s ON true
-WHERE  p.id = sqlc.arg('id')
-AND    NOT p.is_deleted;
+WHERE  p.id = sqlc.arg('id');
 
 -- name: ListProductStockPage :many
 -- Read model for the product list: one statement returns the page WITH each
@@ -130,7 +118,8 @@ AND    NOT p.is_deleted;
 -- ADR 0038, as ListProductsByTenantPage.
 --
 -- Filters (each one is off at its neutral value):
---   active_only          false
+--   include_active /     which statuses to keep (lifecycle.StatusFilter: active = (true,false),
+--   include_inactive     inactive = (false,true), all = (true,true))
 --   search               ''   substring of "sku name", case-insensitive
 --   category             ''   exact product_category, case-insensitive
 --   dosage_form          ''   exact, case-insensitive
@@ -174,8 +163,10 @@ LEFT   JOIN LATERAL (
            AND    NOT b.is_deleted
        ) s ON true
 WHERE  p.tenant_id = sqlc.arg('tenant_id')
-AND    NOT p.is_deleted
-AND    (NOT sqlc.arg('active_only')::boolean OR p.is_active = true)
+AND    (
+        (sqlc.arg('include_active')::boolean AND p.is_active)
+        OR (sqlc.arg('include_inactive')::boolean AND NOT p.is_active)
+       )
 AND    (
         sqlc.arg('search')::text = ''
         OR (lower(p.sku) || ' ' || lower(p.name)) ILIKE '%' || lower(sqlc.arg('search')) || '%'
@@ -196,19 +187,25 @@ ORDER  BY p.created_at DESC, p.id DESC
 LIMIT  sqlc.arg('limit');
 
 -- name: CountProductsWithScheduleClass :one
--- How many LIVE products carry a drug schedule class (any class). The company
+-- How many products carry a drug schedule class (any class). The company
 -- settings module asks before it lets the schedule mode go to off.
 SELECT count(*)::bigint
 FROM   inventory.products
 WHERE  tenant_id = $1
-AND    NOT is_deleted
 AND    drug_schedule_class_id IS NOT NULL;
 
 -- name: CountProductsWithClass :one
--- How many LIVE products carry the given class. A class a product carries cannot
+-- How many products carry the given class. A class a product carries cannot
 -- be removed from the company list.
 SELECT count(*)::bigint
 FROM   inventory.products
 WHERE  tenant_id = $1
-AND    NOT is_deleted
 AND    drug_schedule_class_id = $2;
+
+-- name: CountProductsByStatus :one
+-- The product list's status chips: how many products the tenant has per status, whatever the
+-- list's filter is. One grouped read.
+SELECT (count(*) FILTER (WHERE is_active))::bigint     AS active,
+       (count(*) FILTER (WHERE NOT is_active))::bigint AS inactive
+FROM   inventory.products
+WHERE  tenant_id = $1;

@@ -51,11 +51,7 @@ func (e ProductUpdatedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
 // ProductDeactivatedV1 — a Product's `is_active` flag transitioned to
 // false. The Product remains visible to admins + report queries +
 // historical-order lookups; it is no longer offered on new-order forms
-// or product pickers. Distinct from soft-delete (see
-// ProductSoftDeletedV1).
-//
-// Per ADR 0061 amendment 1 (event-name semantic split): the earlier
-// shape conflated soft-delete + deactivate, losing the BRD distinction.
+// or product pickers. Products are never deleted (ADR 0073); see ProductReactivatedV1.
 type ProductDeactivatedV1 struct {
 	ProductID                 uuid.UUID `json:"product_id"`
 	TenantIDClaim             uuid.UUID `json:"tenant_id"`
@@ -73,36 +69,34 @@ func (e ProductDeactivatedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
 // TenantID satisfies [TenantScoped].
 func (e ProductDeactivatedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
 
-// ProductSoftDeletedV1 — a Product was soft-deleted (terminal hide).
-// Consumers DROP the row from search index / picker UI / list views.
-// Distinct from ProductDeactivatedV1 — soft-deleted rows are invisible
-// to LIVE reads regardless of is_active.
-type ProductSoftDeletedV1 struct {
+// ProductReactivatedV1 — an inactive Product became active again. Consumers may offer it again
+// on pickers. Products are never deleted (ADR 0073): the lifecycle is active <-> inactive.
+type ProductReactivatedV1 struct {
 	ProductID                 uuid.UUID `json:"product_id"`
 	TenantIDClaim             uuid.UUID `json:"tenant_id"`
-	SoftDeletedAt             time.Time `json:"soft_deleted_at"`
-	SoftDeletedByMembershipID uuid.UUID `json:"soft_deleted_by_membership_id"`
+	ReactivatedAt             time.Time `json:"reactivated_at"`
+	ReactivatedByMembershipID uuid.UUID `json:"reactivated_by_membership_id"`
 	OccurredAtUTC             time.Time `json:"occurred_at_utc"`
 }
 
 // Topic returns the canonical wire alias.
-func (ProductSoftDeletedV1) Topic() string { return "inventory.product_soft_deleted.v1" }
+func (ProductReactivatedV1) Topic() string { return "inventory.product_reactivated.v1" }
 
 // OccurredAt returns the domain timestamp.
-func (e ProductSoftDeletedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+func (e ProductReactivatedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
 
 // TenantID satisfies [TenantScoped].
-func (e ProductSoftDeletedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
+func (e ProductReactivatedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
 
 // Compile-time + runtime registration.
 var (
 	_ TenantScoped = ProductCreatedV1{}
 	_ TenantScoped = ProductUpdatedV1{}
 	_ TenantScoped = ProductDeactivatedV1{}
-	_ TenantScoped = ProductSoftDeletedV1{}
+	_ TenantScoped = ProductReactivatedV1{}
 
 	_ = register(ProductCreatedV1{})
 	_ = register(ProductUpdatedV1{})
 	_ = register(ProductDeactivatedV1{})
-	_ = register(ProductSoftDeletedV1{})
+	_ = register(ProductReactivatedV1{})
 )

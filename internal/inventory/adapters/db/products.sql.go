@@ -11,11 +11,31 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countProductsByStatus = `-- name: CountProductsByStatus :one
+SELECT (count(*) FILTER (WHERE is_active))::bigint     AS active,
+       (count(*) FILTER (WHERE NOT is_active))::bigint AS inactive
+FROM   inventory.products
+WHERE  tenant_id = $1
+`
+
+type CountProductsByStatusRow struct {
+	Active   int64
+	Inactive int64
+}
+
+// The product list's status chips: how many products the tenant has per status, whatever the
+// list's filter is. One grouped read.
+func (q *Queries) CountProductsByStatus(ctx context.Context, tenantID pgtype.UUID) (CountProductsByStatusRow, error) {
+	row := q.db.QueryRow(ctx, countProductsByStatus, tenantID)
+	var i CountProductsByStatusRow
+	err := row.Scan(&i.Active, &i.Inactive)
+	return i, err
+}
+
 const countProductsWithClass = `-- name: CountProductsWithClass :one
 SELECT count(*)::bigint
 FROM   inventory.products
 WHERE  tenant_id = $1
-AND    NOT is_deleted
 AND    drug_schedule_class_id = $2
 `
 
@@ -24,7 +44,7 @@ type CountProductsWithClassParams struct {
 	DrugScheduleClassID pgtype.UUID
 }
 
-// How many LIVE products carry the given class. A class a product carries cannot
+// How many products carry the given class. A class a product carries cannot
 // be removed from the company list.
 func (q *Queries) CountProductsWithClass(ctx context.Context, arg CountProductsWithClassParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countProductsWithClass, arg.TenantID, arg.DrugScheduleClassID)
@@ -37,11 +57,10 @@ const countProductsWithScheduleClass = `-- name: CountProductsWithScheduleClass 
 SELECT count(*)::bigint
 FROM   inventory.products
 WHERE  tenant_id = $1
-AND    NOT is_deleted
 AND    drug_schedule_class_id IS NOT NULL
 `
 
-// How many LIVE products carry a drug schedule class (any class). The company
+// How many products carry a drug schedule class (any class). The company
 // settings module asks before it lets the schedule mode go to off.
 func (q *Queries) CountProductsWithScheduleClass(ctx context.Context, tenantID pgtype.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, countProductsWithScheduleClass, tenantID)
@@ -53,13 +72,12 @@ func (q *Queries) CountProductsWithScheduleClass(ctx context.Context, tenantID p
 const getProductByID = `-- name: GetProductByID :one
 SELECT id, tenant_id, sku, name, dosage_form, pack_size, hsn_code,
        gst_rate_bps, manufacturer, is_active,
-       created_at, updated_at, is_deleted, deleted_at, deleted_by,
+       created_at, updated_at,
        created_by_membership_id, reorder_level, expiry_alert_threshold_days,
        product_category,
        gst_rate_id, default_sale_rate_paise, generic_name, composition, storage_condition, drug_schedule_class_id
 FROM   inventory.products
 WHERE  id = $1
-AND    NOT is_deleted
 `
 
 // Column order MUST match the inventory.products table column order so sqlc
@@ -80,9 +98,6 @@ func (q *Queries) GetProductByID(ctx context.Context, id pgtype.UUID) (Inventory
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.IsDeleted,
-		&i.DeletedAt,
-		&i.DeletedBy,
 		&i.CreatedByMembershipID,
 		&i.ReorderLevel,
 		&i.ExpiryAlertThresholdDays,
@@ -127,7 +142,6 @@ LEFT   JOIN LATERAL (
            AND    NOT b.is_deleted
        ) s ON true
 WHERE  p.id = $2
-AND    NOT p.is_deleted
 `
 
 type GetProductStockByIDParams struct {
@@ -307,32 +321,35 @@ LEFT   JOIN LATERAL (
            AND    NOT b.is_deleted
        ) s ON true
 WHERE  p.tenant_id = $2
-AND    NOT p.is_deleted
-AND    (NOT $3::boolean OR p.is_active = true)
 AND    (
-        $4::text = ''
-        OR (lower(p.sku) || ' ' || lower(p.name)) ILIKE '%' || lower($4) || '%'
+        ($3::boolean AND p.is_active)
+        OR ($4::boolean AND NOT p.is_active)
        )
-AND    ($5::text = '' OR lower(p.product_category) = lower($5))
-AND    ($6::text = '' OR lower(p.dosage_form) = lower($6))
-AND    ($7::text = '' OR lower(p.manufacturer) = lower($7))
 AND    (
-        NOT $8::boolean
+        $5::text = ''
+        OR (lower(p.sku) || ' ' || lower(p.name)) ILIKE '%' || lower($5) || '%'
+       )
+AND    ($6::text = '' OR lower(p.product_category) = lower($6))
+AND    ($7::text = '' OR lower(p.dosage_form) = lower($7))
+AND    ($8::text = '' OR lower(p.manufacturer) = lower($8))
+AND    (
+        NOT $9::boolean
         OR (p.reorder_level > 0 AND COALESCE(s.stock_sellable, 0) < p.reorder_level)
        )
 AND    (
-        NOT $9::boolean
-        OR s.earliest_expiry <= $10::date
+        NOT $10::boolean
+        OR s.earliest_expiry <= $11::date
        )
-AND    (p.created_at, p.id) < ($11::timestamptz, $12::uuid)
+AND    (p.created_at, p.id) < ($12::timestamptz, $13::uuid)
 ORDER  BY p.created_at DESC, p.id DESC
-LIMIT  $13
+LIMIT  $14
 `
 
 type ListProductStockPageParams struct {
 	MinSellable     pgtype.Date
 	TenantID        pgtype.UUID
-	ActiveOnly      bool
+	IncludeActive   bool
+	IncludeInactive bool
 	Search          string
 	Category        string
 	DosageForm      string
@@ -382,7 +399,8 @@ type ListProductStockPageRow struct {
 //
 // Filters (each one is off at its neutral value):
 //
-//	active_only          false
+//	include_active /     which statuses to keep (lifecycle.StatusFilter: active = (true,false),
+//	include_inactive     inactive = (false,true), all = (true,true))
 //	search               ''   substring of "sku name", case-insensitive
 //	category             ''   exact product_category, case-insensitive
 //	dosage_form          ''   exact, case-insensitive
@@ -401,7 +419,8 @@ func (q *Queries) ListProductStockPage(ctx context.Context, arg ListProductStock
 	rows, err := q.db.Query(ctx, listProductStockPage,
 		arg.MinSellable,
 		arg.TenantID,
-		arg.ActiveOnly,
+		arg.IncludeActive,
+		arg.IncludeInactive,
 		arg.Search,
 		arg.Category,
 		arg.DosageForm,
@@ -462,13 +481,12 @@ func (q *Queries) ListProductStockPage(ctx context.Context, arg ListProductStock
 const listProductsByTenantPage = `-- name: ListProductsByTenantPage :many
 SELECT id, tenant_id, sku, name, dosage_form, pack_size, hsn_code,
        gst_rate_bps, manufacturer, is_active,
-       created_at, updated_at, is_deleted, deleted_at, deleted_by,
+       created_at, updated_at,
        created_by_membership_id, reorder_level, expiry_alert_threshold_days,
        product_category,
        gst_rate_id, default_sale_rate_paise, generic_name, composition, storage_condition, drug_schedule_class_id
 FROM   inventory.products
 WHERE  tenant_id = $1
-AND    NOT is_deleted
 AND    (NOT $2::boolean OR is_active = true)
 AND    (
         $3::text = ''
@@ -522,9 +540,6 @@ func (q *Queries) ListProductsByTenantPage(ctx context.Context, arg ListProducts
 			&i.IsActive,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.IsDeleted,
-			&i.DeletedAt,
-			&i.DeletedBy,
 			&i.CreatedByMembershipID,
 			&i.ReorderLevel,
 			&i.ExpiryAlertThresholdDays,
@@ -546,33 +561,6 @@ func (q *Queries) ListProductsByTenantPage(ctx context.Context, arg ListProducts
 	return items, nil
 }
 
-const softDeleteProduct = `-- name: SoftDeleteProduct :exec
-UPDATE inventory.products
-SET    is_deleted = true,
-       deleted_at = $2,
-       deleted_by = $3,
-       updated_at = $4
-WHERE  id = $1
-AND    NOT is_deleted
-`
-
-type SoftDeleteProductParams struct {
-	ID        pgtype.UUID
-	DeletedAt pgtype.Timestamptz
-	DeletedBy *string
-	UpdatedAt pgtype.Timestamptz
-}
-
-func (q *Queries) SoftDeleteProduct(ctx context.Context, arg SoftDeleteProductParams) error {
-	_, err := q.db.Exec(ctx, softDeleteProduct,
-		arg.ID,
-		arg.DeletedAt,
-		arg.DeletedBy,
-		arg.UpdatedAt,
-	)
-	return err
-}
-
 const updateProduct = `-- name: UpdateProduct :exec
 UPDATE inventory.products
 SET    name                        = $2,
@@ -590,7 +578,6 @@ SET    name                        = $2,
        storage_condition           = $14,
        drug_schedule_class_id      = $15
 WHERE  id = $1
-AND    NOT is_deleted
 `
 
 type UpdateProductParams struct {
@@ -611,7 +598,8 @@ type UpdateProductParams struct {
 	DrugScheduleClassID      pgtype.UUID
 }
 
-// General-purpose update covering Product.Update mutator + SoftDelete.
+// General-purpose update covering the Product.Update mutator and the activate / deactivate
+// transitions.
 // The aggregate persists ALL its current state on every write; the
 // repo doesn't try to compute a partial UPDATE.
 func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) error {

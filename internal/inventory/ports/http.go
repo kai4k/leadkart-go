@@ -3,6 +3,7 @@ package ports
 import (
 	"encoding/json"
 	"errors"
+	"github.com/leadkart/leadkart-go/internal/common/lifecycle"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -70,8 +71,10 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		catalogRead(handleGetProduct(log, a)))
 	mux.Handle("PATCH /api/v1/inventory/products/{productId}",
 		catalogManage(handleUpdateProduct(log, a)))
-	mux.Handle("DELETE /api/v1/inventory/products/{productId}",
-		catalogManage(handleDeleteProduct(log, a)))
+	mux.Handle("POST /api/v1/inventory/products/{productId}/deactivate",
+		catalogManage(handleChangeProductStatus(log, a, false)))
+	mux.Handle("POST /api/v1/inventory/products/{productId}/reactivate",
+		catalogManage(handleChangeProductStatus(log, a, true)))
 	mux.Handle("GET /api/v1/inventory/product-categories",
 		catalogRead(handleListProductCategories(log, a)))
 
@@ -173,7 +176,11 @@ func handleListProducts(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		pageSize := parsePageSize(q.Get("page_size"))
-		activeFilter := q.Get("active")
+		status, ok := lifecycle.ParseStatusFilter(q.Get("status"))
+		if !ok {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidStatusFilter, "status must be one of active, inactive, all")
+			return
+		}
 		// A filter is text sent to PostgreSQL, which cannot take U+0000 (%00).
 		for _, name := range []string{"dosage_form", "manufacturer", "search"} {
 			if strings.IndexByte(q.Get(name), 0) >= 0 {
@@ -182,7 +189,7 @@ func handleListProducts(log *slog.Logger, a app.Application) http.Handler {
 			}
 		}
 		filter := query.ProductListFilter{
-			ActiveOnly:   activeFilter == "true",
+			Status:       status,
 			DosageForm:   strings.TrimSpace(q.Get("dosage_form")),
 			Manufacturer: strings.TrimSpace(q.Get("manufacturer")),
 			Search:       strings.TrimSpace(q.Get("search")),
@@ -206,11 +213,18 @@ func handleListProducts(log *slog.Logger, a app.Application) http.Handler {
 		for _, v := range page.Items {
 			items = append(items, productViewToDto(v))
 		}
-		writeJSON(w, http.StatusOK, ListProductsResponse{
-			Items:      items,
-			HasMore:    page.HasMore,
-			NextCursor: page.NextCursor,
-		})
+		out := ListProductsResponse{Items: items, HasMore: page.HasMore, NextCursor: page.NextCursor}
+		// The status chips' counts ride the FIRST page only (no cursor).
+		if cursor.ID == "" && cursor.SortValue.IsZero() {
+			counts, cerr := a.Queries.CountProductsByStatus.Handle(r.Context(), query.CountProductsByStatusQuery{TenantID: tenant.ID(effTenant)})
+			if cerr != nil {
+				log.ErrorContext(r.Context(), "count products by status failed", "err", cerr)
+				writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+				return
+			}
+			out.StatusCounts = &counts
+		}
+		writeJSON(w, http.StatusOK, out)
 	})
 }
 
@@ -277,7 +291,6 @@ func handleUpdateProduct(log *slog.Logger, a app.Application) http.Handler {
 			ActorMembershipID:        membership.ID(c.MembershipID),
 			Name:                     req.Name,
 			GSTRateID:                trimmed(req.GSTRateID),
-			IsActive:                 req.IsActive,
 			Manufacturer:             req.Manufacturer,
 			DefaultSaleRatePaise:     req.DefaultSaleRatePaise,
 			GenericName:              req.GenericName,
@@ -299,9 +312,6 @@ func handleUpdateProduct(log *slog.Logger, a app.Application) http.Handler {
 		case errors.Is(err, product.ErrInvalid):
 			writeError(w, http.StatusUnprocessableEntity, ErrCodeValidationFailed, err.Error())
 			return
-		case errors.Is(err, product.ErrDeleted):
-			writeError(w, http.StatusConflict, ErrCodeConflict, "product is deleted")
-			return
 		case err != nil:
 			log.ErrorContext(r.Context(), "update product failed", "err", err)
 			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
@@ -311,7 +321,10 @@ func handleUpdateProduct(log *slog.Logger, a app.Application) http.Handler {
 	})
 }
 
-func handleDeleteProduct(log *slog.Logger, a app.Application) http.Handler {
+// handleChangeProductStatus serves POST .../deactivate (reactivate=false) and .../reactivate
+// (reactivate=true). A product is never deleted (ADR 0073): both answer 200 with the updated
+// product, and repeating either is a no-op that answers the same.
+func handleChangeProductStatus(log *slog.Logger, a app.Application, reactivate bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
@@ -327,30 +340,36 @@ func handleDeleteProduct(log *slog.Logger, a app.Application) http.Handler {
 		if !ok {
 			return
 		}
-		err := a.Commands.DeleteProduct.Handle(r.Context(), command.DeleteProductCommand{
+		cmd := command.ChangeProductStatusCommand{
 			TenantID:          tenant.ID(effTenant),
 			ProductID:         product.ID(id.String()),
 			ActorMembershipID: membership.ID(c.MembershipID),
-		})
+		}
+		var err error
+		if reactivate {
+			err = a.Commands.ReactivateProduct.Handle(r.Context(), cmd)
+		} else {
+			err = a.Commands.DeactivateProduct.Handle(r.Context(), cmd)
+		}
 		switch {
 		case errors.Is(err, product.ErrNotFound):
-			// Soft-delete is idempotent: missing OR already-deleted → 204
-			// (mirrors Stripe DELETE semantics).
-			w.WriteHeader(http.StatusNoContent)
-			return
-		case errors.Is(err, batch.ErrAnyLiveStock):
-			writeError(w, http.StatusConflict, ErrCodeProductHasStock,
-				"cannot delete product with live batches holding stock")
+			writeError(w, http.StatusNotFound, ErrCodeNotFound, "")
 			return
 		case errors.Is(err, product.ErrInvalid):
 			writeError(w, http.StatusUnprocessableEntity, ErrCodeValidationFailed, err.Error())
 			return
 		case err != nil:
-			log.ErrorContext(r.Context(), "delete product failed", "err", err)
+			log.ErrorContext(r.Context(), "change product status failed", "err", err)
 			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
 			return
 		}
-		w.WriteHeader(http.StatusNoContent)
+		v, err := a.Queries.GetProduct.Handle(r.Context(), query.GetProductQuery{TenantID: cmd.TenantID, ProductID: cmd.ProductID})
+		if err != nil {
+			log.ErrorContext(r.Context(), "read product after status change failed", "err", err)
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+			return
+		}
+		writeJSON(w, http.StatusOK, productViewToDto(v))
 	})
 }
 
@@ -425,6 +444,9 @@ func handleAddBatch(log *slog.Logger, a app.Application) http.Handler {
 			InitialQuantity:            derefOr(req.InitialQuantity, 0),
 		})
 		switch {
+		case errors.Is(err, product.ErrInactive):
+			writeError(w, http.StatusConflict, ErrCodeProductInactive, "the product is inactive; reactivate it before adding a batch")
+			return
 		case errors.Is(err, product.ErrNotFound):
 			writeError(w, http.StatusNotFound, ErrCodeNotFound, "product not found")
 			return

@@ -11,23 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const anyLiveBatchWithStockForProduct = `-- name: AnyLiveBatchWithStockForProduct :one
-SELECT EXISTS (
-    SELECT 1
-    FROM   inventory.batches
-    WHERE  product_id = $1
-    AND    NOT is_deleted
-    AND    quantity_on_hand > 0
-)
-`
-
-func (q *Queries) AnyLiveBatchWithStockForProduct(ctx context.Context, productID pgtype.UUID) (bool, error) {
-	row := q.db.QueryRow(ctx, anyLiveBatchWithStockForProduct, productID)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
-}
-
 const getBatchByID = `-- name: GetBatchByID :one
 SELECT id, product_id, tenant_id, batch_number,
        manufacture_date, expiry_date,
@@ -219,7 +202,6 @@ JOIN   inventory.products p
    AND p.tenant_id = b.tenant_id
 WHERE  b.tenant_id = $1
 AND    NOT b.is_deleted
-AND    NOT p.is_deleted
 AND    b.quantity_on_hand - b.quantity_quarantined > 0
 ORDER  BY b.expiry_date ASC, b.id ASC
 `
@@ -355,7 +337,7 @@ LEFT JOIN inventory.batches b
     AND b.quantity_on_hand - b.quantity_quarantined > 0
     AND b.expiry_date >= $2::date
 WHERE  p.tenant_id = $1
-AND    NOT p.is_deleted
+AND    p.is_active
 AND    p.reorder_level > 0
 GROUP  BY p.id, p.sku, p.reorder_level
 HAVING COALESCE(SUM(b.quantity_on_hand - b.quantity_quarantined), 0) < p.reorder_level

@@ -229,26 +229,6 @@ func (r *BatchRepository) ListFefoForProduct(ctx context.Context, tenantID tenan
 	return out, err
 }
 
-// AnyLiveWithStockForProduct satisfies [batch.Repository]. GUC bound
-// from tenantID (ADR 0062).
-func (r *BatchRepository) AnyLiveWithStockForProduct(ctx context.Context, tenantID tenant.ID, productID product.ID) (bool, error) {
-	pid, err := uuid.Parse(productID.String())
-	if err != nil {
-		return false, fmt.Errorf("batch repo: parse product id: %w", err)
-	}
-	var exists bool
-	err = r.tx.JoinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
-		q := r.q.WithTx(tx)
-		got, err := q.AnyLiveBatchWithStockForProduct(ctx, pgconv.PgUUID(pid))
-		if err != nil {
-			return fmt.Errorf("batch repo: any live with stock: %w", err)
-		}
-		exists = got
-		return nil
-	})
-	return exists, err
-}
-
 // ----- Helpers ---------------------------------------------------------------
 
 func loadBatch(ctx context.Context, q *db.Queries, id batch.ID) (*batch.Batch, error) {

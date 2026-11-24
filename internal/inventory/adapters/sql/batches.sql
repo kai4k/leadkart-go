@@ -85,15 +85,6 @@ AND    (expiry_date, id) < (sqlc.arg(cursor_expiry_date)::date, sqlc.arg(cursor_
 ORDER  BY expiry_date DESC, id DESC
 LIMIT  sqlc.arg('limit');
 
--- name: AnyLiveBatchWithStockForProduct :one
-SELECT EXISTS (
-    SELECT 1
-    FROM   inventory.batches
-    WHERE  product_id = $1
-    AND    NOT is_deleted
-    AND    quantity_on_hand > 0
-);
-
 -- name: ListFefoBatchesForProduct :many
 -- FEFO (First Expired First Out) ordering per BRD §6.5 — feeds the
 -- dispatch picker so warehouse staff pull oldest-expiring inventory
@@ -133,7 +124,6 @@ JOIN   inventory.products p
    AND p.tenant_id = b.tenant_id
 WHERE  b.tenant_id = $1
 AND    NOT b.is_deleted
-AND    NOT p.is_deleted
 AND    b.quantity_on_hand - b.quantity_quarantined > 0
 ORDER  BY b.expiry_date ASC, b.id ASC;
 
@@ -154,7 +144,7 @@ LEFT JOIN inventory.batches b
     AND b.quantity_on_hand - b.quantity_quarantined > 0
     AND b.expiry_date >= sqlc.arg('min_sellable')::date
 WHERE  p.tenant_id = $1
-AND    NOT p.is_deleted
+AND    p.is_active
 AND    p.reorder_level > 0
 GROUP  BY p.id, p.sku, p.reorder_level
 HAVING COALESCE(SUM(b.quantity_on_hand - b.quantity_quarantined), 0) < p.reorder_level

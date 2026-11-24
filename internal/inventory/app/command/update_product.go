@@ -24,7 +24,6 @@ type UpdateProductCommand struct {
 	ActorMembershipID membership.ID
 	Name              *string
 	GSTRateID         *string
-	IsActive          *bool
 	Manufacturer      *string
 	// ReorderLevel, ExpiryAlertThresholdDays and ProductCategory are the
 	// product form's alert and catalogue fields. A blank ProductCategory is
@@ -61,7 +60,7 @@ func NewUpdateProductHandler(products product.Repository, policy sellability.Pol
 }
 
 // Handle applies the partial update. ErrNotFound → 404, product.ErrInvalid →
-// 422 (with field detail at the HTTP layer), product.ErrDeleted → 409.
+// 422 (with field detail at the HTTP layer).
 func (h UpdateProductHandler) Handle(ctx context.Context, cmd UpdateProductCommand) error {
 	if cmd.TenantID.IsZero() {
 		return errors.New("update_product: tenant id required")
@@ -99,7 +98,6 @@ func (h UpdateProductHandler) Handle(ctx context.Context, cmd UpdateProductComma
 			Composition:              cmd.Composition,
 			StorageCondition:         cmd.StorageCondition,
 			DrugScheduleClassID:      cmd.DrugSchedule,
-			IsActive:                 cmd.IsActive,
 			Manufacturer:             cmd.Manufacturer,
 			ReorderLevel:             cmd.ReorderLevel,
 			ExpiryAlertThresholdDays: cmd.ExpiryAlertThresholdDays,

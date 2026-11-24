@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/leadkart/leadkart-go/internal/common/lifecycle"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -96,7 +97,8 @@ func (r *ProductReader) ListProducts(ctx context.Context, tenantID tenant.ID, fi
 		rows, qerr := r.q.WithTx(tx).ListProductStockPage(ctx, db.ListProductStockPageParams{
 			TenantID:        pgconv.PgUUID(tid),
 			MinSellable:     pgconv.PgDate(w.MinSellable),
-			ActiveOnly:      filter.ActiveOnly,
+			IncludeActive:   filter.Status.IncludesActive(),
+			IncludeInactive: filter.Status.IncludesInactive(),
 			Search:          filter.Search,
 			Category:        filter.Category,
 			DosageForm:      filter.DosageForm,
@@ -165,4 +167,22 @@ func productStockRowToView(row db.ListProductStockPageRow) query.ProductView {
 		v.EarliestExpiry = &earliest
 	}
 	return v
+}
+
+// CountByStatus satisfies [query.ProductReader]: the product list's status chips, one grouped read.
+func (r *ProductReader) CountByStatus(ctx context.Context, tenantID tenant.ID) (lifecycle.Counts, error) {
+	tid, err := uuid.Parse(tenantID.String())
+	if err != nil {
+		return lifecycle.Counts{}, fmt.Errorf("product reader: parse tenant id: %w", err)
+	}
+	var out lifecycle.Counts
+	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+		row, qerr := r.q.WithTx(tx).CountProductsByStatus(ctx, pgconv.PgUUID(tid))
+		if qerr != nil {
+			return fmt.Errorf("product reader: count by status: %w", qerr)
+		}
+		out = lifecycle.Counts{Active: int(row.Active), Inactive: int(row.Inactive)}
+		return nil
+	})
+	return out, err
 }

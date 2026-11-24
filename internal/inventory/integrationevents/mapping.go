@@ -51,12 +51,12 @@ func FromDomainEvent(d any) (Event, error) {
 			OccurredAtUTC:             e.At.UTC(),
 		}, nil
 
-	case product.SoftDeletedEvent:
-		return ProductSoftDeletedV1{
+	case product.ActivatedEvent:
+		return ProductReactivatedV1{
 			ProductID:                 mustParseUUID(e.ProductID.String()),
 			TenantIDClaim:             mustParseUUID(e.TenantID.String()),
-			SoftDeletedAt:             e.At.UTC(),
-			SoftDeletedByMembershipID: mustParseUUID(e.ActorID.String()),
+			ReactivatedAt:             e.At.UTC(),
+			ReactivatedByMembershipID: mustParseUUID(e.ActorID.String()),
 			OccurredAtUTC:             e.At.UTC(),
 		}, nil
 

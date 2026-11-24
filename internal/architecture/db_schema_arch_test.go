@@ -495,12 +495,17 @@ func TestArch_MigrationFilenameFormat(t *testing.T) {
 // Heuristic: per migration, if the file declares ANY `is_deleted`
 // column, every CREATE UNIQUE INDEX in the same file must end with
 // a WHERE clause referencing is_deleted / deleted_at.
+//
+// Only a migration's Up counts, and a migration whose Up DROPS the is_deleted column (ADR 0073:
+// products, roles and drug schedule classes are made inactive, never deleted) leaves its table
+// without a soft-delete surface, so its unique indexes are plain.
 func TestArch_PartialUniqueIndexWithSoftDelete(t *testing.T) {
 	t.Parallel()
 
 	uniqueIdxRE := regexp.MustCompile(`(?is)CREATE\s+UNIQUE\s+INDEX\s+(\w+)[^;]+`)
 	whereSoftDelRE := regexp.MustCompile(`(?i)WHERE\s+(NOT\s+is_deleted|deleted_at\s+IS\s+NULL|is_deleted\s*=\s*false)`)
 	hasIsDeletedRE := regexp.MustCompile(`(?i)\bis_deleted\b`)
+	dropsIsDeletedRE := regexp.MustCompile(`(?i)DROP\s+COLUMN\s+(IF\s+EXISTS\s+)?is_deleted\b`)
 
 	// Index allow-list: indexes that are intentionally GLOBAL UNIQUE
 	// (e.g. session-id uniqueness across all rows including deleted).
@@ -515,8 +520,9 @@ func TestArch_PartialUniqueIndexWithSoftDelete(t *testing.T) {
 	var violations []violation
 
 	for _, m := range loadMigrations(t) {
-		stripped := stripSQLComments(m.text)
-		if !hasIsDeletedRE.MatchString(stripped) {
+		up, _, _ := strings.Cut(m.text, "-- +goose Down")
+		stripped := stripSQLComments(up)
+		if !hasIsDeletedRE.MatchString(stripped) || dropsIsDeletedRE.MatchString(stripped) {
 			continue
 		}
 		for _, mm := range uniqueIdxRE.FindAllStringSubmatch(stripped, -1) {

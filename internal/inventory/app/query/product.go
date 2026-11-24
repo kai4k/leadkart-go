@@ -4,9 +4,11 @@ package query
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/leadkart/leadkart-go/internal/common/lifecycle"
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/inventory/app/sellability"
@@ -66,12 +68,13 @@ type ProductView struct {
 	EarliestExpiry *time.Time
 }
 
-// ProductListFilter narrows the product list. The zero value filters nothing.
+// ProductListFilter narrows the product list. The zero Status lists active products (the default).
 type ProductListFilter struct {
 	// Search is a case-insensitive substring of "sku name".
 	Search string
-	// ActiveOnly keeps is_active products only.
-	ActiveOnly bool
+	// Status picks the listing: active (the default), inactive or all. A product is never
+	// deleted (ADR 0073), so "all" is every product the company has.
+	Status lifecycle.StatusFilter
 	// Category, DosageForm and Manufacturer are exact, case-insensitive matches.
 	Category     string
 	DosageForm   string
@@ -91,11 +94,13 @@ type ProductListFilter struct {
 // so the handler and the SQL share one moment. tenantID is explicit per
 // ADR 0062; RLS remains the backstop.
 type ProductReader interface {
-	// GetProduct returns the live product or [product.ErrNotFound].
+	// GetProduct returns the product (active or inactive) or [product.ErrNotFound].
 	GetProduct(ctx context.Context, tenantID tenant.ID, id product.ID, w sellability.Window) (ProductView, error)
-	// ListProducts returns at most limit live products after cursor, ordered
+	// ListProducts returns at most limit products after cursor, ordered
 	// (created_at DESC, id DESC) per ADR 0038.
 	ListProducts(ctx context.Context, tenantID tenant.ID, filter ProductListFilter, w sellability.Window, cursor pagination.Cursor, limit int) ([]ProductView, error)
+	// CountByStatus is how many products the company has per status, whatever the filter is.
+	CountByStatus(ctx context.Context, tenantID tenant.ID) (lifecycle.Counts, error)
 }
 
 // GetProductQuery — single-product read.
@@ -139,6 +144,29 @@ type ListProductsPageQuery struct {
 	Cursor   pagination.Cursor
 	PageSize int
 	Filter   ProductListFilter
+}
+
+// CountProductsByStatusQuery asks for the status chips of the product list.
+type CountProductsByStatusQuery struct{ TenantID tenant.ID }
+
+// CountProductsByStatusHandler returns the per-status counts.
+type CountProductsByStatusHandler struct{ products ProductReader }
+
+// NewCountProductsByStatusHandler wires the handler.
+func NewCountProductsByStatusHandler(products ProductReader) CountProductsByStatusHandler {
+	return CountProductsByStatusHandler{products: products}
+}
+
+// Handle returns how many products the company has per status.
+func (h CountProductsByStatusHandler) Handle(ctx context.Context, q CountProductsByStatusQuery) (lifecycle.Counts, error) {
+	if q.TenantID.IsZero() {
+		return lifecycle.Counts{}, errors.New("count_products_by_status: tenant id required")
+	}
+	c, err := h.products.CountByStatus(ctx, q.TenantID)
+	if err != nil {
+		return lifecycle.Counts{}, fmt.Errorf("count products by status: %w", err)
+	}
+	return c, nil
 }
 
 // ListProductsPageHandler returns a keyset-paginated page.

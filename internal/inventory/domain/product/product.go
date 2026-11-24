@@ -68,8 +68,10 @@ const (
 // ErrInvalid is returned (wrapped via %w) by [New] and [Update] on invariant violation.
 var ErrInvalid = errs.New(errs.KindInvalidInput, "product", "invalid product")
 
-// ErrDeleted is returned when a mutating method targets a soft-deleted product.
-var ErrDeleted = errs.New(errs.KindConflict, "product", "product is deleted")
+// ErrInactive is returned when an action that needs an active product (a new batch) targets an
+// inactive one. Inactive products stay readable and keep their batches and stock; they are
+// never deleted (ADR 0073).
+var ErrInactive = errs.New(errs.KindConflict, "product", "product is inactive")
 
 // ID is the Product primary key — UUIDv7 string. Distinct type prevents accidental swap with other domain IDs.
 type ID string
@@ -112,7 +114,6 @@ type Spec struct {
 type UpdateSpec struct {
 	Name                     *string
 	GSTRateBps               *int
-	IsActive                 *bool
 	Manufacturer             *string
 	ReorderLevel             *int
 	ExpiryAlertThresholdDays *int
@@ -160,9 +161,6 @@ type Product struct {
 	drugScheduleClassID      string
 	createdAt                time.Time
 	updatedAt                time.Time
-	deleted                  bool
-	deletedAt                time.Time
-	deletedBy                string
 	events                   []Event
 }
 
@@ -324,8 +322,8 @@ func (p *Product) GSTRateBps() int { return p.gstRateBps }
 // Manufacturer returns the declared manufacturer name (may be empty).
 func (p *Product) Manufacturer() string { return p.manufacturer }
 
-// IsActive reports whether the product is selectable on order forms.
-// A soft-deleted product is never visible regardless of this flag.
+// IsActive reports whether the product is active. An inactive product is still readable and
+// keeps its batches and stock, but takes no new batch (ADR 0073).
 func (p *Product) IsActive() bool { return p.isActive }
 
 // ReorderLevel returns the per-product reorder threshold (units). When
@@ -342,16 +340,6 @@ func (p *Product) ExpiryAlertThresholdDays() int { return p.expiryAlertThreshold
 // and matches lead ProductRanges for catalogue browsing.
 func (p *Product) ProductCategory() string { return p.productCategory }
 
-// IsDeleted reports whether the product has been soft-deleted. Live
-// read paths filter these; this getter is for forensic tooling.
-func (p *Product) IsDeleted() bool { return p.deleted }
-
-// DeletedAt returns the soft-delete timestamp; zero if the product is live.
-func (p *Product) DeletedAt() time.Time { return p.deletedAt }
-
-// DeletedBy returns the membership or operator ID that performed the soft-delete; empty if live.
-func (p *Product) DeletedBy() string { return p.deletedBy }
-
 // CreatedAt returns the creation timestamp (immutable).
 func (p *Product) CreatedAt() time.Time { return p.createdAt }
 
@@ -361,11 +349,8 @@ func (p *Product) UpdatedAt() time.Time { return p.updatedAt }
 // Update applies a partial-update spec; only non-nil fields are applied.
 // Matching values are no-ops (no event emitted).
 // Emits [UpdatedEvent] with ChangedFields sorted alphabetically.
-// Returns [ErrDeleted] if soft-deleted, [ErrInvalid] on validation failure.
+// Returns [ErrInvalid] on validation failure.
 func (p *Product) Update(actorID membership.ID, spec UpdateSpec, now time.Time) error {
-	if p.deleted {
-		return fmt.Errorf("%w: cannot update deleted product", ErrDeleted)
-	}
 	if actorID.IsZero() {
 		return fmt.Errorf("%w: actorID required", ErrInvalid)
 	}
@@ -389,12 +374,6 @@ func (p *Product) Update(actorID membership.ID, spec UpdateSpec, now time.Time) 
 		if v != p.gstRateBps {
 			p.gstRateBps = v
 			changed = append(changed, "gst_rate_bps")
-		}
-	}
-	if spec.IsActive != nil {
-		if *spec.IsActive != p.isActive {
-			p.isActive = *spec.IsActive
-			changed = append(changed, "is_active")
 		}
 	}
 	if spec.Manufacturer != nil {
@@ -571,55 +550,36 @@ func validateCatalogue(spec Spec) (catalogue, error) {
 	return c, nil
 }
 
-// Activate sets is_active = true via [Update].
+// Activate makes the product active again and emits [ActivatedEvent]. Idempotent: an already
+// active product is a no-op (no event).
 func (p *Product) Activate(actorID membership.ID, now time.Time) error {
-	tr := true
-	return p.Update(actorID, UpdateSpec{IsActive: &tr}, now)
-}
-
-// Deactivate sets is_active = false via [Update] and additionally emits [DeactivatedEvent]
-// so consumers can route on the lifecycle signal without inspecting ChangedFields.
-// Distinct from [SoftDelete] — deactivated products remain visible to admins (ADR 0061 amendment 1).
-// Idempotent: already-inactive products are a no-op.
-func (p *Product) Deactivate(actorID membership.ID, now time.Time) error {
-	if !p.isActive {
-		return nil // already inactive
+	if actorID.IsZero() {
+		return fmt.Errorf("%w: actorID required", ErrInvalid)
 	}
-	if err := p.Update(actorID, UpdateSpec{IsActive: new(false)}, now); err != nil {
-		return err
+	if p.isActive {
+		return nil
 	}
-	// Update already emitted UpdatedEvent(ChangedFields=["is_active"]);
-	// emit DeactivatedEvent for consumers routing on the lifecycle signal.
-	p.recordEvent(DeactivatedEvent{
-		ProductID: p.id,
-		TenantID:  p.tenantID,
-		ActorID:   actorID,
-		At:        p.updatedAt,
-	})
+	now = now.UTC()
+	p.isActive = true
+	p.updatedAt = now
+	p.recordEvent(ActivatedEvent{ProductID: p.id, TenantID: p.tenantID, ActorID: actorID, At: now})
 	return nil
 }
 
-// SoftDelete marks the product deleted for audit. Idempotent — second call is a no-op.
-// Caller invariant (application layer): reject when any live Batch has quantity_on_hand > 0;
-// the domain cannot cross aggregate boundaries (Vernon ch.10), so SoftDeleteProductHandler enforces this.
-func (p *Product) SoftDelete(actorID membership.ID, now time.Time) error {
-	if p.deleted {
+// Deactivate makes the product inactive and emits [DeactivatedEvent]. A product is never
+// deleted: it stays readable and keeps its batches and stock (ADR 0073). Idempotent: an already
+// inactive product is a no-op (no event).
+func (p *Product) Deactivate(actorID membership.ID, now time.Time) error {
+	if actorID.IsZero() {
+		return fmt.Errorf("%w: actorID required", ErrInvalid)
+	}
+	if !p.isActive {
 		return nil
 	}
-	if actorID.IsZero() {
-		return fmt.Errorf("%w: actorID required for audit", ErrInvalid)
-	}
 	now = now.UTC()
-	p.deleted = true
-	p.deletedAt = now
-	p.deletedBy = actorID.String()
+	p.isActive = false
 	p.updatedAt = now
-	p.recordEvent(SoftDeletedEvent{
-		ProductID: p.id,
-		TenantID:  p.tenantID,
-		ActorID:   actorID,
-		At:        now,
-	})
+	p.recordEvent(DeactivatedEvent{ProductID: p.id, TenantID: p.tenantID, ActorID: actorID, At: now})
 	return nil
 }
 
@@ -646,9 +606,6 @@ type Snapshot struct {
 	DrugScheduleClassID      string
 	CreatedAt                time.Time
 	UpdatedAt                time.Time
-	IsDeleted                bool
-	DeletedAt                time.Time
-	DeletedBy                string
 }
 
 // UnmarshalFromDB re-hydrates a Product from persistence.
@@ -680,9 +637,6 @@ func UnmarshalFromDB(s Snapshot) *Product {
 		drugScheduleClassID:      s.DrugScheduleClassID,
 		createdAt:                s.CreatedAt,
 		updatedAt:                s.UpdatedAt,
-		deleted:                  s.IsDeleted,
-		deletedAt:                s.DeletedAt,
-		deletedBy:                s.DeletedBy,
 	}
 }
 

@@ -582,6 +582,7 @@ func TestArch_DomainHasNoInfraImports(t *testing.T) {
 		"tenancy":        true,
 		"expiry":         true, // the one expiry rule (month-end storage, sellable window, business day); stdlib only (ADR 0070)
 		"hsncode":        true, // the one HSN code rule (trimmed, 4/6/8 digits); stdlib only. One consumer today (Inventory); why it stays in common is recorded in its package doc (ADR 0051)
+		"lifecycle":      true, // the ?status= filter + status counts every inactive-not-deleted list shares; stdlib only
 		"textlimit":      true, // the one length check + wire code for free text; stdlib only
 		"humantext":      true, // the one rule for text people type that others read; pure rune checks
 		"parcel":         true, // the pack rules Orders and Dispatch must agree on; stdlib only
@@ -629,7 +630,7 @@ func TestArch_DomainHasNoInfraImports(t *testing.T) {
 		t.Logf("DOMAIN-PURITY VIOLATIONS — %d", len(violations))
 		t.Logf("Per ADR 0002 + 0047 + Vernon IDDD ch. 4: domain is pure Go.")
 		t.Logf("Allowed common/* leaves: errs, ids, slug, email, phone, pan,")
-		t.Logf("gst, postaladdress, druglicence, pagination, tenancy, humantext, parcel, textlimit, hsncode, expiry, commercepolicy.")
+		t.Logf("gst, postaladdress, druglicence, pagination, tenancy, humantext, parcel, textlimit, hsncode, expiry, commercepolicy, lifecycle.")
 		for _, v := range violations {
 			t.Errorf("%s\n  imports: %s\n  why: %s", v.file, v.imp, v.reason)
 		}

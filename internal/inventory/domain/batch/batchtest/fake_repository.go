@@ -14,8 +14,7 @@
 //     guarantee: ErrBatchNumberTaken on duplicate live (product_id,
 //     batch_number) per the partial unique index
 //     `uq_batches_product_number_live`, ErrNotFound on missing /
-//     soft-deleted GetByID, AnyLiveWithStockForProduct as the
-//     application-layer guard for product soft-delete.
+//     soft-deleted GetByID.
 //   - Optimistic-concurrency drill: [FakeRepository.ConflictsBeforeSuccess]
 //     lets a test simulate the optimistic-version UPDATE returning 0
 //     rows ([batch.ErrConcurrencyConflict]) the first N commits before
@@ -75,14 +74,6 @@ type FakeRepository struct {
 	// machinery. Mirrors the adapter's `rowsAffected == 0 →
 	// ErrConcurrencyConflict` branch.
 	ConflictsBeforeSuccess int
-
-	// AnyLiveStockFor + AnyLiveStockOn drive the return of
-	// AnyLiveWithStockForProduct. When AnyLiveStockFor matches the
-	// supplied productID, the method returns AnyLiveStockOn; otherwise
-	// it returns false. Drives the DeleteProductHandler "no live
-	// stock" guard tests.
-	AnyLiveStockFor product.ID
-	AnyLiveStockOn  bool
 
 	// AddCalls counts the number of times Add was entered. Drives
 	// "Add MUST NOT be called when X" assertions.
@@ -194,20 +185,6 @@ func (r *FakeRepository) GetByID(_ context.Context, tenantID tenant.ID, id batch
 // without a list fake nobody exercises from the command layer.
 func (r *FakeRepository) ListByProductPage(_ context.Context, _ tenant.ID, _ product.ID, _ batch.ListFilter, _ pagination.Cursor, _ int) (pagination.Page[*batch.Batch], error) {
 	return pagination.Page[*batch.Batch]{Items: []*batch.Batch{}}, nil
-}
-
-// AnyLiveWithStockForProduct reports whether any LIVE batch with
-// quantity_on_hand > 0 exists for productID in the supplied tenant.
-// Honours the AnyLiveStockFor + AnyLiveStockOn knobs — when
-// AnyLiveStockFor matches productID, returns AnyLiveStockOn; otherwise
-// returns false. Mirrors the application-layer guard used by
-// DeleteProductHandler.
-func (r *FakeRepository) AnyLiveWithStockForProduct(_ context.Context, _ tenant.ID, productID product.ID) (bool, error) {
-
-	if r.AnyLiveStockFor == productID {
-		return r.AnyLiveStockOn, nil
-	}
-	return false, nil
 }
 
 // ListFefoForProduct returns the live, in-stock, not-yet-expired

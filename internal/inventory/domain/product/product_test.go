@@ -67,9 +67,6 @@ func TestNew_HappyPath_SetsFieldsAndEmitsCreated(t *testing.T) {
 	if !p.IsActive() {
 		t.Fatal("IsActive: want true on construction")
 	}
-	if p.IsDeleted() {
-		t.Fatal("IsDeleted: want false on construction")
-	}
 	if p.CreatedAt().IsZero() {
 		t.Fatal("CreatedAt zero")
 	}
@@ -248,59 +245,9 @@ func TestUpdate_RejectsZeroActor(t *testing.T) {
 	}
 }
 
-func TestUpdate_RejectsAfterSoftDelete(t *testing.T) {
-	t.Parallel()
-	p := freshProduct(t)
-	actor := membership.ID(ids.NewV7().String())
-	if err := p.SoftDelete(actor, fixedNow); err != nil {
-		t.Fatalf("SoftDelete: %v", err)
-	}
-	_ = p.PullEvents()
-	n := "X"
-	if err := p.Update(actor, product.UpdateSpec{Name: &n}, fixedNow); !errors.Is(err, product.ErrDeleted) {
-		t.Fatalf("want ErrDeleted, got %v", err)
-	}
-}
-
-// TestSoftDelete_EmitsSoftDeletedEventOnce verifies ADR 0061 amendment 1:
-// SoftDelete emits SoftDeletedEvent (distinct from DeactivatedEvent); idempotent.
-func TestSoftDelete_EmitsSoftDeletedEventOnce(t *testing.T) {
-	t.Parallel()
-	p := freshProduct(t)
-	actor := membership.ID(ids.NewV7().String())
-	if err := p.SoftDelete(actor, fixedNow); err != nil {
-		t.Fatalf("SoftDelete: %v", err)
-	}
-	if !p.IsDeleted() {
-		t.Fatal("IsDeleted should be true after SoftDelete")
-	}
-	if p.DeletedBy() != actor.String() {
-		t.Fatalf("DeletedBy: got %q want %q", p.DeletedBy(), actor.String())
-	}
-	evs := p.PullEvents()
-	if len(evs) != 1 {
-		t.Fatalf("events first: %d", len(evs))
-	}
-	softDel, ok := evs[0].(product.SoftDeletedEvent)
-	if !ok {
-		t.Fatalf("type: %T (want SoftDeletedEvent)", evs[0])
-	}
-	if softDel.ActorID != actor {
-		t.Fatalf("actor: got %q want %q", softDel.ActorID, actor)
-	}
-	// Second call is idempotent.
-	if err := p.SoftDelete(actor, fixedNow); err != nil {
-		t.Fatalf("second SoftDelete: %v", err)
-	}
-	if len(p.PullEvents()) != 0 {
-		t.Fatal("second SoftDelete should be no-op")
-	}
-}
-
-// TestDeactivate_EmitsBothUpdatedAndDeactivatedEvents — ADR 0061 amendment 1:
-// Deactivate emits both UpdatedEvent(ChangedFields=["is_active"]) and DeactivatedEvent.
-// Distinct from SoftDelete (terminal hide).
-func TestDeactivate_EmitsBothUpdatedAndDeactivatedEvents(t *testing.T) {
+// ADR 0073: a product goes inactive and active again, never deleted. Each transition emits its
+// own event once; repeating it is a no-op with no event.
+func TestDeactivate_EmitsDeactivatedEventOnce(t *testing.T) {
 	t.Parallel()
 	p := freshProduct(t)
 	actor := membership.ID(ids.NewV7().String())
@@ -310,58 +257,73 @@ func TestDeactivate_EmitsBothUpdatedAndDeactivatedEvents(t *testing.T) {
 	if p.IsActive() {
 		t.Fatal("IsActive should be false after Deactivate")
 	}
-	if p.IsDeleted() {
-		t.Fatal("IsDeleted should be false (Deactivate != SoftDelete)")
-	}
 	evs := p.PullEvents()
-	if len(evs) != 2 {
-		t.Fatalf("event count: got %d want 2 (Updated + Deactivated)", len(evs))
+	if len(evs) != 1 {
+		t.Fatalf("event count: got %d want 1", len(evs))
 	}
-	if _, ok := evs[0].(product.UpdatedEvent); !ok {
-		t.Fatalf("first event: %T (want UpdatedEvent)", evs[0])
+	if ev, ok := evs[0].(product.DeactivatedEvent); !ok || ev.ActorID != actor {
+		t.Fatalf("event: %T %+v (want DeactivatedEvent by the actor)", evs[0], evs[0])
 	}
-	if _, ok := evs[1].(product.DeactivatedEvent); !ok {
-		t.Fatalf("second event: %T (want DeactivatedEvent)", evs[1])
-	}
-	// Already-inactive: no-op.
 	if err := p.Deactivate(actor, fixedNow); err != nil {
 		t.Fatalf("second Deactivate: %v", err)
 	}
 	if len(p.PullEvents()) != 0 {
-		t.Fatal("second Deactivate on inactive product should be no-op")
+		t.Fatal("second Deactivate on an inactive product should be a no-op")
 	}
 }
 
-func TestActivate_Deactivate_TogglesAndEmitsEvent(t *testing.T) {
+func TestActivate_EmitsActivatedEventOnceAndIsANoOpWhenActive(t *testing.T) {
+	t.Parallel()
+	p := freshProduct(t)
+	actor := membership.ID(ids.NewV7().String())
+	if err := p.Activate(actor, fixedNow); err != nil {
+		t.Fatalf("Activate on an active product: %v", err)
+	}
+	if len(p.PullEvents()) != 0 {
+		t.Fatal("Activate on an active product should be a no-op")
+	}
+	if err := p.Deactivate(actor, fixedNow); err != nil {
+		t.Fatalf("Deactivate: %v", err)
+	}
+	_ = p.PullEvents()
+	if err := p.Activate(actor, fixedNow); err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	if !p.IsActive() {
+		t.Fatal("re-activation failed")
+	}
+	evs := p.PullEvents()
+	if len(evs) != 1 {
+		t.Fatalf("events: got %d want 1", len(evs))
+	}
+	if _, ok := evs[0].(product.ActivatedEvent); !ok {
+		t.Fatalf("event: %T (want ActivatedEvent)", evs[0])
+	}
+}
+
+func TestDeactivateAndActivate_RequireAnActor(t *testing.T) {
+	t.Parallel()
+	p := freshProduct(t)
+	if err := p.Deactivate(membership.ID(""), fixedNow); !errors.Is(err, product.ErrInvalid) {
+		t.Fatalf("Deactivate without actor: %v, want ErrInvalid", err)
+	}
+	if err := p.Activate(membership.ID(""), fixedNow); !errors.Is(err, product.ErrInvalid) {
+		t.Fatalf("Activate without actor: %v, want ErrInvalid", err)
+	}
+}
+
+// An inactive product is still readable and editable: only new batches are refused (at the
+// handler), the aggregate itself keeps working.
+func TestUpdate_StillWorksOnAnInactiveProduct(t *testing.T) {
 	t.Parallel()
 	p := freshProduct(t)
 	actor := membership.ID(ids.NewV7().String())
 	if err := p.Deactivate(actor, fixedNow); err != nil {
 		t.Fatalf("Deactivate: %v", err)
 	}
-	if p.IsActive() {
-		t.Fatal("IsActive should be false")
-	}
-	evs := p.PullEvents()
-	// Deactivate emits UpdatedEvent(ChangedFields=["is_active"]) + DeactivatedEvent (ADR 0061 amendment 1).
-	if len(evs) != 2 {
-		t.Fatalf("events: got %d want 2 (UpdatedEvent + DeactivatedEvent)", len(evs))
-	}
-	upd, ok := evs[0].(product.UpdatedEvent)
-	if !ok || len(upd.ChangedFields) != 1 || upd.ChangedFields[0] != "is_active" {
-		t.Fatalf("type/changed: %T %v", evs[0], evs[0])
-	}
-	if _, ok := evs[1].(product.DeactivatedEvent); !ok {
-		t.Fatalf("second event: %T (want DeactivatedEvent)", evs[1])
-	}
-	if err := p.Activate(actor, fixedNow); err != nil {
-		t.Fatalf("Activate: %v", err)
-	}
-	if !p.IsActive() {
-		t.Fatal("Re-activation failed")
-	}
-	if len(p.PullEvents()) != 1 {
-		t.Fatal("Activate should emit UpdatedEvent(is_active)")
+	n := "Renamed while inactive"
+	if err := p.Update(actor, product.UpdateSpec{Name: &n}, fixedNow); err != nil {
+		t.Fatalf("Update on an inactive product: %v", err)
 	}
 }
 

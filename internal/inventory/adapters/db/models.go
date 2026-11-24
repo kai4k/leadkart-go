@@ -484,9 +484,6 @@ type InventoryProduct struct {
 	IsActive     bool
 	CreatedAt    pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz
-	IsDeleted    bool
-	DeletedAt    pgtype.Timestamptz
-	DeletedBy    *string
 	// Audit chain — Membership that created this product. NULL = system-bootstrapped (seed / import). Wave 1.5 ADR 0027.
 	CreatedByMembershipID pgtype.UUID
 	// When SUM(batches.quantity_on_hand WHERE NOT is_deleted AND NOT expired) < reorder_level, the daily ReorderScanJob emits ProductBelowReorderLevelV1. 0 disables the alert (BRD §6.5).

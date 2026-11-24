@@ -53,30 +53,27 @@ func TestUpdateProductHandler_MissingProduct_ReturnsErrNotFound(t *testing.T) {
 	}
 }
 
-// Update on soft-deleted product → ErrDeleted.
-func TestUpdateProductHandler_DeletedProduct_ReturnsErrDeleted(t *testing.T) {
+// An inactive product can still be edited (it is never deleted, ADR 0073).
+func TestUpdateProductHandler_InactiveProductCanStillBeEdited(t *testing.T) {
 	t.Parallel()
 	repo := newFakeProductRepo()
 	tid := newTenantID(t)
 	actor := newMembershipID(t)
-	p := seedProduct(t, repo, tid, actor, "DEL-1")
-	// Soft-delete via the domain; GetByID filters IsDeleted so we mutate
-	// the aggregate directly.
-	if err := p.SoftDelete(actor, fixedNow); err != nil {
-		t.Fatalf("SoftDelete: %v", err)
+	p := seedProduct(t, repo, tid, actor, "INACT-1")
+	if err := p.Deactivate(actor, fixedNow); err != nil {
+		t.Fatalf("Deactivate: %v", err)
 	}
 	_ = p.PullEvents()
 	h := newUpdate(repo, commercepolicy.DrugScheduleOptional)
 
-	newName := "Late"
-	err := h.Handle(t.Context(), command.UpdateProductCommand{
-		TenantID: tid, ProductID: p.ID(), ActorMembershipID: actor,
-		Name: &newName,
-	})
-	// Product.Update returns ErrDeleted on a soft-deleted aggregate; the
-	// HTTP layer maps it to 409.
-	if !errors.Is(err, product.ErrDeleted) {
-		t.Fatalf("err on update of soft-deleted product: got %v want ErrDeleted", err)
+	newName := "Renamed while inactive"
+	if err := h.Handle(t.Context(), command.UpdateProductCommand{
+		TenantID: tid, ProductID: p.ID(), ActorMembershipID: actor, Name: &newName,
+	}); err != nil {
+		t.Fatalf("update of an inactive product: %v", err)
+	}
+	if p.Name() != newName || p.IsActive() {
+		t.Fatalf("name %q active %v, want renamed and still inactive", p.Name(), p.IsActive())
 	}
 }
 

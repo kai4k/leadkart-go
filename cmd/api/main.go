@@ -945,15 +945,17 @@ func buildInventoryApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache) inven
 
 	return inventoryapp.Application{
 		Commands: inventoryapp.Commands{
-			CreateProduct:    inventorycommand.NewCreateProductHandler(products, policyReplica, time.Now, newProductID),
-			UpdateProduct:    inventorycommand.NewUpdateProductHandler(products, policyReplica, time.Now),
-			DeleteProduct:    inventorycommand.NewDeleteProductHandler(products, batches, time.Now),
-			AddBatch:         inventorycommand.NewAddBatchHandler(tx, products, batches, movements, window, time.Now, newBatchID, newMovementID),
-			LogStockMovement: inventorycommand.NewLogStockMovementHandler(tx, batches, movements, window, time.Now, newMovementID),
+			CreateProduct:     inventorycommand.NewCreateProductHandler(products, policyReplica, time.Now, newProductID),
+			UpdateProduct:     inventorycommand.NewUpdateProductHandler(products, policyReplica, time.Now),
+			DeactivateProduct: inventorycommand.NewDeactivateProductHandler(products, time.Now),
+			ReactivateProduct: inventorycommand.NewReactivateProductHandler(products, time.Now),
+			AddBatch:          inventorycommand.NewAddBatchHandler(tx, products, batches, movements, window, time.Now, newBatchID, newMovementID),
+			LogStockMovement:  inventorycommand.NewLogStockMovementHandler(tx, batches, movements, window, time.Now, newMovementID),
 		},
 		Queries: inventoryapp.Queries{
 			GetProduct:             inventoryquery.NewGetProductHandler(productReader, window),
 			ListProductsPage:       inventoryquery.NewListProductsPageHandler(productReader, window),
+			CountProductsByStatus:  inventoryquery.NewCountProductsByStatusHandler(productReader),
 			GetBatch:               inventoryquery.NewGetBatchHandler(batches, window),
 			ListBatchesByProduct:   inventoryquery.NewListBatchesByProductHandler(batches, window),
 			ListBatchMovementsPage: inventoryquery.NewListBatchMovementsPageHandler(movements),

@@ -12,7 +12,7 @@
 //   - The fake is a FAITHFUL implementation of [product.Repository] —
 //     not a mock-with-canned-responses. It honors every contract
 //     guarantee: ErrSKUTaken on duplicate live (tenant_id, sku) per the
-//     partial unique index `uq_products_tenant_sku_live`, ErrNotFound
+//     unique index `uq_products_tenant_sku`, ErrNotFound
 //     on missing / soft-deleted GetByID, and the soft-delete filter on
 //     reads. Per ADR 0062: cross-tenant access returns ErrNotFound
 //     (mirrors RLS-bound SQL adapter).
@@ -85,8 +85,8 @@ var _ product.Repository = (*FakeRepository)(nil)
 
 // Add persists a brand-new Product. Returns [product.ErrSKUTaken] when
 // a LIVE row with the same (tenant_id, sku) already exists — mirrors
-// the partial unique index `uq_products_tenant_sku_live` semantics
-// (soft-deleted homonyms do NOT block). Drains the aggregate's events
+// the unique index `uq_products_tenant_sku` semantics
+// . Drains the aggregate's events
 // via PullEvents to match the adapter's outbox-drain on commit.
 func (r *FakeRepository) Add(_ context.Context, p *product.Product) error {
 
@@ -95,7 +95,7 @@ func (r *FakeRepository) Add(_ context.Context, p *product.Product) error {
 		return r.AddErr
 	}
 	for _, existing := range r.Products {
-		if existing.TenantID() == p.TenantID() && existing.SKU() == p.SKU() && !existing.IsDeleted() {
+		if existing.TenantID() == p.TenantID() && existing.SKU() == p.SKU() {
 			return product.ErrSKUTaken
 		}
 	}
@@ -146,7 +146,7 @@ func (r *FakeRepository) GetByID(_ context.Context, tenantID tenant.ID, id produ
 		return nil, r.GetErr
 	}
 	p, ok := r.Products[id]
-	if !ok || p.IsDeleted() {
+	if !ok {
 		return nil, product.ErrNotFound
 	}
 	if p.TenantID() != tenantID {

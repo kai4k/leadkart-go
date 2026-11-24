@@ -233,18 +233,6 @@ func persistProductState(ctx context.Context, q *db.Queries, p *product.Product)
 	if err != nil {
 		return fmt.Errorf("product repo: parse id: %w", err)
 	}
-	if p.IsDeleted() {
-		err = q.SoftDeleteProduct(ctx, db.SoftDeleteProductParams{
-			ID:        pgconv.PgUUID(pid),
-			DeletedAt: pgconv.PgRequiredTimestamp(p.DeletedAt()),
-			DeletedBy: pgconv.ZeroToNil(p.DeletedBy()),
-			UpdatedAt: pgconv.PgRequiredTimestamp(p.UpdatedAt()),
-		})
-		if err != nil {
-			return fmt.Errorf("product repo: soft delete: %w", err)
-		}
-		return nil
-	}
 	err = q.UpdateProduct(ctx, db.UpdateProductParams{
 		ID:   pgconv.PgUUID(pid),
 		Name: p.Name(),
@@ -277,10 +265,6 @@ func persistProductState(ctx context.Context, q *db.Queries, p *product.Product)
 func rowToProduct(row db.InventoryProduct) (*product.Product, error) {
 	pid := product.ID(pgconv.UUIDFromPg(row.ID).String())
 	tid := tenant.ID(pgconv.UUIDFromPg(row.TenantID).String())
-	deletedBy := ""
-	if row.DeletedBy != nil {
-		deletedBy = *row.DeletedBy
-	}
 	return product.UnmarshalFromDB(product.Snapshot{
 		ID:                       pid,
 		TenantID:                 tid,
@@ -303,9 +287,6 @@ func rowToProduct(row db.InventoryProduct) (*product.Product, error) {
 		DrugScheduleClassID:      uuidString(row.DrugScheduleClassID),
 		CreatedAt:                pgconv.TimeFromPg(row.CreatedAt),
 		UpdatedAt:                pgconv.TimeFromPg(row.UpdatedAt),
-		IsDeleted:                row.IsDeleted,
-		DeletedAt:                pgconv.TimeFromPg(row.DeletedAt),
-		DeletedBy:                deletedBy,
 	}), nil
 }
 
@@ -333,7 +314,7 @@ func drainProductEvents(ctx context.Context, tx pgx.Tx, p *product.Product) erro
 
 // constraintProductTenantSku is the partial unique index on
 // (tenant_id, sku) WHERE NOT is_deleted (migration 20260603000001).
-const constraintProductTenantSku = "uq_products_tenant_sku_live"
+const constraintProductTenantSku = "uq_products_tenant_sku"
 
 // isSKUUniqueViolation reports whether err is a unique-constraint
 // violation on the SKU partial unique index.
