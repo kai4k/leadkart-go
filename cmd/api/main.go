@@ -1088,15 +1088,19 @@ func buildCompanySettingsApp(pool *pgxpool.Pool, now func() time.Time) companyse
 func buildDispatchApp(pool *pgxpool.Pool, now func() time.Time) dispatchapp.Application {
 	tx := pg.NewTransactor(pool)
 	repo := dispatchadapters.NewConsignmentNoteRepository(pool, tx)
-	// A note is dispatched only for an order that has a tax invoice (review G2d B1); Orders
-	// answers, bound here because modules never import each other.
-	orderInvoice := bridges.OrderInvoice{Invoices: ordersquery.NewGetInvoiceByOrderHandler(ordersadapters.NewInvoiceRepository(pool, tx))}
+	// A note is dispatched only for an invoiced order that is not cancelled (review G2d B1,
+	// G2e E2) and whose reserved batches are not past their printed expiry (G2e E1). Orders
+	// and Inventory answer, bound here because modules never import each other.
+	orderDispatch := bridges.OrderDispatch{Orders: ordersquery.NewGetOrderHandler(ordersadapters.NewOrderRepository(pool, tx))}
+	reservedExpiry := bridges.ReservedStockExpiry{Reserved: inventoryquery.NewOrderReservedExpiryHandler(
+		inventoryadapters.NewStockMovementRepository(pool, tx),
+		inventorysellability.NewResolver(inventoryadapters.NewPolicyReplicaRepository(pool, tx), now))}
 	newID := func() consignmentnote.ID { return consignmentnote.ID(ids.NewV7().String()) }
 
 	return dispatchapp.Application{
 		Commands: dispatchapp.Commands{
 			CreateConsignmentNote: dispatchcommand.NewCreateConsignmentNoteHandler(tx, repo, now, newID),
-			MarkDispatched:        dispatchcommand.NewMarkDispatchedHandler(repo, orderInvoice, now),
+			MarkDispatched:        dispatchcommand.NewMarkDispatchedHandler(repo, orderDispatch, reservedExpiry, now),
 			MarkInTransit:         dispatchcommand.NewMarkInTransitHandler(repo, now),
 			MarkDelivered:         dispatchcommand.NewMarkDeliveredHandler(repo, now),
 			MarkFailed:            dispatchcommand.NewMarkFailedHandler(repo, now),

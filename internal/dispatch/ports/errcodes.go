@@ -12,6 +12,8 @@ const (
 	errCodeConsignmentNoteConflict = "consignment_note_conflict"
 	errCodeInvalidStatusTransition = "invalid_status_transition"
 	errCodeOrderNotInvoiced        = "order_not_invoiced"
+	errCodeOrderNotDispatchable    = "order_not_dispatchable"
+	errCodeOrderStockExpired       = "order_stock_expired"
 	errCodeForbidden               = "forbidden"
 	errCodeUnauthenticated         = "unauthenticated"
 	errCodeInternalError           = "internal_error"

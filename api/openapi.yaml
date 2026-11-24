@@ -3411,7 +3411,7 @@ paths:
         '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: "`invalid_status_transition` — the note is not `pending`. `order_not_invoiced` — the note's order has no tax invoice (it was never invoiced, or the invoice was refused on expired stock): goods are not dispatched without one, so the note stays `pending`. A read that cannot answer is a 500, never a dispatch."
+          description: "`invalid_status_transition` — the note is not `pending`. While the note is `pending` the order is judged first: `order_not_invoiced` — the order has no tax invoice (it was never invoiced, or the invoice was refused on expired stock); `order_not_dispatchable` — the order has an invoice but is cancelled or past dispatch (an invoice is never removed); `order_stock_expired` — a batch the order reserved is past its printed expiry month on the company's business day, even though the order was invoiced while it was valid and the consume has drained the hold (the goods are still in the warehouse). The note stays `pending` on each. A note already past `pending` is not judged again. A read that cannot answer is a 500, never a dispatch."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

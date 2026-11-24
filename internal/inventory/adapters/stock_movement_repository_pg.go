@@ -237,6 +237,38 @@ func (r *StockMovementRepository) CountExpiredBatchesHeldByOrder(ctx context.Con
 	return n, err
 }
 
+// CountExpiredBatchesEverReservedByOrder counts the batches an order ever reserved
+// units on whose printed expiry month is over on the business day `today`, releases
+// and consumes not netted. Joins the ambient tx when present. Satisfies
+// query.ReservedStockReader.
+func (r *StockMovementRepository) CountExpiredBatchesEverReservedByOrder(ctx context.Context, tenantID tenant.ID, orderRef string, today time.Time) (int64, error) {
+	tid, err := uuid.Parse(tenantID.String())
+	if err != nil {
+		return 0, fmt.Errorf("movement repo: parse tenant id: %w", err)
+	}
+	ref := orderRef
+	run := func(ctx context.Context, tx pgx.Tx) (int64, error) {
+		return r.q.WithTx(tx).CountExpiredBatchesEverReservedByOrder(ctx, db.CountExpiredBatchesEverReservedByOrderParams{
+			TenantID:        pgconv.PgUUID(tid),
+			Today:           pgconv.PgDate(today),
+			SourceReference: &ref,
+		})
+	}
+	if tx, ok := pg.TxFromContext(ctx); ok {
+		return run(ctx, tx)
+	}
+	var n int64
+	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+		got, qerr := run(ctx, tx)
+		if qerr != nil {
+			return fmt.Errorf("movement repo: count expired reserved batches: %w", qerr)
+		}
+		n = got
+		return nil
+	})
+	return n, err
+}
+
 // ----- Helpers ---------------------------------------------------------------
 
 func insertMovementRow(ctx context.Context, q *db.Queries, m *stockmovement.Movement) error {

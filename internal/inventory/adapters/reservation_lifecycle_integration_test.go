@@ -242,3 +242,38 @@ func TestReservationLifecycle_HeldStockExpiryIsAskedOnTheBusinessDay(t *testing.
 	require.NoError(t, err)
 	require.Zero(t, n, "a released hold is no longer held")
 }
+
+// Review G2e E1: the gate on a pending consignment note asks whether any batch ever reserved
+// for the order is past its printed expiry. Unlike the pre-pack question it does NOT net
+// releases or consumes: a consume has already drained the hold, but the goods are still in
+// the warehouse until the carrier takes them.
+func TestReservationLifecycle_EverReservedExpiryIgnoresConsumeAndRelease(t *testing.T) {
+	rig := newReservationRig(t)
+	movements := adapters.NewStockMovementRepository(repoFixture(t), pg.NewTransactor(repoFixture(t)))
+	p, b := rig.seedStockedBatch(t, 20)
+	orderID := uuid.NewString()
+	_, err := rig.reserve.Handle(rig.ctx, command.ReserveOrderStockCommand{
+		TenantID: rig.tid, OrderID: orderID, ActorMembershipID: rig.actor,
+		Lines: []command.ReserveLine{{ProductID: p.ID(), Quantity: 10}},
+	})
+	require.NoError(t, err)
+	lastDay := b.ExpiryDate()
+	firstOfNext := lastDay.AddDate(0, 0, 1)
+
+	n, err := movements.CountExpiredBatchesEverReservedByOrder(rig.ctx, rig.tid, orderID, lastDay)
+	require.NoError(t, err)
+	require.Zero(t, n, "on the last day of the printed month the batch is not past it")
+
+	_, err = rig.consume.Handle(rig.ctx, command.ConsumeOrderStockCommand{TenantID: rig.tid, OrderID: orderID, ActorMembershipID: rig.actor})
+	require.NoError(t, err)
+	held, err := movements.CountExpiredBatchesHeldByOrder(rig.ctx, rig.tid, orderID, firstOfNext)
+	require.NoError(t, err)
+	require.Zero(t, held, "the consume drained the hold")
+	n, err = movements.CountExpiredBatchesEverReservedByOrder(rig.ctx, rig.tid, orderID, firstOfNext)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n, "the batch the order reserved is expired, whatever was consumed since")
+
+	n, err = movements.CountExpiredBatchesEverReservedByOrder(rig.ctx, rig.tid, uuid.NewString(), firstOfNext)
+	require.NoError(t, err)
+	require.Zero(t, n, "another order reserved nothing")
+}
