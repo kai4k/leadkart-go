@@ -146,6 +146,7 @@ Phase C.1 PR open — **`feature/dispatch-domain-skeleton`**:
 - Carrier-skip-in-transit path supported (dispatched → delivered directly).
 - 5 integration events (`dispatch.consignment_note_created/dispatched/in_transit/delivered/failed.v1`).
 - ConsignmentDeliveredV1 is the ADR 0063 §4 saga input — Orders subscriber will route off it.
+- Mark-dispatched is ONE transaction over stock, order and note, or nothing changes (ADR 0072); the pack no longer deducts stock.
 - OrderPacked subscriber (LOCAL MIRROR pattern until Orders integrationevents lands on the same branch).
 - End-to-end test proves: envelope → subscriber → command → aggregate → fake-repo-drain (DRAINED event verification).
 
