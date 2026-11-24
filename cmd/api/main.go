@@ -1086,6 +1086,20 @@ func buildCompanySettingsApp(pool *pgxpool.Pool, now func() time.Time) companyse
 // Shares the pool + transactor; the create command runs under a UoW while
 // the status transitions use the repository's own UpdateByID tx.
 func buildDispatchApp(pool *pgxpool.Pool, now func() time.Time) dispatchapp.Application {
+	return buildDispatchAppWith(pool, now, dispatchWiringHooks{})
+}
+
+// dispatchWiringHooks is a seam for tests: each hook wraps one part of the dispatch
+// transaction as the production constructor built it, so a proof can make a step fail after it
+// did its work and still run the production wiring (never a hand-built copy of it). The zero
+// value wraps nothing.
+type dispatchWiringHooks struct {
+	notes func(consignmentnote.Repository) consignmentnote.Repository
+	order func(dispatchcommand.OrderShipper) dispatchcommand.OrderShipper
+	stock func(dispatchcommand.StockShipper) dispatchcommand.StockShipper
+}
+
+func buildDispatchAppWith(pool *pgxpool.Pool, now func() time.Time, hooks dispatchWiringHooks) dispatchapp.Application {
 	tx := pg.NewTransactor(pool)
 	repo := dispatchadapters.NewConsignmentNoteRepository(pool, tx)
 	// The dispatch moves stock, order and note in ONE transaction (ADR 0072). Orders and
@@ -1099,10 +1113,23 @@ func buildDispatchApp(pool *pgxpool.Pool, now func() time.Time) dispatchapp.Appl
 		now, func() stockmovement.ID { return stockmovement.ID(ids.NewV7().String()) })}
 	newID := func() consignmentnote.ID { return consignmentnote.ID(ids.NewV7().String()) }
 
+	var notes consignmentnote.Repository = repo
+	if hooks.notes != nil {
+		notes = hooks.notes(notes)
+	}
+	var orderStep dispatchcommand.OrderShipper = orderShipper
+	if hooks.order != nil {
+		orderStep = hooks.order(orderStep)
+	}
+	var stockStep dispatchcommand.StockShipper = stockShipper
+	if hooks.stock != nil {
+		stockStep = hooks.stock(stockStep)
+	}
+
 	return dispatchapp.Application{
 		Commands: dispatchapp.Commands{
 			CreateConsignmentNote: dispatchcommand.NewCreateConsignmentNoteHandler(tx, repo, now, newID),
-			MarkDispatched:        dispatchcommand.NewMarkDispatchedHandler(tx, repo, orderShipper, stockShipper, now),
+			MarkDispatched:        dispatchcommand.NewMarkDispatchedHandler(tx, notes, orderStep, stockStep, now),
 			MarkInTransit:         dispatchcommand.NewMarkInTransitHandler(repo, now),
 			MarkDelivered:         dispatchcommand.NewMarkDeliveredHandler(repo, now),
 			MarkFailed:            dispatchcommand.NewMarkFailedHandler(repo, now),

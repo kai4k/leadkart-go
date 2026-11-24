@@ -34,13 +34,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/leadkart/leadkart-go/cmd/internal/bridges"
 	"github.com/leadkart/leadkart-go/internal/common/expiry"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
-	dispatchadapters "github.com/leadkart/leadkart-go/internal/dispatch/adapters"
 	dispatchcommand "github.com/leadkart/leadkart-go/internal/dispatch/app/command"
 	"github.com/leadkart/leadkart-go/internal/dispatch/domain/consignmentnote"
 	dispatchports "github.com/leadkart/leadkart-go/internal/dispatch/ports"
@@ -48,10 +46,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	inventoryadapters "github.com/leadkart/leadkart-go/internal/inventory/adapters"
 	inventorycommand "github.com/leadkart/leadkart-go/internal/inventory/app/command"
-	inventorysellability "github.com/leadkart/leadkart-go/internal/inventory/app/sellability"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
-	ordersadapters "github.com/leadkart/leadkart-go/internal/orders/adapters"
-	orderscommand "github.com/leadkart/leadkart-go/internal/orders/app/command"
 	ordersevents "github.com/leadkart/leadkart-go/internal/orders/integrationevents"
 	ordersports "github.com/leadkart/leadkart-go/internal/orders/ports"
 )
@@ -305,26 +300,26 @@ func (n noteThenFail) UpdateByID(ctx context.Context, tid tenant.ID, id consignm
 	return n.fail
 }
 
-// buildTxDispatch is buildDispatchApp's composition on the given pool, with optional failures.
+// buildTxDispatch is the PRODUCTION dispatch wiring (buildDispatchAppWith, the constructor
+// buildDispatchApp calls) on the given pool, with optional failures injected through its hooks.
 func buildTxDispatch(pool *pgxpool.Pool, h dispatchHooks) dispatchcommand.MarkDispatchedHandler {
-	tx := pg.NewTransactor(pool)
-	var notes consignmentnote.Repository = dispatchadapters.NewConsignmentNoteRepository(pool, tx)
+	hooks := dispatchWiringHooks{}
 	if h.failAfterNote != nil {
-		notes = noteThenFail{Repository: notes, fail: h.failAfterNote}
+		hooks.notes = func(n consignmentnote.Repository) consignmentnote.Repository {
+			return noteThenFail{Repository: n, fail: h.failAfterNote}
+		}
 	}
-	var orderStep dispatchcommand.OrderShipper = bridges.OrderShipper{Dispatch: orderscommand.NewDispatchOrderHandler(ordersadapters.NewOrderRepository(pool, tx), time.Now)}
 	if h.failAfterOrder != nil {
-		orderStep = orderThenFail{inner: orderStep, fail: h.failAfterOrder}
+		hooks.order = func(o dispatchcommand.OrderShipper) dispatchcommand.OrderShipper {
+			return orderThenFail{inner: o, fail: h.failAfterOrder}
+		}
 	}
-	movements := inventoryadapters.NewStockMovementRepository(pool, tx)
-	var stockStep dispatchcommand.StockShipper = bridges.StockShipper{Ship: inventorycommand.NewShipOrderStockHandler(
-		inventoryadapters.NewBatchRepository(pool, tx), movements, movements,
-		inventorysellability.NewResolver(inventoryadapters.NewPolicyReplicaRepository(pool, tx), time.Now),
-		time.Now, func() stockmovement.ID { return stockmovement.ID(ids.NewV7().String()) })}
 	if h.failAfterStock != nil {
-		stockStep = stockThenFail{inner: stockStep, fail: h.failAfterStock}
+		hooks.stock = func(s dispatchcommand.StockShipper) dispatchcommand.StockShipper {
+			return stockThenFail{inner: s, fail: h.failAfterStock}
+		}
 	}
-	return dispatchcommand.NewMarkDispatchedHandler(tx, notes, orderStep, stockStep, time.Now)
+	return buildDispatchAppWith(pool, time.Now, hooks).Commands.MarkDispatched
 }
 
 func (r txRig) handle(t *testing.T, h dispatchcommand.MarkDispatchedHandler, noteID, docket string) error {
