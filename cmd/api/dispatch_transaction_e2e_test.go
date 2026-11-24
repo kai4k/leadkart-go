@@ -20,11 +20,13 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -46,6 +48,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	inventoryadapters "github.com/leadkart/leadkart-go/internal/inventory/adapters"
 	inventorycommand "github.com/leadkart/leadkart-go/internal/inventory/app/command"
+	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
 	ordersevents "github.com/leadkart/leadkart-go/internal/orders/integrationevents"
 	ordersports "github.com/leadkart/leadkart-go/internal/orders/ports"
@@ -260,6 +263,43 @@ type dispatchHooks struct {
 	failAfterOrder error
 	failAfterStock error
 	failAfterNote  error
+	// lockOrder, when set, makes the stock step see each order's holds in the given direction
+	// (+1 ascending, -1 descending batch id) on its first look, and pause after each batch lock.
+	lockOrder map[string]int
+}
+
+// directedLedger answers the first look at an order's holds in a fixed direction, so a proof can
+// make two orders ask for the same batches in opposite orders whatever the database returns.
+type directedLedger struct {
+	inventorycommand.ReservationLedger
+	dir map[string]int
+}
+
+func (l directedLedger) ListOutstandingReservationsForOrder(ctx context.Context, tid tenant.ID, orderRef string) ([]stockmovement.OutstandingReservation, error) {
+	got, err := l.ReservationLedger.ListOutstandingReservationsForOrder(ctx, tid, orderRef)
+	if err != nil {
+		return nil, err
+	}
+	d := l.dir[orderRef]
+	slices.SortFunc(got, func(a, b stockmovement.OutstandingReservation) int { return d * cmp.Compare(a.BatchID, b.BatchID) })
+	return got, nil
+}
+
+// pausingBatches holds each batch lock for a moment (a lock-only UpdateByID persists nothing),
+// so two transactions that take the same two locks in opposite orders really meet.
+type pausingBatches struct{ batch.Repository }
+
+func (p pausingBatches) UpdateByID(ctx context.Context, tid tenant.ID, id batch.ID, fn func(*batch.Batch) (bool, error)) error {
+	persisted := false
+	err := p.Repository.UpdateByID(ctx, tid, id, func(b *batch.Batch) (bool, error) {
+		ok, err := fn(b)
+		persisted = ok
+		return ok, err
+	})
+	if err == nil && !persisted {
+		time.Sleep(150 * time.Millisecond) // arch-test:wait-justified — widens the window two opposite lock orders need to collide in; there is no event to wait for
+	}
+	return err
 }
 
 type orderThenFail struct {
@@ -318,6 +358,12 @@ func buildTxDispatch(pool *pgxpool.Pool, h dispatchHooks) dispatchcommand.MarkDi
 		hooks.stock = func(s dispatchcommand.StockShipper) dispatchcommand.StockShipper {
 			return stockThenFail{inner: s, fail: h.failAfterStock}
 		}
+	}
+	if h.lockOrder != nil {
+		hooks.shipLedger = func(l inventorycommand.ReservationLedger) inventorycommand.ReservationLedger {
+			return directedLedger{ReservationLedger: l, dir: h.lockOrder}
+		}
+		hooks.shipBatches = func(b batch.Repository) batch.Repository { return pausingBatches{Repository: b} }
 	}
 	return buildDispatchAppWith(pool, time.Now, hooks).Commands.MarkDispatched
 }
@@ -730,14 +776,18 @@ func TestE2E_Dispatch_OneTransaction_ConcurrentDispatchAndReleasesLeaveTheOtherO
 
 func TestE2E_Dispatch_OneTransaction_OrdersLockingTheSameBatchesInOppositeLineOrderDoNotDeadlock(t *testing.T) {
 	r := newTxRig(t, "dispatchtx7")
-	dispatcher := buildTxDispatch(r.f.Pool, dispatchHooks{})
-	for round := 0; round < 6; round++ {
+	for round := 0; round < 4; round++ {
 		skuX, skuY := fmt.Sprintf("TX-LOCK-X%d", round), fmt.Sprintf("TX-LOCK-Y%d", round)
 		px, py := invCreateProduct(t, r.f, r.tok, skuX, nil), invCreateProduct(t, r.f, r.tok, skuY, nil)
 		bx, by := r.batch(t, px, "LOT-"+skuX, 40), r.batch(t, py, "LOT-"+skuY, 40)
 		// The same two batches, the lines in opposite order.
 		first := r.readyOrder(t, []ordersports.LineItemDto{line(px, skuX), line(py, skuY)}, []string{bx, by})
 		second := r.readyOrder(t, []ordersports.LineItemDto{line(py, skuY), line(px, skuX)}, []string{bx, by})
+		// The database may hand both orders their batches in the same order, so the first look
+		// is directed: ascending for one order, descending for the other. Without the id sort in
+		// the lock routine the two transactions take the two locks in opposite orders and
+		// deadlock (SQLSTATE 40P01); with it they queue.
+		dispatcher := buildTxDispatch(r.f.Pool, dispatchHooks{lockOrder: map[string]int{first.orderID: 1, second.orderID: -1}})
 
 		var wg sync.WaitGroup
 		start := make(chan struct{})

@@ -1097,6 +1097,10 @@ type dispatchWiringHooks struct {
 	notes func(consignmentnote.Repository) consignmentnote.Repository
 	order func(dispatchcommand.OrderShipper) dispatchcommand.OrderShipper
 	stock func(dispatchcommand.StockShipper) dispatchcommand.StockShipper
+	// shipBatches and shipLedger wrap the batch repository and the reservation ledger the
+	// stock step is built from (a proof that must control the order locks are taken in).
+	shipBatches func(batch.Repository) batch.Repository
+	shipLedger  func(inventorycommand.ReservationLedger) inventorycommand.ReservationLedger
 }
 
 func buildDispatchAppWith(pool *pgxpool.Pool, now func() time.Time, hooks dispatchWiringHooks) dispatchapp.Application {
@@ -1107,8 +1111,16 @@ func buildDispatchAppWith(pool *pgxpool.Pool, now func() time.Time, hooks dispat
 	// every repository the steps call joins the transaction the handler opens.
 	orderShipper := bridges.OrderShipper{Dispatch: orderscommand.NewDispatchOrderHandler(ordersadapters.NewOrderRepository(pool, tx), now)}
 	movements := inventoryadapters.NewStockMovementRepository(pool, tx)
+	var shipBatches batch.Repository = inventoryadapters.NewBatchRepository(pool, tx)
+	if hooks.shipBatches != nil {
+		shipBatches = hooks.shipBatches(shipBatches)
+	}
+	var shipLedger inventorycommand.ReservationLedger = movements
+	if hooks.shipLedger != nil {
+		shipLedger = hooks.shipLedger(shipLedger)
+	}
 	stockShipper := bridges.StockShipper{Ship: inventorycommand.NewShipOrderStockHandler(
-		inventoryadapters.NewBatchRepository(pool, tx), movements, movements,
+		shipBatches, movements, shipLedger,
 		inventorysellability.NewResolver(inventoryadapters.NewPolicyReplicaRepository(pool, tx), now),
 		now, func() stockmovement.ID { return stockmovement.ID(ids.NewV7().String()) })}
 	newID := func() consignmentnote.ID { return consignmentnote.ID(ids.NewV7().String()) }
