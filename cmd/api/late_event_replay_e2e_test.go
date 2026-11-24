@@ -11,8 +11,9 @@
 // as the company.
 
 // Review G2c B2: a timed-out order event, delivered again after the order moved on,
-// corrupted stock (a cancelled order held 10 units for good; a cancelled order's units left
-// the books; a pending consignment note on a cancelled order). The order-lifecycle handlers
+// corrupted stock (a cancelled order held 10 units for good; a pending consignment note on a
+// cancelled order). The pack no longer moves stock at all (ADR 0072: the dispatch does, in
+// one transaction), so there is no consume event to be late. The order-lifecycle handlers
 // are no longer replayed automatically: their dead letters stay for a person, and the replay
 // job leaves stock and documents exactly as they are. Every handler here times out because
 // it is held behind a gate, the same ending as a handler stuck behind a lock; the router, the
@@ -35,6 +36,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/expiry"
 	"github.com/leadkart/leadkart-go/internal/common/messaging/messagingtest"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	dispatchports "github.com/leadkart/leadkart-go/internal/dispatch/ports"
 	dispatchsubscribers "github.com/leadkart/leadkart-go/internal/dispatch/ports/subscribers"
 	inventorysubscribers "github.com/leadkart/leadkart-go/internal/inventory/ports/subscribers"
 	ordersports "github.com/leadkart/leadkart-go/internal/orders/ports"
@@ -93,13 +95,12 @@ func TestE2E_Orders_ALateEventIsNeverReplayedOntoAnOrderThatMovedOn(t *testing.T
 	tok := reg.AccessToken
 	const (
 		reserve  = inventorysubscribers.HandlerReserveStock
-		consume  = inventorysubscribers.HandlerConsumeStock
 		release  = inventorysubscribers.HandlerReleaseStock
 		invoice  = orderssubscribers.HandlerAutoInvoice
 		noteSlot = dispatchsubscribers.HandlerCreateConsignmentNote
 	)
-	g := newGates(reserve, consume, release, invoice, noteSlot)
-	g.set(true, reserve, consume, release, invoice, noteSlot)
+	g := newGates(reserve, release, invoice, noteSlot)
+	g.set(true, reserve, release, invoice, noteSlot)
 	stack := startFulfilmentStackWith(t, f.Pool, fulfilmentOptions{wrap: g.wrap, handlerTimeout: 300 * time.Millisecond})
 
 	inCompany := func(fn func(tx pgx.Tx) error) {
@@ -165,7 +166,7 @@ func TestE2E_Orders_ALateEventIsNeverReplayedOntoAnOrderThatMovedOn(t *testing.T
 	untouchedByTheReplayJob := func(s scenario, handlers ...string) {
 		t.Helper()
 		before := look(s)
-		g.set(true, reserve, consume, release, invoice, noteSlot)
+		g.set(true, reserve, release, invoice, noteSlot)
 		replayed, err := stack.replayer.ReplayDue(t.Context(), time.Now().Add(24*time.Hour), 100)
 		if err != nil || replayed != 0 {
 			t.Fatalf("the replay job replayed %d, %v; want none (order-lifecycle handlers are never replayed)", replayed, err)
@@ -195,7 +196,7 @@ func TestE2E_Orders_ALateEventIsNeverReplayedOntoAnOrderThatMovedOn(t *testing.T
 		}
 	})
 
-	t.Run("reserve times out and the order is dispatched: no hold appears", func(t *testing.T) {
+	t.Run("reserve times out and the order is packed: the goods cannot leave, nothing is deducted", func(t *testing.T) {
 		// arch-test:serial — the scenarios share one stack and one set of gates; each runs to completion first.
 		s := newScenario("LATE-2")
 		g.set(false, reserve)
@@ -204,30 +205,43 @@ func TestE2E_Orders_ALateEventIsNeverReplayedOntoAnOrderThatMovedOn(t *testing.T
 		waitFor(t, "the reserve is dead-lettered", func() bool { return deadLetters(reserve) == base+1 })
 		pack(s) // the known gap before round G5: an order with no hold can still be packed
 		g.set(true, reserve)
-		waitFor(t, "the order is dispatched", func() bool { return look(s).state == "dispatched" })
+		waitFor(t, "the order is invoiced", func() bool { return look(s).state == "invoiced" })
+		var noteID string
+		waitFor(t, "the consignment note exists", func() bool {
+			found := false
+			inCompany(func(tx pgx.Tx) error {
+				found = tx.QueryRow(t.Context(), `SELECT id::text FROM dispatch.consignment_notes WHERE order_id = $1`, s.orderID).Scan(&noteID) == nil
+				return nil
+			})
+			return found
+		})
+		// Goods never leave without a deduction (ADR 0072): with no hold the dispatch is refused.
+		if r := f.authedJSON(t, http.MethodPost, "/api/v1/dispatch/consignment-notes/"+noteID+"/dispatch", tok, dispatchports.MarkDispatchedRequest{DocketNumber: "BDX-LATE"}); r.status != http.StatusConflict || errorCode(t, r.body) != "order_stock_not_held" {
+			t.Fatalf("dispatch of an order that holds nothing: %d %s; want 409 order_stock_not_held", r.status, r.body)
+		}
 		untouchedByTheReplayJob(s, reserve)
-		if w := look(s); w.reserved != 0 {
-			t.Fatalf("world %+v; want nothing reserved", w)
+		if w := look(s); w.reserved != 0 || w.onHand != 20 || w.state != "invoiced" {
+			t.Fatalf("world %+v; want on hand 20, nothing reserved, still invoiced", w)
 		}
 	})
 
-	t.Run("consume and release both time out: the release is replayed and frees the hold", func(t *testing.T) {
+	t.Run("the release times out: it is replayed and frees the hold", func(t *testing.T) {
 		// arch-test:serial — the scenarios share one stack and one set of gates; each runs to completion first.
 		s := newScenario("LATE-3")
 		confirm(&s, "LATE-3")
 		waitFor(t, "the confirmed order reserves 10 units", func() bool { return look(s).reserved == 10 })
-		g.set(false, consume, release, invoice, noteSlot)
-		cBase, rBase, iBase, nBase := deadLetters(consume), deadLetters(release), deadLetters(invoice), deadLetters(noteSlot)
+		g.set(false, release, invoice, noteSlot)
+		rBase, iBase, nBase := deadLetters(release), deadLetters(invoice), deadLetters(noteSlot)
 		pack(s)
-		waitFor(t, "consume, auto-invoice and the note are dead-lettered", func() bool {
-			return deadLetters(consume) == cBase+1 && deadLetters(invoice) == iBase+1 && deadLetters(noteSlot) == nBase+1
+		waitFor(t, "auto-invoice and the note are dead-lettered", func() bool {
+			return deadLetters(invoice) == iBase+1 && deadLetters(noteSlot) == nBase+1
 		})
 		cancel(s)
 		waitFor(t, "the release is dead-lettered", func() bool { return deadLetters(release) == rBase+1 })
 		// Review G2d B3: the release IS replayed (cancellation is terminal and a release only
-		// drains what is still held), so the cancelled order's hold is freed. The consume, the
-		// invoice and the note are not: nothing else is delivered again.
-		g.set(true, reserve, consume, release, invoice, noteSlot)
+		// drains what is still held), so the cancelled order's hold is freed. The invoice and
+		// the note are not: nothing else is delivered again.
+		g.set(true, reserve, release, invoice, noteSlot)
 		replayed, err := stack.replayer.ReplayDue(t.Context(), time.Now().Add(24*time.Hour), 100)
 		if err != nil || replayed != 1 {
 			t.Fatalf("the replay job replayed %d, %v; want exactly the release", replayed, err)
@@ -249,7 +263,7 @@ func TestE2E_Orders_ALateEventIsNeverReplayedOntoAnOrderThatMovedOn(t *testing.T
 		if after := look(s); after != before {
 			t.Fatalf("the second replay run changed the world: before %+v after %+v", before, after)
 		}
-		for _, h := range []string{consume, invoice, noteSlot} {
+		for _, h := range []string{invoice, noteSlot} {
 			if n := messagingtest.ReplayCount(t.Context(), t, f.Pool, h); n != 0 {
 				t.Fatalf("%s: %d replays recorded, want 0", h, n)
 			}
@@ -268,6 +282,7 @@ func TestE2E_Orders_ALateEventIsNeverReplayedOntoAnOrderThatMovedOn(t *testing.T
 			return deadLetters(noteSlot) == nBase+1 && deadLetters(invoice) == iBase+1
 		})
 		cancel(s)
+		waitFor(t, "the cancel releases the hold (nothing was shipped)", func() bool { return look(s).reserved == 0 })
 		untouchedByTheReplayJob(s, noteSlot, invoice)
 		if w := look(s); w.notes != 0 || w.state != "cancelled" || w.invoiceID != "" {
 			t.Fatalf("world %+v; want cancelled with no invoice and no consignment note", w)

@@ -11,33 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const countExpiredBatchesEverReservedByOrder = `-- name: CountExpiredBatchesEverReservedByOrder :one
-SELECT count(DISTINCT m.batch_id)::bigint
-FROM   inventory.stock_movements m
-JOIN   inventory.batches b ON b.id = m.batch_id AND b.tenant_id = m.tenant_id
-WHERE  m.tenant_id = $1
-AND    m.source_reference = $2
-AND    m.type = 'reservation'
-AND    b.expiry_date < $3::date
-`
-
-type CountExpiredBatchesEverReservedByOrderParams struct {
-	TenantID        pgtype.UUID
-	SourceReference *string
-	Today           pgtype.Date
-}
-
-// How many batches the order EVER reserved units on whose printed expiry month is over
-// on the business day (the same "past" as above: expiry_date < today). Releases and
-// consumes are NOT netted: a consume drains the hold, but the goods stay in the warehouse
-// until the carrier takes them. The dispatch gate asks this while a note is pending.
-func (q *Queries) CountExpiredBatchesEverReservedByOrder(ctx context.Context, arg CountExpiredBatchesEverReservedByOrderParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countExpiredBatchesEverReservedByOrder, arg.TenantID, arg.SourceReference, arg.Today)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
-}
-
 const countExpiredBatchesHeldByOrder = `-- name: CountExpiredBatchesHeldByOrder :one
 SELECT count(*)::bigint
 FROM   inventory.batches b

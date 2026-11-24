@@ -382,10 +382,11 @@ func run(ctx context.Context, stdout *os.File) error {
 	// Cross-module consumers of the Orders lifecycle keeping stock holds
 	// honest (oversell prevention):
 	//   orders.order_confirmed.v1 → reserve FEFO stock (guard: available)
-	//   orders.order_packed.v1    → consume the hold as a shipment (release + outbound)
 	//   orders.order_cancelled.v1 → release the hold if still held
+	// The hold is shipped (release + outbound) by Dispatch's own transaction when the
+	// goods leave, not by an event (ADR 0072); the pack no longer touches stock.
 	// The StockMovementRepository doubles as the ReservationLedger (the
-	// outstanding-by-batch reads driving release/consume).
+	// outstanding-by-batch reads driving release).
 	inventoryBatchRepo := inventoryadapters.NewBatchRepository(pool, tx)
 	inventoryMovementRepo := inventoryadapters.NewStockMovementRepository(pool, tx)
 	inventoryOutbox := inventoryadapters.NewOutboxEnqueuer()
@@ -394,10 +395,8 @@ func run(ctx context.Context, stdout *os.File) error {
 	inventoryPolicyReplica := inventoryadapters.NewPolicyReplicaRepository(pool, tx)
 	inventoryWindow := inventorysellability.NewResolver(inventoryPolicyReplica, time.Now)
 	inventoryReserve := inventorycommand.NewReserveOrderStockHandler(tx, inventoryBatchRepo, inventoryMovementRepo, inventoryMovementRepo, inventoryOutbox, inventoryWindow, time.Now, newStockMovementID)
-	inventoryConsume := inventorycommand.NewConsumeOrderStockHandler(tx, inventoryBatchRepo, inventoryMovementRepo, inventoryMovementRepo, inventoryWindow, time.Now, newStockMovementID)
 	inventoryRelease := inventorycommand.NewReleaseOrderStockHandler(tx, inventoryBatchRepo, inventoryMovementRepo, inventoryMovementRepo, time.Now, newStockMovementID)
 	inventoryReserveSub := inventorysubscribers.NewReserveStockSubscriber(inventoryReserve, logger)
-	inventoryConsumeSub := inventorysubscribers.NewConsumeStockSubscriber(inventoryConsume, logger)
 	inventoryReleaseSub := inventorysubscribers.NewReleaseStockSubscriber(inventoryRelease, logger)
 	// companysettings.policy_changed.v1 -> Inventory's replica of the company
 	// commerce policy (ADR 0070): stored only when the version is newer.
@@ -462,7 +461,7 @@ func run(ctx context.Context, stdout *os.File) error {
 	cqrsHandlers = append(cqrsHandlers, taskssubscribers.Handlers(tasksCallLoggedSub, tasksLeadConvertedSub)...)
 	cqrsHandlers = append(cqrsHandlers, dispatchsubscribers.Handlers(dispatchOrderPacked, dispatchOrderCancelled)...)
 	cqrsHandlers = append(cqrsHandlers, orderssubscribers.Handlers(ordersAutoInvoiceSub, ordersConsignmentCreatedSub, ordersConsignmentDeliveredSub, ordersCancelCompensationSub, ordersPolicyChangedSub)...)
-	cqrsHandlers = append(cqrsHandlers, inventorysubscribers.Handlers(inventoryReserveSub, inventoryConsumeSub, inventoryReleaseSub, inventoryPolicyChangedSub)...)
+	cqrsHandlers = append(cqrsHandlers, inventorysubscribers.Handlers(inventoryReserveSub, inventoryReleaseSub, inventoryPolicyChangedSub)...)
 	cqrsHandlers = append(cqrsHandlers, notificationssubscribers.Handlers(notificationsLeadAssignedSub, notificationsWorkItemCreatedSub, notificationsWorkItemOverdueSub, notificationsOrderConfirmedSub, notificationsStockAlertSub)...)
 	for _, h := range cqrsHandlers {
 		if err := router.AddCqrsHandler(eventProcessor, h); err != nil {

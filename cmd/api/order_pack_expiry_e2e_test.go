@@ -72,6 +72,10 @@ type fulfilmentOptions struct {
 	wrap func(cqrs.EventHandler) cqrs.EventHandler
 	// handlerTimeout is the per-attempt timeout (zero: the router default).
 	handlerTimeout time.Duration
+	// keep, when set, registers only the handlers it answers true for (by handler name).
+	keep func(handlerName string) bool
+	// extra handlers are registered after keep is applied (a test's own observers of the bus).
+	extra []cqrs.EventHandler
 }
 
 // startFulfilmentStack runs the production event path for an order's fulfilment:
@@ -96,15 +100,13 @@ func startFulfilmentStackWith(t *testing.T, pool *pgxpool.Pool, opts fulfilmentO
 	}
 	t.Cleanup(func() { _ = s.pubsub.Close() })
 
-	// Inventory: reserve on confirm, consume on pack.
+	// Inventory: reserve on confirm, release on cancel (the shipment is Dispatch's transaction).
 	batches := inventoryadapters.NewBatchRepository(pool, tx)
 	movements := inventoryadapters.NewStockMovementRepository(pool, tx)
 	window := inventorysellability.NewResolver(inventoryadapters.NewPolicyReplicaRepository(pool, tx), time.Now)
 	newMID := func() stockmovement.ID { return stockmovement.ID(ids.NewV7().String()) }
 	reserve := inventorysubscribers.NewReserveStockSubscriber(
 		inventorycommand.NewReserveOrderStockHandler(tx, batches, movements, movements, inventoryadapters.NewOutboxEnqueuer(), window, time.Now, newMID), log)
-	consume := inventorysubscribers.NewConsumeStockSubscriber(
-		inventorycommand.NewConsumeOrderStockHandler(tx, batches, movements, movements, window, time.Now, newMID), log)
 
 	// Dispatch: a consignment note slot per packed order.
 	dispatchRepo := dispatchadapters.NewConsignmentNoteRepository(pool, tx)
@@ -126,11 +128,21 @@ func startFulfilmentStackWith(t *testing.T, pool *pgxpool.Pool, opts fulfilmentO
 		dispatchquery.NewGetConsignmentNoteByOrderHandler(dispatchRepo), dispatchcommand.NewMarkFailedHandler(dispatchRepo, time.Now), log)
 
 	var handlers []cqrs.EventHandler
-	handlers = append(handlers, inventorysubscribers.Handlers(reserve, consume, release, nil)...)
+	handlers = append(handlers, inventorysubscribers.Handlers(reserve, release, nil)...)
 	handlers = append(handlers, dispatchsubscribers.Handlers(dispatchPacked, dispatchCancelled)...)
 	handlers = append(handlers, orderssubscribers.Handlers(
 		orderssubscribers.NewAutoInvoiceSubscriber(invoiceOrder, log),
 		orderssubscribers.NewConsignmentCreatedSubscriber(attach, log), nil, nil, nil)...)
+	if opts.keep != nil {
+		kept := handlers[:0]
+		for _, h := range handlers {
+			if opts.keep(h.HandlerName()) {
+				kept = append(kept, h)
+			}
+		}
+		handlers = kept
+	}
+	handlers = append(handlers, opts.extra...)
 	// The replayer is built from the handlers as registered, before a test wraps any.
 	replayer := messaging.NewDeadLetterReplayer(pool, log, messaging.ReplaySafeHandlerNames(handlers))
 	if opts.wrap != nil {
@@ -328,9 +340,6 @@ func TestE2E_Orders_AnInvoiceEventArrivingAfterTheExpiryIssuesNoInvoice(t *testi
 
 	waitFor(t, "the auto-invoice is refused and dead-lettered", func() bool {
 		return messagingtest.DeadLetterCount(t.Context(), t, f.Pool, orderssubscribers.HandlerAutoInvoice) == 1
-	})
-	waitFor(t, "the consume is refused and dead-lettered", func() bool {
-		return messagingtest.DeadLetterCount(t.Context(), t, f.Pool, inventorysubscribers.HandlerConsumeStock) == 1
 	})
 	time.Sleep(time.Second) // arch-test:wait-justified — negative proof: the remaining consumers have nothing to signal when they do nothing
 

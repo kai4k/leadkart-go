@@ -1,14 +1,10 @@
 package subscribers
 
 import (
-	"errors"
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/leadkart/leadkart-go/internal/common/messaging"
-	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 	ordersevents "github.com/leadkart/leadkart-go/internal/orders/integrationevents"
 )
@@ -34,11 +30,4 @@ func TestAggregateLines_SumsByProductPreservingOrder(t *testing.T) {
 func TestAggregateLines_EmptyItemsYieldsNoLines(t *testing.T) {
 	t.Parallel()
 	require.Empty(t, aggregateLines(nil))
-}
-
-// Review B2: a pack event whose stock has expired dead-letters at once; other failures retry.
-func TestConsumeError_ExpiredStockDeadLettersAtOnceOthersRetry(t *testing.T) {
-	t.Parallel()
-	require.True(t, messaging.IsNonRetryable(consumeError(fmt.Errorf("consume: %w", batch.ErrExpired))))
-	require.False(t, messaging.IsNonRetryable(consumeError(errors.New("db down"))))
 }

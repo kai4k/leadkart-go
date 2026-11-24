@@ -3,8 +3,10 @@
 // lifecycle to keep stock holds honest:
 //
 //	orders.order_confirmed.v1 → reserve FEFO stock (oversell guard)
-//	orders.order_packed.v1    → consume the hold as a shipment
 //	orders.order_cancelled.v1 → release the hold (if still held)
+//
+// The hold is shipped by Dispatch's own transaction when the goods leave
+// (ADR 0072), not by an event: orders.order_packed.v1 no longer touches stock.
 //
 // Cross-module by integration event only — Inventory imports the Orders
 // integrationevents contract, never its domain/app (the sanctioned EDA seam).

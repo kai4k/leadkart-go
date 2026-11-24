@@ -45,8 +45,8 @@ func TestE2E_Dispatch_TheGateJudgesTheOrderAndItsGoods(t *testing.T) {
 			t.Fatalf("company statement: %v", err)
 		}
 	}
-	// flow runs the production fulfilment of one order to the point where the order is
-	// dispatched and its consignment note is pending: reserved, packed, consumed, invoiced.
+	// flow runs the production fulfilment of one order to the point where the goods are
+	// still in the warehouse: reserved, packed, invoiced, its consignment note pending.
 	flow := func(sku string) (batchID, noteID string) {
 		t.Helper()
 		productID := invCreateProduct(t, f, tok, sku, nil)
@@ -65,15 +65,22 @@ func TestE2E_Dispatch_TheGateJudgesTheOrderAndItsGoods(t *testing.T) {
 		if r := f.authedJSON(t, http.MethodPost, orderPath+"/pack", tok, ordersports.PackOrderRequest{CarrierName: "BlueDart", BoxCount: 2, WeightGrams: 1500}); r.status != http.StatusNoContent {
 			t.Fatalf("pack: %d %s", r.status, r.body)
 		}
-		waitFor(t, "the order is dispatched", func() bool {
+		orderState := func() string {
 			var ord ordersports.OrderDto
 			if err := json.Unmarshal(f.authedJSON(t, http.MethodGet, orderPath, tok, nil).body, &ord); err != nil {
-				return false
+				return ""
 			}
-			return ord.State == "dispatched"
-		})
-		inCompany(func(tx pgx.Tx) error {
-			return tx.QueryRow(t.Context(), `SELECT id::text FROM dispatch.consignment_notes WHERE order_id = $1`, orderID).Scan(&noteID)
+			return ord.State
+		}
+		waitFor(t, "the order is invoiced", func() bool { return orderState() == "invoiced" })
+		waitFor(t, "the consignment note exists", func() bool {
+			found := false
+			inCompany(func(tx pgx.Tx) error {
+				err := tx.QueryRow(t.Context(), `SELECT id::text FROM dispatch.consignment_notes WHERE order_id = $1`, orderID).Scan(&noteID)
+				found = err == nil
+				return nil
+			})
+			return found
 		})
 		return batchID, noteID
 	}
@@ -88,9 +95,21 @@ func TestE2E_Dispatch_TheGateJudgesTheOrderAndItsGoods(t *testing.T) {
 
 	t.Run("invoiced and valid: dispatched, in transit, delivered", func(t *testing.T) {
 		// arch-test:serial — the scenarios share one stack and one company; each runs to completion first.
-		_, noteID := flow("GATE-OK")
+		batchID, noteID := flow("GATE-OK")
+		stock := func() (onHand, reserved float64) {
+			b := invObj(t, f.authedJSON(t, http.MethodGet, "/api/v1/inventory/batches/"+batchID, tok, nil).body)
+			onHand, _ = b["quantity_on_hand"].(float64)
+			reserved, _ = b["quantity_reserved"].(float64)
+			return onHand, reserved
+		}
+		if onHand, reserved := stock(); onHand != 20 || reserved != 10 {
+			t.Fatalf("before the dispatch: on hand %v reserved %v; want 20 and 10 (the pack deducts nothing)", onHand, reserved)
+		}
 		if r := f.authedJSON(t, http.MethodPost, notePath(noteID)+"/dispatch", tok, dispatchports.MarkDispatchedRequest{DocketNumber: "BDX-1"}); r.status != http.StatusNoContent {
 			t.Fatalf("dispatch: %d %s; want 204", r.status, r.body)
+		}
+		if onHand, reserved := stock(); onHand != 10 || reserved != 0 {
+			t.Fatalf("after the dispatch: on hand %v reserved %v; want 10 and 0", onHand, reserved)
 		}
 		if r := f.authedJSON(t, http.MethodPost, notePath(noteID)+"/in-transit", tok, nil); r.status != http.StatusNoContent {
 			t.Fatalf("in transit: %d %s; want 204", r.status, r.body)

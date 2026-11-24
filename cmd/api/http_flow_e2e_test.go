@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -315,8 +316,14 @@ func startWiredPostgresForHTTP(t *testing.T) *pgxpool.Pool {
 		t.Fatalf("pgxpool.New: %v", err)
 	}
 	t.Cleanup(pool.Close)
+	ownerDSNs.Store(pool, ownerDSN)
 	return pool
 }
+
+// ownerDSNs maps a fixture's application pool to the owner connection string of its database,
+// for the few proofs that must change the schema itself (a trigger that makes one statement
+// fail on purpose). The application role cannot do that, and nothing else should.
+var ownerDSNs sync.Map
 
 func migrationsDir(t *testing.T) string {
 	t.Helper()

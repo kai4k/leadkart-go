@@ -276,12 +276,10 @@ func (cn *ConsignmentNote) CreatedByMembershipID() membership.ID { return cn.cre
 
 // ----- State transitions ----------------------------------------------------
 
-// MarkDispatched flips pending → dispatched, recording the docket
-// number assigned by the carrier. docketNumber is required (the
-// pending → dispatched transition exists to capture this docket).
-// Idempotent on self when the docketNumber matches; differing docket
-// on re-call is ErrInvalid (operator typo or wrong carrier).
-func (cn *ConsignmentNote) MarkDispatched(docketNumber string, actor membership.ID, now time.Time) error {
+// ValidateDocketNumber is the docket number rule of [ConsignmentNote.MarkDispatched] on its
+// own: required, within the database limit. The dispatch asks it before it moves any stock,
+// so a bad docket is refused before the order and the stock are touched.
+func ValidateDocketNumber(docketNumber string) error {
 	doc := strings.TrimSpace(docketNumber)
 	if doc == "" {
 		return fmt.Errorf("%w: docket_number required", ErrInvalid)
@@ -289,6 +287,19 @@ func (cn *ConsignmentNote) MarkDispatched(docketNumber string, actor membership.
 	if err := textlimit.Chars("docket_number", doc, MaxDocketNumberChars); err != nil { // DB CHECK length() <= 100
 		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
+	return nil
+}
+
+// MarkDispatched flips pending → dispatched, recording the docket
+// number assigned by the carrier. docketNumber is required (the
+// pending → dispatched transition exists to capture this docket).
+// Idempotent on self when the docketNumber matches; differing docket
+// on re-call is ErrInvalid (operator typo or wrong carrier).
+func (cn *ConsignmentNote) MarkDispatched(docketNumber string, actor membership.ID, now time.Time) error {
+	if err := ValidateDocketNumber(docketNumber); err != nil {
+		return err
+	}
+	doc := strings.TrimSpace(docketNumber)
 	if cn.status == StatusDispatched {
 		if cn.docketNumber != doc {
 			return fmt.Errorf("%w: docket_number mismatch on re-mark (existing %q, supplied %q)",

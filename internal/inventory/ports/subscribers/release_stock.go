@@ -16,12 +16,12 @@ const HandlerReleaseStock = "inventory.subscribers.ReleaseStock"
 
 // arch-test:idempotency-via-outstanding-ledger — release no-ops when the order's
 // outstanding hold is already zero (a prior release drained it, or it was
-// consumed at pack), so a redelivered order_cancelled.v1 releases nothing twice.
+// shipped at dispatch), so a redelivered order_cancelled.v1 releases nothing twice.
 
 // ReleaseStockSubscriber returns an order's outstanding reservation to
 // available when the order is cancelled (orders.order_cancelled.v1). It is
 // PriorState-agnostic: the ledger says what is still held, so a cancel before
-// pack releases the hold while a cancel after consumption (ledger already zero)
+// dispatch releases the hold while a cancel after the shipment (ledger already zero)
 // no-ops — the shipped goods are an operator return, handled elsewhere.
 type ReleaseStockSubscriber struct {
 	release command.ReleaseOrderStockHandler

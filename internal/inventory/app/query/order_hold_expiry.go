@@ -16,12 +16,6 @@ type HeldStockReader interface {
 	CountExpiredBatchesHeldByOrder(ctx context.Context, tenantID tenant.ID, orderRef string, today time.Time) (int64, error)
 }
 
-// ReservedStockReader counts the batches an order ever reserved units on whose printed
-// expiry month is over on a given business day, releases and consumes not netted.
-type ReservedStockReader interface {
-	CountExpiredBatchesEverReservedByOrder(ctx context.Context, tenantID tenant.ID, orderRef string, today time.Time) (int64, error)
-}
-
 // OrderHoldExpiryHandler answers Orders' pre-pack question: does this order hold
 // stock that may no longer be sold? The composition root binds Orders' port to it.
 type OrderHoldExpiryHandler struct {
@@ -60,45 +54,6 @@ func (h OrderHoldExpiryHandler) Handle(ctx context.Context, q OrderHoldExpiryQue
 	n, err := h.reader.CountExpiredBatchesHeldByOrder(ctx, tenantID, orderID, w.Today)
 	if err != nil {
 		return false, fmt.Errorf("order hold expiry: %w", err)
-	}
-	return n > 0, nil
-}
-
-// OrderReservedExpiryHandler answers Dispatch's question while a consignment note is still
-// pending: do the goods of this order sit on a batch that is past its printed expiry? A
-// consume drains the hold when the order is packed, but the goods stay in the warehouse
-// until the carrier takes them, so this counts every batch the order EVER reserved on. It
-// uses the same business day and the same "past" ([sellability.Resolver], the common/expiry
-// bound) as [OrderHoldExpiryHandler]: no second expiry rule.
-type OrderReservedExpiryHandler struct {
-	reader ReservedStockReader
-	window sellability.Resolver
-}
-
-// NewOrderReservedExpiryHandler wires the handler.
-func NewOrderReservedExpiryHandler(reader ReservedStockReader, window sellability.Resolver) OrderReservedExpiryHandler {
-	if reader == nil {
-		panic("query: NewOrderReservedExpiryHandler reader required")
-	}
-	return OrderReservedExpiryHandler{reader: reader, window: window}
-}
-
-// Handle is true when any batch the order ever reserved is past its printed expiry on the
-// company's business day. An order that reserved nothing is false.
-func (h OrderReservedExpiryHandler) Handle(ctx context.Context, q OrderHoldExpiryQuery) (bool, error) {
-	if q.TenantID.IsZero() {
-		return false, errors.New("order reserved expiry: tenant id required")
-	}
-	if q.OrderID == "" {
-		return false, errors.New("order reserved expiry: order id required")
-	}
-	w, err := h.window.Resolve(ctx, q.TenantID)
-	if err != nil {
-		return false, fmt.Errorf("order reserved expiry: %w", err)
-	}
-	n, err := h.reader.CountExpiredBatchesEverReservedByOrder(ctx, q.TenantID, q.OrderID, w.Today)
-	if err != nil {
-		return false, fmt.Errorf("order reserved expiry: %w", err)
 	}
 	return n > 0, nil
 }

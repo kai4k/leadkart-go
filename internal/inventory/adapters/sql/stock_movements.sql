@@ -74,19 +74,6 @@ HAVING COALESCE(SUM(
                ELSE 0
            END), 0) > 0;
 
--- name: CountExpiredBatchesEverReservedByOrder :one
--- How many batches the order EVER reserved units on whose printed expiry month is over
--- on the business day (the same "past" as above: expiry_date < today). Releases and
--- consumes are NOT netted: a consume drains the hold, but the goods stay in the warehouse
--- until the carrier takes them. The dispatch gate asks this while a note is pending.
-SELECT count(DISTINCT m.batch_id)::bigint
-FROM   inventory.stock_movements m
-JOIN   inventory.batches b ON b.id = m.batch_id AND b.tenant_id = m.tenant_id
-WHERE  m.tenant_id = $1
-AND    m.source_reference = sqlc.arg(source_reference)
-AND    m.type = 'reservation'
-AND    b.expiry_date < sqlc.arg(today)::date;
-
 -- name: CountExpiredBatchesHeldByOrder :one
 -- How many batches the order still holds units on whose printed expiry month is
 -- over on the business day (expiry_date is the last day of the printed month, so

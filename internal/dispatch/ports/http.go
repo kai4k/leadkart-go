@@ -304,6 +304,8 @@ func mapMutationErr(w http.ResponseWriter, log *slog.Logger, r *http.Request, er
 		writeError(w, http.StatusConflict, errCodeOrderNotDispatchable, "the order is not in a state goods can leave from (it is cancelled or already past dispatch)")
 	case errors.Is(err, command.ErrStockExpired):
 		writeError(w, http.StatusConflict, errCodeOrderStockExpired, "the goods of the order are past their printed expiry; expired stock is never sold, cancel the order instead")
+	case errors.Is(err, command.ErrStockNotHeld):
+		writeError(w, http.StatusConflict, errCodeOrderStockNotHeld, "the order holds no stock to ship; goods never leave without a deduction")
 	case errors.Is(err, command.ErrOrderNotInvoiced):
 		writeError(w, http.StatusConflict, errCodeOrderNotInvoiced, "the order has no tax invoice yet; goods are not dispatched without one")
 	case errors.Is(err, consignmentnote.ErrInvalid):

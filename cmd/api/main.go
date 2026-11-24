@@ -1088,19 +1088,21 @@ func buildCompanySettingsApp(pool *pgxpool.Pool, now func() time.Time) companyse
 func buildDispatchApp(pool *pgxpool.Pool, now func() time.Time) dispatchapp.Application {
 	tx := pg.NewTransactor(pool)
 	repo := dispatchadapters.NewConsignmentNoteRepository(pool, tx)
-	// A note is dispatched only for an invoiced order that is not cancelled (review G2d B1,
-	// G2e E2) and whose reserved batches are not past their printed expiry (G2e E1). Orders
-	// and Inventory answer, bound here because modules never import each other.
-	orderDispatch := bridges.OrderDispatch{Orders: ordersquery.NewGetOrderHandler(ordersadapters.NewOrderRepository(pool, tx))}
-	reservedExpiry := bridges.ReservedStockExpiry{Reserved: inventoryquery.NewOrderReservedExpiryHandler(
-		inventoryadapters.NewStockMovementRepository(pool, tx),
-		inventorysellability.NewResolver(inventoryadapters.NewPolicyReplicaRepository(pool, tx), now))}
+	// The dispatch moves stock, order and note in ONE transaction (ADR 0072). Orders and
+	// Inventory each supply one step, bound here because modules never import each other;
+	// every repository the steps call joins the transaction the handler opens.
+	orderShipper := bridges.OrderShipper{Dispatch: orderscommand.NewDispatchOrderHandler(ordersadapters.NewOrderRepository(pool, tx), now)}
+	movements := inventoryadapters.NewStockMovementRepository(pool, tx)
+	stockShipper := bridges.StockShipper{Ship: inventorycommand.NewShipOrderStockHandler(
+		inventoryadapters.NewBatchRepository(pool, tx), movements, movements,
+		inventorysellability.NewResolver(inventoryadapters.NewPolicyReplicaRepository(pool, tx), now),
+		now, func() stockmovement.ID { return stockmovement.ID(ids.NewV7().String()) })}
 	newID := func() consignmentnote.ID { return consignmentnote.ID(ids.NewV7().String()) }
 
 	return dispatchapp.Application{
 		Commands: dispatchapp.Commands{
 			CreateConsignmentNote: dispatchcommand.NewCreateConsignmentNoteHandler(tx, repo, now, newID),
-			MarkDispatched:        dispatchcommand.NewMarkDispatchedHandler(repo, orderDispatch, reservedExpiry, now),
+			MarkDispatched:        dispatchcommand.NewMarkDispatchedHandler(tx, repo, orderShipper, stockShipper, now),
 			MarkInTransit:         dispatchcommand.NewMarkInTransitHandler(repo, now),
 			MarkDelivered:         dispatchcommand.NewMarkDeliveredHandler(repo, now),
 			MarkFailed:            dispatchcommand.NewMarkFailedHandler(repo, now),

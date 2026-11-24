@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/dispatch/domain/consignmentnote"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -16,7 +17,8 @@ import (
 // notes.UpdateByID, which already owns its transaction (repository-owns-tx,
 // ADR 0004). No pg.UnitOfWork wrapper — a WithinTx around a single
 // UpdateByID is redundant ceremony (ADR 0067 UoW audit). The multi-write
-// CreateConsignmentNote command keeps the UoW.
+// CreateConsignmentNote command keeps the UoW, and so does MarkDispatched,
+// which moves stock, order and note in one transaction (ADR 0072).
 
 // ----- MarkDispatched -------------------------------------------------------
 
@@ -37,95 +39,99 @@ var ErrOrderNotInvoiced = errors.New("dispatch: the order has no tax invoice")
 // do not leave from: a cancelled order keeps its invoice and is never shipped (review G2e E2).
 var ErrOrderNotDispatchable = errors.New("dispatch: the order is not in a state goods can leave from")
 
-// ErrStockExpired is returned when a batch the order reserved is past its printed expiry:
-// the goods are still in the warehouse and expired stock is never sold (review G2e E1).
+// ErrStockExpired is returned when a batch the order holds is past its printed expiry: the
+// goods are still in the warehouse and expired stock is never sold (review G2e E1).
 var ErrStockExpired = errors.New("dispatch: the goods of the order are past their printed expiry")
 
-// OrderDispatchStatus is Orders' answer to "may goods leave for this order?".
-type OrderDispatchStatus int
+// ErrStockNotHeld is returned when the order holds no stock at the moment goods leave for it:
+// goods never leave without a deduction (ADR 0072).
+var ErrStockNotHeld = errors.New("dispatch: the order holds no stock to ship")
 
-const (
-	// OrderDispatchable means the order is invoiced or dispatched.
-	OrderDispatchable OrderDispatchStatus = iota
-	// OrderNotInvoiced means the order has no tax invoice (or there is no such order for this company).
-	OrderNotInvoiced
-	// OrderWrongState means the order is cancelled or past dispatch.
-	OrderWrongState
-)
-
-// OrderDispatchChecker asks Orders whether goods may leave for an order. Dispatch owns the
-// question; the composition root binds it to an Orders read, because modules never import
-// each other.
-type OrderDispatchChecker interface {
-	OrderDispatchStatus(ctx context.Context, tenantID tenant.ID, orderID string) (OrderDispatchStatus, error)
+// OrderShipper is Dispatch's port to Orders for the moment goods leave: it moves the order
+// from invoiced to dispatched. The composition root binds it to an Orders command, because
+// modules never import each other.
+//
+// It runs INSIDE the dispatch transaction and must use the one in ctx (it is called with the
+// ctx [TenantUnitOfWork.WithinTenantTx] hands the closure). An implementation that cannot
+// find a transaction in ctx must fail closed instead of opening its own: a second
+// transaction would not roll back with the stock and the note. It answers
+// [ErrOrderNotInvoiced] for an order with no invoice (or none for this company) and
+// [ErrOrderNotDispatchable] for one in a state goods do not leave from.
+type OrderShipper interface {
+	MarkOrderDispatched(ctx context.Context, tenantID tenant.ID, orderID string, actor membership.ID) error
 }
 
-// StockExpiryChecker asks Inventory whether any batch the order ever reserved is past its
-// printed expiry on the company business day. The reservation counts even after the consume
-// drained it: the goods stay in the warehouse until the carrier takes them.
-type StockExpiryChecker interface {
-	ReservedStockExpired(ctx context.Context, tenantID tenant.ID, orderID string) (bool, error)
+// StockShipper is Dispatch's port to Inventory for the moment goods leave: it locks the
+// batches the order holds, reads the hold under the locks and ships it (release + outbound,
+// both movement rows). Same transaction rule as [OrderShipper]. It answers
+// [ErrStockNotHeld] when the order holds nothing and [ErrStockExpired] when a held batch is
+// past its printed expiry on the company business day; one expiry authority (Inventory's
+// batch rule), not a second check here.
+type StockShipper interface {
+	ShipOrderStock(ctx context.Context, tenantID tenant.ID, orderID string, actor membership.ID) error
 }
 
 // MarkDispatchedHandler runs the pending → dispatched transition.
 type MarkDispatchedHandler struct {
+	uow    pg.TenantUnitOfWork
 	notes  consignmentnote.Repository
-	orders OrderDispatchChecker
-	stock  StockExpiryChecker
+	orders OrderShipper
+	stock  StockShipper
 	now    func() time.Time
 }
 
-// NewMarkDispatchedHandler wires the handler. orders and stock are required.
-func NewMarkDispatchedHandler(notes consignmentnote.Repository, orders OrderDispatchChecker, stock StockExpiryChecker, now func() time.Time) MarkDispatchedHandler {
-	if orders == nil || stock == nil {
-		panic("command: NewMarkDispatchedHandler order and stock checks required")
+// NewMarkDispatchedHandler wires the handler. uow, orders and stock are required.
+func NewMarkDispatchedHandler(uow pg.TenantUnitOfWork, notes consignmentnote.Repository, orders OrderShipper, stock StockShipper, now func() time.Time) MarkDispatchedHandler {
+	if uow == nil || orders == nil || stock == nil {
+		panic("command: NewMarkDispatchedHandler uow, order and stock steps required")
 	}
 	if now == nil {
 		now = time.Now
 	}
-	return MarkDispatchedHandler{notes: notes, orders: orders, stock: stock, now: now}
+	return MarkDispatchedHandler{uow: uow, notes: notes, orders: orders, stock: stock, now: now}
 }
 
-// Handle executes the transition via the UpdateFn pattern. While the note is pending it
-// first asks Orders whether goods may leave for the order (invoiced, and in a state goods
-// leave from) and Inventory whether a batch the order reserved is now past its printed
-// expiry; either refusal leaves the note pending, and a read that fails fails closed. The
-// questions are asked outside the note's transaction (other modules' reads). A note already
-// past pending is not re-judged: its goods have left.
+// Handle dispatches the note in ONE tenant-scoped transaction (ADR 0072), in this lock order:
+//
+//  1. lock the note (a note already past pending touches nothing: the same docket is a
+//     no-op, another docket is the domain's refusal);
+//  2. lock the order and move it invoiced → dispatched, its event in the outbox (not
+//     invoiced / wrong state: 409);
+//  3. lock the order's batches in batch-id order, read the hold under the locks, refuse when
+//     nothing is held or a held batch is past its printed expiry, ship every hold (release +
+//     outbound, both movement rows);
+//  4. note pending → dispatched, its event in the outbox.
+//
+// It commits once. Any error rolls back all of it: stock, order and note change together or
+// not at all. The steps run inside the note's UpdateByID closure so the note's row lock is the
+// first lock taken; every repository joins the transaction in ctx, so the whole flow runs on
+// one connection.
 func (h MarkDispatchedHandler) Handle(ctx context.Context, cmd MarkDispatchedCommand) error {
-	cn, err := h.notes.GetByID(ctx, cmd.TenantID, cmd.ConsignmentNoteID)
-	if err != nil {
-		return err
-	}
-	if cn.Status() == consignmentnote.StatusPending {
-		orderID := string(cn.OrderID())
-		status, err := h.orders.OrderDispatchStatus(ctx, cmd.TenantID, orderID)
-		if err != nil {
-			return fmt.Errorf("mark dispatched: check the order: %w", err)
-		}
-		switch status {
-		case OrderDispatchable:
-		case OrderNotInvoiced:
-			return fmt.Errorf("mark dispatched: %w", ErrOrderNotInvoiced)
-		default:
-			return fmt.Errorf("mark dispatched: %w", ErrOrderNotDispatchable)
-		}
-		expired, err := h.stock.ReservedStockExpired(ctx, cmd.TenantID, orderID)
-		if err != nil {
-			return fmt.Errorf("mark dispatched: check the stock expiry: %w", err)
-		}
-		if expired {
-			return fmt.Errorf("mark dispatched: %w", ErrStockExpired)
-		}
-	}
-	return h.notes.UpdateByID(ctx, cmd.TenantID, cmd.ConsignmentNoteID, func(cn *consignmentnote.ConsignmentNote) (bool, error) {
-		priorStatus := cn.Status()
-		if err := cn.MarkDispatched(cmd.DocketNumber, cmd.TransitionedByMembership, h.now()); err != nil {
-			return false, fmt.Errorf("mark dispatched: %w", err)
-		}
-		// No-op when already-dispatched-with-same-docket (mutator
-		// returns nil but doesn't change state).
-		return cn.Status() != priorStatus, nil
+	return h.uow.WithinTenantTx(ctx, cmd.TenantID.String(), func(ctx context.Context) error {
+		return h.notes.UpdateByID(ctx, cmd.TenantID, cmd.ConsignmentNoteID, func(cn *consignmentnote.ConsignmentNote) (bool, error) {
+			priorStatus := cn.Status()
+			if priorStatus == consignmentnote.StatusPending {
+				// A docket the note will refuse is refused before the order or the stock move.
+				if err := consignmentnote.ValidateDocketNumber(cmd.DocketNumber); err != nil {
+					return false, fmt.Errorf("mark dispatched: %w", err)
+				}
+				orderID := string(cn.OrderID())
+				if err := h.orders.MarkOrderDispatched(ctx, cmd.TenantID, orderID, cmd.TransitionedByMembership); err != nil {
+					return false, fmt.Errorf("mark dispatched: %w", err)
+				}
+				if err := h.stock.ShipOrderStock(ctx, cmd.TenantID, orderID, cmd.TransitionedByMembership); err != nil {
+					return false, fmt.Errorf("mark dispatched: %w", err)
+				}
+			}
+			// The note moves last: a refusal by the note's own rules (no docket, a note that
+			// cannot be dispatched) after the order and the stock moved rolls them back too.
+			if err := cn.MarkDispatched(cmd.DocketNumber, cmd.TransitionedByMembership, h.now()); err != nil {
+				return false, fmt.Errorf("mark dispatched: %w", err)
+			}
+			// No-op when already-dispatched-with-same-docket (mutator
+			// returns nil but doesn't change state).
+			return cn.Status() != priorStatus, nil
+		})
 	})
 }
 

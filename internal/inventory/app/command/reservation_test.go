@@ -180,11 +180,10 @@ func TestReleaseOrderStock_NothingOutstandingIsNoOp(t *testing.T) {
 	require.Equal(t, 0, movements.AddCalls)
 }
 
-// ----- ConsumeOrderStock -----------------------------------------------------
+// ----- ShipOrderStock -------------------------------------------------------
 
-func TestConsumeOrderStock_ShipsAndReleasesHold(t *testing.T) {
+func TestShipOrderStock_ShipsAndReleasesHold(t *testing.T) {
 	t.Parallel()
-	uow := &fakeUoW{}
 	batches := newFakeBatchRepo()
 	movements := newFakeMovementRepo()
 	actor := newMembershipID(t)
@@ -195,33 +194,31 @@ func TestConsumeOrderStock_ShipsAndReleasesHold(t *testing.T) {
 		{BatchID: b.ID(), ProductID: p.ID(), Quantity: 40},
 	}}
 
-	h := command.NewConsumeOrderStockHandler(uow, batches, movements, ledger, sellabilitytest.Resolver(fixedNow), fixedClock, testNewMovementID)
-	res, err := h.Handle(t.Context(), command.ConsumeOrderStockCommand{
+	h := command.NewShipOrderStockHandler(batches, movements, ledger, sellabilitytest.Resolver(fixedNow), fixedClock, testNewMovementID)
+	res, err := h.Handle(t.Context(), command.ShipOrderStockCommand{
 		TenantID: p.TenantID(), OrderID: uuid.NewString(), ActorMembershipID: actor,
 	})
 	require.NoError(t, err)
-	require.True(t, res.Consumed)
 	require.Equal(t, 1, res.BatchCount)
 	require.Equal(t, int64(60), b.QuantityOnHand(), "shipped 40 of 100")
-	require.Zero(t, b.QuantityReserved(), "hold released on consume")
+	require.Zero(t, b.QuantityReserved(), "hold released on shipment")
 	require.Equal(t, 1, countMovements(movements, batch.MovementRelease))
 	require.Equal(t, 1, countMovements(movements, batch.MovementOutbound))
 }
 
-func TestConsumeOrderStock_NothingOutstandingIsNoOp(t *testing.T) {
+func TestShipOrderStock_NothingHeldIsRefused(t *testing.T) {
 	t.Parallel()
-	uow := &fakeUoW{}
 	batches := newFakeBatchRepo()
 	movements := newFakeMovementRepo()
 	ledger := &fakeReservationLedger{outstanding: nil}
 	actor := newMembershipID(t)
 
-	h := command.NewConsumeOrderStockHandler(uow, batches, movements, ledger, sellabilitytest.Resolver(fixedNow), fixedClock, testNewMovementID)
-	res, err := h.Handle(t.Context(), command.ConsumeOrderStockCommand{
+	h := command.NewShipOrderStockHandler(batches, movements, ledger, sellabilitytest.Resolver(fixedNow), fixedClock, testNewMovementID)
+	res, err := h.Handle(t.Context(), command.ShipOrderStockCommand{
 		TenantID: newTenantID(t), OrderID: uuid.NewString(), ActorMembershipID: actor,
 	})
-	require.NoError(t, err)
-	require.False(t, res.Consumed)
+	require.ErrorIs(t, err, command.ErrOrderStockNotHeld, "goods never leave without a deduction")
+	require.Zero(t, res.BatchCount)
 	require.Equal(t, 0, movements.AddCalls)
 }
 
@@ -251,8 +248,8 @@ func TestReserveOrderStock_AtFiveAMIST_OnTheFirstOfTheNextMonth_PrintedExpiryIsP
 }
 
 // Review B2: units reserved while the batch was sellable cannot ship once its printed
-// month is over: the consume refuses (ErrExpired), the whole transaction changes nothing.
-func TestConsumeOrderStock_RefusesToShipUnitsOfABatchThatHasSinceExpired(t *testing.T) {
+// month is over: the shipment refuses (ErrExpired), the whole transaction changes nothing.
+func TestShipOrderStock_RefusesToShipUnitsOfABatchThatHasSinceExpired(t *testing.T) {
 	t.Parallel()
 	batches := newFakeBatchRepo()
 	movements := newFakeMovementRepo()
@@ -269,17 +266,17 @@ func TestConsumeOrderStock_RefusesToShipUnitsOfABatchThatHasSinceExpired(t *test
 
 	later := time.Date(2027, 2, 10, 12, 0, 0, 0, time.UTC)
 	ledger := &fakeReservationLedger{outstanding: []stockmovement.OutstandingReservation{{BatchID: b.ID(), ProductID: p.ID(), Quantity: 10}}}
-	consume := command.NewConsumeOrderStockHandler(&fakeUoW{}, batches, movements, ledger, sellabilitytest.Resolver(later), func() time.Time { return later }, testNewMovementID)
-	_, err = consume.Handle(t.Context(), command.ConsumeOrderStockCommand{TenantID: p.TenantID(), OrderID: orderID, ActorMembershipID: actor})
+	consume := command.NewShipOrderStockHandler(batches, movements, ledger, sellabilitytest.Resolver(later), func() time.Time { return later }, testNewMovementID)
+	_, err = consume.Handle(t.Context(), command.ShipOrderStockCommand{TenantID: p.TenantID(), OrderID: orderID, ActorMembershipID: actor})
 	require.ErrorIs(t, err, batch.ErrExpired)
 	require.Equal(t, int64(10), b.QuantityOnHand(), "nothing shipped")
 }
 
-// Review L2: the consume is judged on the company BUSINESS day, not the UTC date. At 20:00 UTC on
+// Review L2: the shipment is judged on the company BUSINESS day, not the UTC date. At 20:00 UTC on
 // 31 January it is already 1 February at the market offset (+05:30): a batch printed 2027-01 is
 // past its printed expiry, so its reserved units cannot ship. Judged on the UTC date the shipment
 // would go out for another five and a half hours.
-func TestConsumeOrderStock_IsJudgedOnTheBusinessDayNotTheUTCDate(t *testing.T) {
+func TestShipOrderStock_IsJudgedOnTheBusinessDayNotTheUTCDate(t *testing.T) {
 	t.Parallel()
 	batches := newFakeBatchRepo()
 	movements := newFakeMovementRepo()
@@ -290,8 +287,8 @@ func TestConsumeOrderStock_IsJudgedOnTheBusinessDayNotTheUTCDate(t *testing.T) {
 
 	now := time.Date(2027, 1, 31, 20, 0, 0, 0, time.UTC) // 01:30 IST on 1 February
 	ledger := &fakeReservationLedger{outstanding: []stockmovement.OutstandingReservation{{BatchID: b.ID(), ProductID: p.ID(), Quantity: 10}}}
-	consume := command.NewConsumeOrderStockHandler(&fakeUoW{}, batches, movements, ledger, sellabilitytest.Resolver(now), func() time.Time { return now }, testNewMovementID)
-	_, err := consume.Handle(t.Context(), command.ConsumeOrderStockCommand{TenantID: p.TenantID(), OrderID: uuid.NewString(), ActorMembershipID: actor})
+	consume := command.NewShipOrderStockHandler(batches, movements, ledger, sellabilitytest.Resolver(now), func() time.Time { return now }, testNewMovementID)
+	_, err := consume.Handle(t.Context(), command.ShipOrderStockCommand{TenantID: p.TenantID(), OrderID: uuid.NewString(), ActorMembershipID: actor})
 	require.ErrorIs(t, err, batch.ErrExpired)
 	require.Equal(t, int64(10), b.QuantityOnHand(), "nothing shipped")
 }

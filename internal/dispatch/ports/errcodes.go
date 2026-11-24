@@ -14,6 +14,7 @@ const (
 	errCodeOrderNotInvoiced        = "order_not_invoiced"
 	errCodeOrderNotDispatchable    = "order_not_dispatchable"
 	errCodeOrderStockExpired       = "order_stock_expired"
+	errCodeOrderStockNotHeld       = "order_stock_not_held"
 	errCodeForbidden               = "forbidden"
 	errCodeUnauthenticated         = "unauthenticated"
 	errCodeInternalError           = "internal_error"

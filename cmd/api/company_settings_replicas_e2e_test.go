@@ -137,7 +137,7 @@ func startPolicyStack(t *testing.T, pool *pgxpool.Pool, ordersLate bool) policyS
 	var handlers []cqrs.EventHandler
 	handlers = append(handlers, companysettingssubscribers.Handlers(
 		companysettingssubscribers.NewTenantRegisteredSubscriber(companysettingscommand.NewSeedSettingsHandler(settings, time.Now), log))...)
-	handlers = append(handlers, inventorysubscribers.Handlers(nil, nil, nil,
+	handlers = append(handlers, inventorysubscribers.Handlers(nil, nil,
 		inventorysubscribers.NewPolicyChangedSubscriber(inventorycommand.NewApplyPolicyHandler(tx, s.inventory), log))...)
 	if !ordersLate {
 		handlers = append(handlers, s.ordersHandlers()...)

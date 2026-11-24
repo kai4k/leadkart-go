@@ -33,7 +33,8 @@ type reservationRig struct {
 	batches *adapters.BatchRepository
 	reserve command.ReserveOrderStockHandler
 	release command.ReleaseOrderStockHandler
-	consume command.ConsumeOrderStockHandler
+	shipper command.ShipOrderStockHandler
+	tx      *pg.Transactor
 }
 
 func newReservationRig(t *testing.T) reservationRig {
@@ -56,8 +57,20 @@ func newReservationRig(t *testing.T) reservationRig {
 		// command.ReservationLedger (the outstanding-by-batch reads).
 		reserve: command.NewReserveOrderStockHandler(tx, batches, movements, movements, enq, sellabilitytest.Resolver(fixedNow), clk, newMID),
 		release: command.NewReleaseOrderStockHandler(tx, batches, movements, movements, clk, newMID),
-		consume: command.NewConsumeOrderStockHandler(tx, batches, movements, movements, sellabilitytest.Resolver(fixedNow), clk, newMID),
+		shipper: command.NewShipOrderStockHandler(batches, movements, movements, sellabilitytest.Resolver(fixedNow), clk, newMID),
+		tx:      tx,
 	}
+}
+
+// ship runs the shipment the way Dispatch does: as one step of a transaction the caller owns.
+func (r reservationRig) ship(orderID string) (command.ShipOrderStockResult, error) {
+	var res command.ShipOrderStockResult
+	err := r.tx.WithinTx(r.ctx, pg.TxScopeTenant, func(ctx context.Context) error {
+		var herr error
+		res, herr = r.shipper.Handle(ctx, command.ShipOrderStockCommand{TenantID: r.tid, OrderID: orderID, ActorMembershipID: r.actor})
+		return herr
+	})
+	return res, err
 }
 
 // seedStockedBatch persists a product + a live batch carrying onHand units.
@@ -137,10 +150,10 @@ func TestReservationLifecycle_ReserveReleaseRoundTrip(t *testing.T) {
 	require.False(t, rres2.Released)
 }
 
-// TestReservationLifecycle_ReserveConsumeShipsStock pins the pack path: consume
-// realises the hold as a shipment (reserved−q AND on-hand−q). A second consume
-// no-ops.
-func TestReservationLifecycle_ReserveConsumeShipsStock(t *testing.T) {
+// TestReservationLifecycle_ReserveShipShipsStock pins the dispatch path: the shipment
+// realises the hold (reserved−q AND on-hand−q). A second shipment of the same order is
+// refused, never a second deduction.
+func TestReservationLifecycle_ReserveShipShipsStock(t *testing.T) {
 	rig := newReservationRig(t)
 	p, b := rig.seedStockedBatch(t, 100)
 	orderID := uuid.NewString()
@@ -151,11 +164,8 @@ func TestReservationLifecycle_ReserveConsumeShipsStock(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	cres, err := rig.consume.Handle(rig.ctx, command.ConsumeOrderStockCommand{
-		TenantID: rig.tid, OrderID: orderID, ActorMembershipID: rig.actor,
-	})
+	cres, err := rig.ship(orderID)
 	require.NoError(t, err)
-	require.True(t, cres.Consumed)
 	require.Equal(t, 1, cres.BatchCount)
 
 	got, err := rig.batches.GetByID(rig.ctx, rig.tid, b.ID())
@@ -163,12 +173,9 @@ func TestReservationLifecycle_ReserveConsumeShipsStock(t *testing.T) {
 	require.Equal(t, int64(60), got.QuantityOnHand(), "shipped 40 of 100")
 	require.Zero(t, got.QuantityReserved())
 
-	// Idempotent consume: nothing outstanding → no-op, on-hand stable.
-	cres2, err := rig.consume.Handle(rig.ctx, command.ConsumeOrderStockCommand{
-		TenantID: rig.tid, OrderID: orderID, ActorMembershipID: rig.actor,
-	})
-	require.NoError(t, err)
-	require.False(t, cres2.Consumed)
+	// A second shipment: nothing held → refused, on-hand stable.
+	_, err = rig.ship(orderID)
+	require.ErrorIs(t, err, command.ErrOrderStockNotHeld)
 	got, err = rig.batches.GetByID(rig.ctx, rig.tid, b.ID())
 	require.NoError(t, err)
 	require.Equal(t, int64(60), got.QuantityOnHand())
@@ -241,39 +248,4 @@ func TestReservationLifecycle_HeldStockExpiryIsAskedOnTheBusinessDay(t *testing.
 	n, err = movements.CountExpiredBatchesHeldByOrder(rig.ctx, rig.tid, orderID, firstOfNext)
 	require.NoError(t, err)
 	require.Zero(t, n, "a released hold is no longer held")
-}
-
-// Review G2e E1: the gate on a pending consignment note asks whether any batch ever reserved
-// for the order is past its printed expiry. Unlike the pre-pack question it does NOT net
-// releases or consumes: a consume has already drained the hold, but the goods are still in
-// the warehouse until the carrier takes them.
-func TestReservationLifecycle_EverReservedExpiryIgnoresConsumeAndRelease(t *testing.T) {
-	rig := newReservationRig(t)
-	movements := adapters.NewStockMovementRepository(repoFixture(t), pg.NewTransactor(repoFixture(t)))
-	p, b := rig.seedStockedBatch(t, 20)
-	orderID := uuid.NewString()
-	_, err := rig.reserve.Handle(rig.ctx, command.ReserveOrderStockCommand{
-		TenantID: rig.tid, OrderID: orderID, ActorMembershipID: rig.actor,
-		Lines: []command.ReserveLine{{ProductID: p.ID(), Quantity: 10}},
-	})
-	require.NoError(t, err)
-	lastDay := b.ExpiryDate()
-	firstOfNext := lastDay.AddDate(0, 0, 1)
-
-	n, err := movements.CountExpiredBatchesEverReservedByOrder(rig.ctx, rig.tid, orderID, lastDay)
-	require.NoError(t, err)
-	require.Zero(t, n, "on the last day of the printed month the batch is not past it")
-
-	_, err = rig.consume.Handle(rig.ctx, command.ConsumeOrderStockCommand{TenantID: rig.tid, OrderID: orderID, ActorMembershipID: rig.actor})
-	require.NoError(t, err)
-	held, err := movements.CountExpiredBatchesHeldByOrder(rig.ctx, rig.tid, orderID, firstOfNext)
-	require.NoError(t, err)
-	require.Zero(t, held, "the consume drained the hold")
-	n, err = movements.CountExpiredBatchesEverReservedByOrder(rig.ctx, rig.tid, orderID, firstOfNext)
-	require.NoError(t, err)
-	require.Equal(t, int64(1), n, "the batch the order reserved is expired, whatever was consumed since")
-
-	n, err = movements.CountExpiredBatchesEverReservedByOrder(rig.ctx, rig.tid, uuid.NewString(), firstOfNext)
-	require.NoError(t, err)
-	require.Zero(t, n, "another order reserved nothing")
 }

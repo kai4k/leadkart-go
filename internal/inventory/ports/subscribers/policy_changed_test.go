@@ -75,7 +75,7 @@ func TestPolicyChangedSubscriber_AppliesTheWholePolicyAndReplayIsHarmless(t *tes
 func TestHandlers_RegistersThePolicyChangedHandlerUnderItsStableName(t *testing.T) {
 	t.Parallel()
 	sub := subscribers.NewPolicyChangedSubscriber(command.NewApplyPolicyHandler(tenantUoW{}, &recordingStore{}), silentLog())
-	hs := subscribers.Handlers(nil, nil, nil, sub)
+	hs := subscribers.Handlers(nil, nil, sub)
 	if len(hs) != 2 || hs[0].HandlerName() != subscribers.HandlerPolicyChanged || hs[1].HandlerName() != subscribers.HandlerPolicyRepublished || subscribers.HandlerPolicyChanged != "inventory.subscribers.PolicyChanged" {
 		t.Fatalf("handlers = %v", hs)
 	}
