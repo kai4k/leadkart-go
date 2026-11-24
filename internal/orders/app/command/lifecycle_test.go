@@ -115,10 +115,19 @@ func TestOrderFulfilmentLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "INV/2026-27/00001", invRes.NumberDisplay)
 
-	// Dispatch (saga) → dispatched.
-	attach := command.NewAttachConsignmentHandler(orders, now)
+	// Consignment note created (saga) → linked, the order still invoiced.
+	attach := command.NewAttachConsignmentHandler(orders)
 	require.NoError(t, attach.Handle(ctx, command.AttachConsignmentCommand{
-		TenantID: tid, OrderID: orderID, ConsignmentNoteID: uuid.NewString(), TransitionedByMembership: actor,
+		TenantID: tid, OrderID: orderID, ConsignmentNoteID: uuid.NewString(),
+	}))
+	linked, err := orders.GetByID(ctx, tid, orderID)
+	require.NoError(t, err)
+	require.Equal(t, order.StateInvoiced, linked.State(), "linking the note is not a shipment")
+
+	// The goods leave (Dispatch's transaction) → dispatched.
+	dispatch := command.NewDispatchOrderHandler(orders, now)
+	require.NoError(t, dispatch.Handle(ctx, command.DispatchOrderCommand{
+		TenantID: tid, OrderID: orderID, TransitionedByMembership: actor,
 	}))
 
 	// Delivered (saga) → delivered, then complete.

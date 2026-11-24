@@ -353,16 +353,17 @@ func (o *Order) AttachInvoice(invoiceID string, actor membership.ID, now time.Ti
 	return nil
 }
 
-// AttachConsignment transitions invoiced → dispatched and links the
-// consignment-note ID. The note lives in the Dispatch schema; Order stores the
-// FK as text (cross-schema reference).
+// AttachConsignment links the consignment-note ID. The note lives in the Dispatch
+// schema; Order stores the FK as text (cross-schema reference). Linking changes no
+// state: the order stays where it is until the goods leave, which is [Order.MarkDispatched]
+// (review G2g: a note created in the warehouse is not a shipment).
 //
-// Replay-tolerant (at-least-once saga delivery): re-attaching the SAME
-// consignment is a no-op regardless of how far the order has advanced since
-// (delivered/complete included). Attaching a DIFFERENT consignment when one is
-// already linked is ErrInvalid — Dispatch enforces one note per order, so a
-// second ID is a producer bug, never a legitimate replacement.
-func (o *Order) AttachConsignment(consignmentID string, actor membership.ID, now time.Time) error {
+// Replay-tolerant (at-least-once saga delivery): re-attaching the SAME consignment is a
+// no-op regardless of how far the order has advanced since (delivered/complete included).
+// Attaching a DIFFERENT consignment when one is already linked is ErrInvalid — Dispatch
+// enforces one note per order, so a second ID is a producer bug, never a legitimate
+// replacement.
+func (o *Order) AttachConsignment(consignmentID string) error {
 	consignmentID = strings.TrimSpace(consignmentID)
 	if consignmentID == "" {
 		return fmt.Errorf("%w: consignment_id required", ErrInvalid)
@@ -373,10 +374,21 @@ func (o *Order) AttachConsignment(consignmentID string, actor membership.ID, now
 	if o.consignmentNoteID != "" {
 		return fmt.Errorf("%w: consignment %s already attached", ErrInvalid, o.consignmentNoteID)
 	}
+	o.consignmentNoteID = consignmentID
+	return nil
+}
+
+// MarkDispatched transitions invoiced → dispatched when the goods leave, stamping
+// dispatchedAt. It is the one edge into dispatched and is not replay-tolerant: an order that
+// is not invoiced (not yet invoiced, cancelled, already dispatched or later) is
+// [ErrInvalidTransition], and the caller decides which refusal to show.
+func (o *Order) MarkDispatched(actor membership.ID, now time.Time) error {
+	if o.state != StateInvoiced {
+		return fmt.Errorf("%w: %s → %s not permitted", ErrInvalidTransition, o.state, StateDispatched)
+	}
 	if err := o.advance(StateDispatched, actor, now); err != nil {
 		return err
 	}
-	o.consignmentNoteID = consignmentID
 	if o.dispatchedAt == nil {
 		o.dispatchedAt = &now
 	}

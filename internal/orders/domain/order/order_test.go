@@ -128,7 +128,12 @@ func TestOrder_HappyPath_FullLifecycle(t *testing.T) {
 		{"confirmed", func() error { return o.Confirm(actor, now.Add(2*time.Hour)) }, order.StateConfirmed},
 		{"packed", func() error { return o.MarkPacked(actor, now.Add(3*time.Hour)) }, order.StatePacked},
 		{"invoiced", func() error { return o.AttachInvoice("inv-uuid-1", actor, now.Add(4*time.Hour)) }, order.StateInvoiced},
-		{"dispatched", func() error { return o.AttachConsignment("cn-uuid-1", actor, now.Add(5*time.Hour)) }, order.StateDispatched},
+		{"dispatched", func() error {
+			if err := o.AttachConsignment("cn-uuid-1"); err != nil {
+				return err
+			}
+			return o.MarkDispatched(actor, now.Add(5*time.Hour))
+		}, order.StateDispatched},
 		{"delivered", func() error { return o.MarkDelivered(actor, now.Add(6*time.Hour)) }, order.StateDelivered},
 		{"complete", func() error { return o.MarkComplete(actor, now.Add(7*time.Hour)) }, order.StateComplete},
 	}
@@ -250,7 +255,8 @@ func TestOrder_CancelFromCompleteIsRejected(t *testing.T) {
 	require.NoError(t, o.Confirm(actor, fixedNow().Add(2*time.Hour)))
 	require.NoError(t, o.MarkPacked(actor, fixedNow().Add(3*time.Hour)))
 	require.NoError(t, o.AttachInvoice("inv-1", actor, fixedNow().Add(4*time.Hour)))
-	require.NoError(t, o.AttachConsignment("cn-1", actor, fixedNow().Add(5*time.Hour)))
+	require.NoError(t, o.AttachConsignment("cn-1"))
+	require.NoError(t, o.MarkDispatched(actor, fixedNow().Add(5*time.Hour)))
 	require.NoError(t, o.MarkDelivered(actor, fixedNow().Add(6*time.Hour)))
 	require.NoError(t, o.MarkComplete(actor, fixedNow().Add(7*time.Hour)))
 

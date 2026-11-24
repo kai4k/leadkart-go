@@ -1147,7 +1147,7 @@ func buildOrdersApp(pool *pgxpool.Pool, now func() time.Time) ordersapp.Applicat
 			ConfirmOrder:       orderscommand.NewConfirmOrderHandler(tx, orders, enqueuer, now),
 			PackOrder:          orderscommand.NewPackOrderHandler(tx, orders, enqueuer, stockGuard, now),
 			InvoiceOrder:       orderscommand.NewInvoiceOrderHandler(tx, orders, invoices, allocator, stockGuard, now, newInvoiceID),
-			AttachConsignment:  orderscommand.NewAttachConsignmentHandler(orders, now),
+			AttachConsignment:  orderscommand.NewAttachConsignmentHandler(orders),
 			MarkOrderDelivered: orderscommand.NewMarkOrderDeliveredHandler(orders, now),
 			CompleteOrder:      orderscommand.NewCompleteOrderHandler(orders, now),
 			CancelOrder:        orderscommand.NewCancelOrderHandler(orders, now),

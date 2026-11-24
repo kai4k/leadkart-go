@@ -345,13 +345,12 @@ func run(ctx context.Context, stdout *os.File) error {
 		logger,
 	)
 
-	// Orders module saga subscribers (ADR 0063 §4 — BRD §6.4). Catch-up
-	// convergence: each consignment handler subsumes its predecessors
-	// (ensure-invoiced → attach → deliver), so cross-topic interleavings
-	// converge without burning retry budget:
+	// Orders module saga subscribers (ADR 0063 §4 — BRD §6.4). The order
+	// is dispatched by Dispatch's own transaction (ADR 0072), not by these
+	// handlers:
 	//   orders.order_packed.v1            → auto-invoice (packed → invoiced)
-	//   dispatch.consignment_note_created → ensure-invoiced + attach (→ dispatched)
-	//   dispatch.consignment_delivered    → ensure-invoiced + attach + deliver
+	//   dispatch.consignment_note_created → attach (links the note; no state change)
+	//   dispatch.consignment_delivered    → attach + deliver (the order is already dispatched)
 	//   orders.order_cancelled.v1         → cancellation-note compensation
 	ordersOrderRepo := ordersadapters.NewOrderRepository(pool, tx)
 	ordersInvoiceRepo := ordersadapters.NewInvoiceRepository(pool, tx)
@@ -365,13 +364,13 @@ func run(ctx context.Context, stdout *os.File) error {
 		inventoryadapters.NewStockMovementRepository(pool, tx),
 		inventorysellability.NewResolver(inventoryadapters.NewPolicyReplicaRepository(pool, tx), time.Now))}
 	ordersInvoiceOrder := orderscommand.NewInvoiceOrderHandler(tx, ordersOrderRepo, ordersInvoiceRepo, ordersAllocator, ordersStockGuard, time.Now, newOrdersInvoiceID)
-	ordersAttach := orderscommand.NewAttachConsignmentHandler(ordersOrderRepo, time.Now)
+	ordersAttach := orderscommand.NewAttachConsignmentHandler(ordersOrderRepo)
 	ordersDeliver := orderscommand.NewMarkOrderDeliveredHandler(ordersOrderRepo, time.Now)
 	ordersMint := orderscommand.NewMintCreditNoteHandler(tx, ordersCreditNoteRepo, ordersInvoiceRepo, ordersOrderRepo, ordersAllocator, time.Now, newOrdersCreditNoteID)
 	ordersCompensate := orderscommand.NewCompensateOrderCancellationHandler(ordersInvoiceRepo, ordersCreditNoteRepo, ordersMint)
 	ordersAutoInvoiceSub := orderssubscribers.NewAutoInvoiceSubscriber(ordersInvoiceOrder, logger)
-	ordersConsignmentCreatedSub := orderssubscribers.NewConsignmentCreatedSubscriber(ordersInvoiceOrder, ordersAttach, logger)
-	ordersConsignmentDeliveredSub := orderssubscribers.NewConsignmentDeliveredSubscriber(ordersInvoiceOrder, ordersAttach, ordersDeliver, logger)
+	ordersConsignmentCreatedSub := orderssubscribers.NewConsignmentCreatedSubscriber(ordersAttach, logger)
+	ordersConsignmentDeliveredSub := orderssubscribers.NewConsignmentDeliveredSubscriber(ordersAttach, ordersDeliver, logger)
 	ordersCancelCompensationSub := orderssubscribers.NewCancelCompensationSubscriber(ordersCompensate, logger)
 	// companysettings.policy_changed.v1 -> Orders' replica of the company commerce
 	// policy (ADR 0070): stored only when the version is newer, so replay is harmless.

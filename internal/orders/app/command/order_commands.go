@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -246,41 +247,98 @@ func (h PackOrderHandler) Handle(ctx context.Context, cmd PackOrderCommand) erro
 	})
 }
 
-// ----- AttachConsignment (→ dispatched) -------------------------------------
+// ----- AttachConsignment (links the note) -----------------------------------
 
-// AttachConsignmentCommand advances invoiced → dispatched, linking the Dispatch
-// consignment-note id. Saga-driven: the Dispatch consignment-note-created
-// subscriber calls this once the slot exists (ADR 0063 §4).
+// AttachConsignmentCommand links the Dispatch consignment-note id to the order. Saga-driven:
+// the Dispatch consignment-note-created subscriber calls this once the slot exists (ADR 0063
+// §4). It changes no state; the order is dispatched by [DispatchOrderHandler] when the goods
+// leave.
 type AttachConsignmentCommand struct {
+	TenantID          tenant.ID
+	OrderID           order.ID
+	ConsignmentNoteID string
+}
+
+// AttachConsignmentHandler links the note.
+type AttachConsignmentHandler struct {
+	orders order.Repository
+}
+
+// NewAttachConsignmentHandler wires the handler.
+func NewAttachConsignmentHandler(orders order.Repository) AttachConsignmentHandler {
+	return AttachConsignmentHandler{orders: orders}
+}
+
+// Handle links the consignment; re-linking the same note persists nothing.
+func (h AttachConsignmentHandler) Handle(ctx context.Context, cmd AttachConsignmentCommand) error {
+	return h.orders.UpdateByID(ctx, cmd.TenantID, cmd.OrderID, func(o *order.Order) (bool, error) {
+		prior := o.ConsignmentNoteID()
+		if err := o.AttachConsignment(cmd.ConsignmentNoteID); err != nil {
+			return false, fmt.Errorf("orders attach_consignment: %w", err)
+		}
+		return o.ConsignmentNoteID() != prior, nil
+	})
+}
+
+// ----- DispatchOrder (invoiced → dispatched) --------------------------------
+
+// ErrDispatchNotInvoiced is returned when the order has no tax invoice, or there is no such
+// order for this company. Goods do not leave without one (review G2d B1).
+var ErrDispatchNotInvoiced = errors.New("orders dispatch_order: the order has no tax invoice")
+
+// ErrDispatchWrongState is returned when the order has an invoice but is in a state goods do
+// not leave from: a cancelled order keeps its invoice and is never shipped (review G2e E2),
+// and an order already dispatched or delivered is not dispatched again.
+var ErrDispatchWrongState = errors.New("orders dispatch_order: the order is not in a state goods can leave from")
+
+// DispatchOrderCommand moves an invoiced order to dispatched.
+type DispatchOrderCommand struct {
 	TenantID                 tenant.ID
 	OrderID                  order.ID
-	ConsignmentNoteID        string
 	TransitionedByMembership membership.ID
 }
 
-// AttachConsignmentHandler runs the dispatched transition.
-type AttachConsignmentHandler struct {
+// DispatchOrderHandler runs the invoiced → dispatched transition as ONE STEP of Dispatch's
+// dispatch transaction: it neither opens nor joins a transaction of its own, it uses the
+// repository, which joins the one in ctx. The caller (the composition-root bridge) refuses a
+// ctx that carries none, so the order cannot move without the stock and the note moving with
+// it.
+type DispatchOrderHandler struct {
 	orders order.Repository
 	now    func() time.Time
 }
 
-// NewAttachConsignmentHandler wires the handler.
-func NewAttachConsignmentHandler(orders order.Repository, now func() time.Time) AttachConsignmentHandler {
+// NewDispatchOrderHandler wires the handler.
+func NewDispatchOrderHandler(orders order.Repository, now func() time.Time) DispatchOrderHandler {
 	if now == nil {
 		now = time.Now
 	}
-	return AttachConsignmentHandler{orders: orders, now: now}
+	return DispatchOrderHandler{orders: orders, now: now}
 }
 
-// Handle links the consignment + advances to dispatched.
-func (h AttachConsignmentHandler) Handle(ctx context.Context, cmd AttachConsignmentCommand) error {
-	return h.orders.UpdateByID(ctx, cmd.TenantID, cmd.OrderID, func(o *order.Order) (bool, error) {
-		prior := o.State()
-		if err := o.AttachConsignment(cmd.ConsignmentNoteID, cmd.TransitionedByMembership, h.now().UTC()); err != nil {
-			return false, fmt.Errorf("orders attach_consignment: %w", err)
+// Handle locks the order, requires it to be invoiced and advances it to dispatched, the
+// event riding the outbox of the same transaction. An order that is not found answers
+// [ErrDispatchNotInvoiced] (another company's order looks the same as none).
+func (h DispatchOrderHandler) Handle(ctx context.Context, cmd DispatchOrderCommand) error {
+	err := h.orders.UpdateByID(ctx, cmd.TenantID, cmd.OrderID, func(o *order.Order) (bool, error) {
+		switch {
+		case o.State() == order.StateInvoiced:
+		case o.State() == order.StateCancelled:
+			return false, ErrDispatchWrongState
+		case o.InvoiceID() == "":
+			return false, ErrDispatchNotInvoiced
+		default:
+			return false, ErrDispatchWrongState
 		}
-		return o.State() != prior, nil
+		if err := o.MarkDispatched(cmd.TransitionedByMembership, h.now().UTC()); err != nil {
+			return false, fmt.Errorf("orders dispatch_order: %w", err)
+		}
+		return true, nil
 	})
+	if errors.Is(err, order.ErrNotFound) {
+		return ErrDispatchNotInvoiced
+	}
+	return err
 }
 
 // ----- MarkDelivered / CompleteOrder / CancelOrder --------------------------

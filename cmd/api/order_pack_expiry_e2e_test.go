@@ -118,7 +118,7 @@ func startFulfilmentStackWith(t *testing.T, pool *pgxpool.Pool, opts fulfilmentO
 		movements, inventorysellability.NewResolver(inventoryadapters.NewPolicyReplicaRepository(pool, tx), time.Now))}
 	invoiceOrder := orderscommand.NewInvoiceOrderHandler(tx, orderRepo, ordersadapters.NewInvoiceRepository(pool, tx),
 		ordersadapters.NewInvoiceNumberAllocator(pool), stockGuard, time.Now, func() invoice.ID { return invoice.ID(ids.NewV7().String()) })
-	attach := orderscommand.NewAttachConsignmentHandler(orderRepo, time.Now)
+	attach := orderscommand.NewAttachConsignmentHandler(orderRepo)
 
 	release := inventorysubscribers.NewReleaseStockSubscriber(
 		inventorycommand.NewReleaseOrderStockHandler(tx, batches, movements, movements, time.Now, newMID), log)
@@ -130,7 +130,7 @@ func startFulfilmentStackWith(t *testing.T, pool *pgxpool.Pool, opts fulfilmentO
 	handlers = append(handlers, dispatchsubscribers.Handlers(dispatchPacked, dispatchCancelled)...)
 	handlers = append(handlers, orderssubscribers.Handlers(
 		orderssubscribers.NewAutoInvoiceSubscriber(invoiceOrder, log),
-		orderssubscribers.NewConsignmentCreatedSubscriber(invoiceOrder, attach, log), nil, nil, nil)...)
+		orderssubscribers.NewConsignmentCreatedSubscriber(attach, log), nil, nil, nil)...)
 	// The replayer is built from the handlers as registered, before a test wraps any.
 	replayer := messaging.NewDeadLetterReplayer(pool, log, messaging.ReplaySafeHandlerNames(handlers))
 	if opts.wrap != nil {

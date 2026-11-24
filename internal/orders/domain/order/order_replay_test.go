@@ -27,7 +27,12 @@ func advanceTo(t *testing.T, target order.State) *order.Order {
 		{order.StateConfirmed, func() error { return o.Confirm(actor, now) }},
 		{order.StatePacked, func() error { return o.MarkPacked(actor, now) }},
 		{order.StateInvoiced, func() error { return o.AttachInvoice("inv-1", actor, now) }},
-		{order.StateDispatched, func() error { return o.AttachConsignment("cn-1", actor, now) }},
+		{order.StateDispatched, func() error {
+			if err := o.AttachConsignment("cn-1"); err != nil {
+				return err
+			}
+			return o.MarkDispatched(actor, now)
+		}},
 		{order.StateDelivered, func() error { return o.MarkDelivered(actor, now) }},
 		{order.StateComplete, func() error { return o.MarkComplete(actor, now) }},
 	}
@@ -48,12 +53,9 @@ func advanceTo(t *testing.T, target order.State) *order.Order {
 // state (dispatched, delivered, complete) — no error, no state change, no event.
 func TestOrder_AttachConsignment_ReplayTolerant(t *testing.T) {
 	t.Parallel()
-	actor := membership.ID(ids.NewV7().String())
-	later := fixedNow().Add(24 * time.Hour)
-
-	for _, state := range []order.State{order.StateDispatched, order.StateDelivered, order.StateComplete} {
+	for _, state := range []order.State{order.StateInvoiced, order.StateDispatched, order.StateDelivered, order.StateComplete} {
 		o := advanceTo(t, state)
-		if err := o.AttachConsignment("cn-1", actor, later); err != nil {
+		if err := o.AttachConsignment("cn-1"); err != nil {
 			t.Fatalf("replay attach at %s: %v", state, err)
 		}
 		if o.State() != state {
@@ -71,7 +73,7 @@ func TestOrder_AttachConsignment_ReplayTolerant(t *testing.T) {
 func TestOrder_AttachConsignment_RejectsDifferentConsignment(t *testing.T) {
 	t.Parallel()
 	o := advanceTo(t, order.StateDispatched)
-	err := o.AttachConsignment("cn-OTHER", membership.ID(ids.NewV7().String()), fixedNow())
+	err := o.AttachConsignment("cn-OTHER")
 	if !errors.Is(err, order.ErrInvalid) {
 		t.Fatalf("attach different consignment: err=%v want ErrInvalid", err)
 	}
@@ -103,5 +105,62 @@ func TestOrder_MarkDelivered_ReplayTolerant(t *testing.T) {
 		if n := len(o.PullEvents()); n != 0 {
 			t.Fatalf("replay deliver at %s emitted %d events, want 0", state, n)
 		}
+	}
+}
+
+// TestOrder_AttachConsignment_OnlyLinksTheNote pins review G2g: creating the consignment
+// note links it to the order and nothing else. The order stays invoiced (the goods are
+// still in the warehouse), no event is emitted and dispatchedAt stays unset.
+func TestOrder_AttachConsignment_OnlyLinksTheNote(t *testing.T) {
+	t.Parallel()
+	o := advanceTo(t, order.StateInvoiced)
+	if err := o.AttachConsignment("cn-1"); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	if o.State() != order.StateInvoiced {
+		t.Fatalf("attach moved the order to %s", o.State())
+	}
+	if o.ConsignmentNoteID() != "cn-1" {
+		t.Fatalf("consignment = %q", o.ConsignmentNoteID())
+	}
+	if o.DispatchedAt() != nil {
+		t.Fatal("attach stamped dispatchedAt")
+	}
+	if n := len(o.PullEvents()); n != 0 {
+		t.Fatalf("attach emitted %d events, want 0", n)
+	}
+}
+
+// TestOrder_MarkDispatched_OnlyFromInvoiced pins the one edge into dispatched: the order
+// leaves invoiced when the goods leave. Any other state is an invalid transition, and a
+// dispatched order is not dispatched a second time.
+func TestOrder_MarkDispatched_OnlyFromInvoiced(t *testing.T) {
+	t.Parallel()
+	actor := membership.ID(ids.NewV7().String())
+	now := fixedNow()
+
+	o := advanceTo(t, order.StateInvoiced)
+	if err := o.MarkDispatched(actor, now); err != nil {
+		t.Fatalf("dispatch invoiced: %v", err)
+	}
+	if o.State() != order.StateDispatched || o.DispatchedAt() == nil || !o.DispatchedAt().Equal(now) {
+		t.Fatalf("state=%s dispatchedAt=%v", o.State(), o.DispatchedAt())
+	}
+	if n := len(o.PullEvents()); n != 1 {
+		t.Fatalf("dispatch emitted %d events, want 1", n)
+	}
+
+	for _, state := range []order.State{order.StatePacked, order.StateDispatched, order.StateDelivered} {
+		o := advanceTo(t, state)
+		if err := o.MarkDispatched(actor, now); !errors.Is(err, order.ErrInvalidTransition) {
+			t.Errorf("dispatch from %s: err=%v want ErrInvalidTransition", state, err)
+		}
+	}
+	c := advanceTo(t, order.StateInvoiced)
+	if err := c.Cancel("changed mind", actor, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.MarkDispatched(actor, now); !errors.Is(err, order.ErrInvalidTransition) {
+		t.Errorf("dispatch a cancelled order: err=%v want ErrInvalidTransition", err)
 	}
 }

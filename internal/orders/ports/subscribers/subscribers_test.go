@@ -77,14 +77,14 @@ func newFixture(t *testing.T) *fixture {
 	newNoteID := func() creditnote.ID { return creditnote.ID(uuid.NewString()) }
 
 	invoiceOrder := command.NewInvoiceOrderHandler(uow, f.orders, f.invoices, alloc, f.stock, now, newInvoiceID)
-	attach := command.NewAttachConsignmentHandler(f.orders, now)
+	attach := command.NewAttachConsignmentHandler(f.orders)
 	deliver := command.NewMarkOrderDeliveredHandler(f.orders, now)
 	mint := command.NewMintCreditNoteHandler(uow, f.notes, f.invoices, f.orders, alloc, now, newNoteID)
 	compensate := command.NewCompensateOrderCancellationHandler(f.invoices, f.notes, mint)
 
 	f.autoInvoice = subscribers.NewAutoInvoiceSubscriber(invoiceOrder, silentLog())
-	f.created = subscribers.NewConsignmentCreatedSubscriber(invoiceOrder, attach, silentLog())
-	f.delivered = subscribers.NewConsignmentDeliveredSubscriber(invoiceOrder, attach, deliver, silentLog())
+	f.created = subscribers.NewConsignmentCreatedSubscriber(attach, silentLog())
+	f.delivered = subscribers.NewConsignmentDeliveredSubscriber(attach, deliver, silentLog())
 	f.cancelComp = subscribers.NewCancelCompensationSubscriber(compensate, silentLog())
 
 	// Seed an order at `packed` — the state at which the saga races begin.
@@ -141,27 +141,41 @@ func (f *fixture) deliveredEvent(cnID uuid.UUID) *dispatchevents.ConsignmentDeli
 	}
 }
 
-// TestConsignmentCreated_CatchesUpWhenAutoInvoiceLags is the DLQ-race kill
-// shot: the consignment-created event lands while the order is still `packed`
-// (auto-invoice not yet run). The handler must converge — invoice the order
-// itself, then attach — instead of erroring into the retry budget.
-func TestConsignmentCreated_CatchesUpWhenAutoInvoiceLags(t *testing.T) {
+// invoiceAndDispatch takes the seeded order through the auto-invoice and the goods leaving.
+func (f *fixture) invoiceAndDispatch(t *testing.T) {
+	t.Helper()
+	require.NoError(t, f.autoInvoice.Handle(t.Context(), &integrationevents.OrderPackedV1{
+		OrderID: f.orderID.String(), TenantID: f.tenantID.String(),
+		BoxCount: 2, WeightGrams: 1500, CarrierName: "BlueDart",
+		PackedAtUTC: now(), PackedByMembershipID: f.actor.String(),
+	}))
+	require.NoError(t, command.NewDispatchOrderHandler(f.orders, now).Handle(t.Context(), command.DispatchOrderCommand{
+		TenantID: f.tenantID, OrderID: f.orderID, TransitionedByMembership: f.actor,
+	}))
+}
+
+// TestConsignmentCreated_OnlyLinksTheNote pins review G2g: the consignment-created event
+// links the note and nothing else. The order is not invoiced by it (that is the
+// auto-invoice's job) and is not dispatched by it (the goods have not left).
+func TestConsignmentCreated_OnlyLinksTheNote(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	cn := uuid.New()
 
 	require.NoError(t, f.created.Handle(t.Context(), f.createdEvent(cn)))
 
-	require.Equal(t, order.StateDispatched, f.orderState(t))
-	inv, err := f.invoices.GetByOrderID(t.Context(), f.tenantID, f.orderID)
-	require.NoError(t, err, "catch-up must have minted the invoice")
-	require.Equal(t, int64(1), inv.Number().Seq())
+	require.Equal(t, order.StatePacked, f.orderState(t))
+	o, err := f.orders.GetByID(t.Context(), f.tenantID, f.orderID)
+	require.NoError(t, err)
+	require.Equal(t, cn.String(), o.ConsignmentNoteID())
+	require.Nil(t, o.DispatchedAt())
+	_, err = f.invoices.GetByOrderID(t.Context(), f.tenantID, f.orderID)
+	require.Error(t, err, "the created event must not mint the invoice")
 }
 
-// TestConsignmentCreated_NormalPathAfterAutoInvoice: auto-invoice already ran
-// → ensureInvoiced hits the one-per-order natural key and treats it as
-// success, then attaches.
-func TestConsignmentCreated_NormalPathAfterAutoInvoice(t *testing.T) {
+// TestConsignmentCreated_AfterAutoInvoiceKeepsTheOrderInvoiced: normal path, the order is
+// invoiced and stays invoiced with the note linked.
+func TestConsignmentCreated_AfterAutoInvoiceKeepsTheOrderInvoiced(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	require.NoError(t, f.autoInvoice.Handle(t.Context(), &integrationevents.OrderPackedV1{
@@ -172,7 +186,7 @@ func TestConsignmentCreated_NormalPathAfterAutoInvoice(t *testing.T) {
 	require.Equal(t, order.StateInvoiced, f.orderState(t))
 
 	require.NoError(t, f.created.Handle(t.Context(), f.createdEvent(uuid.New())))
-	require.Equal(t, order.StateDispatched, f.orderState(t))
+	require.Equal(t, order.StateInvoiced, f.orderState(t))
 }
 
 // TestConsignmentCreated_ReplayAcks: redelivery of the same event after the
@@ -182,23 +196,37 @@ func TestConsignmentCreated_ReplayAcks(t *testing.T) {
 	f := newFixture(t)
 	cn := uuid.New()
 	require.NoError(t, f.created.Handle(t.Context(), f.createdEvent(cn)))
+	f.invoiceAndDispatch(t)
 	require.NoError(t, f.created.Handle(t.Context(), f.createdEvent(cn)), "replay must ack")
 	require.Equal(t, order.StateDispatched, f.orderState(t))
 }
 
-// TestConsignmentDelivered_FullCatchUp: the delivered event arrives with NO
-// prior saga step processed (auto-invoice lagging, created event lost). The
-// handler converges the whole chain: invoice → attach → deliver.
-func TestConsignmentDelivered_FullCatchUp(t *testing.T) {
+// TestConsignmentDelivered_LinksAndDeliversADispatchedOrder: the delivered event of a note
+// whose created event was lost still delivers the dispatched order.
+func TestConsignmentDelivered_LinksAndDeliversADispatchedOrder(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	cn := uuid.New()
+	f.invoiceAndDispatch(t)
 
-	require.NoError(t, f.delivered.Handle(t.Context(), f.deliveredEvent(cn)))
+	require.NoError(t, f.delivered.Handle(t.Context(), f.deliveredEvent(uuid.New())))
 
 	require.Equal(t, order.StateDelivered, f.orderState(t))
-	_, err := f.invoices.GetByOrderID(t.Context(), f.tenantID, f.orderID)
-	require.NoError(t, err, "full catch-up must have minted the invoice")
+}
+
+// TestConsignmentDelivered_ForAnOrderThatNeverLeftIsAConflict: a delivered note can exist only
+// for an order the dispatch transaction moved to dispatched. An order that is not dispatched
+// is a genuine conflict (retry, then the dead letter for a person), and nothing is repaired
+// from here: no invoice is minted, the order does not move.
+func TestConsignmentDelivered_ForAnOrderThatNeverLeftIsAConflict(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+
+	err := f.delivered.Handle(t.Context(), f.deliveredEvent(uuid.New()))
+
+	require.Error(t, err)
+	require.Equal(t, order.StatePacked, f.orderState(t))
+	_, ierr := f.invoices.GetByOrderID(t.Context(), f.tenantID, f.orderID)
+	require.Error(t, ierr, "the delivered event must not mint the invoice")
 }
 
 // TestConsignmentDelivered_ReplayAcks: redelivery after delivery (and even
@@ -207,6 +235,7 @@ func TestConsignmentDelivered_ReplayAcks(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	cn := uuid.New()
+	f.invoiceAndDispatch(t)
 	require.NoError(t, f.delivered.Handle(t.Context(), f.deliveredEvent(cn)))
 	require.NoError(t, f.delivered.Handle(t.Context(), f.deliveredEvent(cn)), "replay must ack")
 	require.Equal(t, order.StateDelivered, f.orderState(t))
@@ -230,7 +259,7 @@ func TestCancelCompensation_MintsCancellationNote(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	// Invoice the order so there is something to reverse.
-	require.NoError(t, f.created.Handle(t.Context(), f.createdEvent(uuid.New())))
+	f.invoiceAndDispatch(t)
 	inv, err := f.invoices.GetByOrderID(t.Context(), f.tenantID, f.orderID)
 	require.NoError(t, err)
 

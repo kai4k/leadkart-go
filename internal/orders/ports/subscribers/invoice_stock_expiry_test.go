@@ -31,20 +31,22 @@ func TestAutoInvoice_ExpiredHeldStockIsRefusedWithoutRetry(t *testing.T) {
 	require.Error(t, ierr, "no invoice may exist")
 }
 
-func TestConsignmentSaga_ExpiredHeldStockIsRefusedWithoutRetryAndTheOrderIsNotDispatched(t *testing.T) {
+// The consignment events never invoice or dispatch (review G2g), so expired held stock
+// cannot slip an invoice or a shipment through them: the created event only links the note,
+// and the delivered event of an order that never left is a conflict.
+func TestConsignmentSaga_NeverInvoicesOrDispatchesWhateverTheStock(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	f.stock.expired = true
 
-	err := f.created.Handle(t.Context(), f.createdEvent(uuid.New()))
-
-	require.ErrorIs(t, err, order.ErrStockExpired)
-	require.True(t, messaging.IsNonRetryable(err))
+	require.NoError(t, f.created.Handle(t.Context(), f.createdEvent(uuid.New())))
 	require.Equal(t, order.StatePacked, f.orderState(t), "no invoice, so no dispatch")
 	_, ierr := f.invoices.GetByOrderID(t.Context(), f.tenantID, f.orderID)
 	require.Error(t, ierr)
 
-	err = f.delivered.Handle(t.Context(), f.deliveredEvent(uuid.New()))
-	require.ErrorIs(t, err, order.ErrStockExpired)
+	err := f.delivered.Handle(t.Context(), f.deliveredEvent(uuid.New()))
+	require.Error(t, err)
 	require.Equal(t, order.StatePacked, f.orderState(t))
+	_, ierr = f.invoices.GetByOrderID(t.Context(), f.tenantID, f.orderID)
+	require.Error(t, ierr)
 }
