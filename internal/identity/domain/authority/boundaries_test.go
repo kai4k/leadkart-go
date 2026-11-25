@@ -66,6 +66,7 @@ func TestPolicy_Boundaries(t *testing.T) {
 	aSuper := act(superSelf.ID(), tP, nil, nil, func(in *authority.ActorInput) { in.IsSuperUser = true })
 	aOp := act(opSelf.ID(), tP, rk(authority.RankNone), []string{p.Platform.UsersManage, p.Platform.RolesManage}, func(in *authority.ActorInput) { in.IsPlatformOperator = true })
 	aOpRolesOnly := act(opSelf.ID(), tP, rk(authority.RankNone), []string{p.Platform.RolesManage}, func(in *authority.ActorInput) { in.IsPlatformOperator = true })
+	aOpUsersOnly := act(opSelf.ID(), tP, rk(authority.RankNone), []string{p.Platform.UsersManage}, func(in *authority.ActorInput) { in.IsPlatformOperator = true })
 	aNotOperator := act(opSelf.ID(), tP, rk(authority.RankNone), []string{p.Platform.UsersManage, p.Platform.RolesManage}, nil)
 	aImp := act(membership.ID(uid(93)), tA, rk(authority.RankOwner), adminEffective(), func(in *authority.ActorInput) { in.IsImpersonation = true })
 	aOwnerNoAdminPerm := act(owner.ID(), tA, rk(authority.RankOwner), []string{p.Crm.Leads.Read}, nil)
@@ -130,7 +131,7 @@ func TestPolicy_Boundaries(t *testing.T) {
 		{"operator edits a role in its own tenant follows rank", aOp.MayEditRole(platformUserR, authority.NoLevelChange, authority.RoleHolders{}), authority.ErrInsufficientRank},
 		// exemption conditions
 		{"platform.roles.manage alone exempts", aOpRolesOnly.MayActOn(unmanaged), nil},
-		{"platform.users.manage alone exempts", aOp.MayActOn(unmanaged), nil},
+		{"platform.users.manage alone exempts", aOpUsersOnly.MayActOn(unmanaged), nil},
 		{"users.manage and roles.manage without the operator flag do not exempt", aNotOperator.MayActOn(unmanaged), authority.ErrNoAuthority},
 		{"nor for a role edit", aNotOperator.MayEditRole(mgrR, authority.NoLevelChange, authority.RoleHolders{}), authority.ErrNoAuthority},
 		{"an operator without either manage permission is not exempt", act(opSelf.ID(), tP, rk(authority.RankNone), []string{p.Platform.TenantsView}, func(in *authority.ActorInput) { in.IsPlatformOperator = true }).MayActOn(unmanaged), authority.ErrNoAuthority},

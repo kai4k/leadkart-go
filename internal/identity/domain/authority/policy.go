@@ -175,19 +175,27 @@ func (a Actor) mayConferManaged(tid tenant.ID, conferred []string) error {
 }
 
 // mayChange is the permission ceiling over a change that confers some names and removes others:
-// conferred names also pass mayConferManaged; a removed platform-managed name is outside the
-// ceiling (an inert name must always be removable, S1b).
+// conferred names also pass mayConferManaged; in a company a removed platform-managed name is
+// outside the ceiling (an inert name must always be removable, S1b). Inside the platform tenant
+// the names are real authority, so removing one stays under the ceiling (G2n M1).
 func (a Actor) mayChange(tid tenant.ID, conferred, removed []string) error {
 	if err := a.mayConferManaged(tid, conferred); err != nil {
 		return err
 	}
 	names := slices.Clone(conferred)
+	inPlatform := a.inPlatformTenant(tid)
 	for _, n := range removed {
-		if !permission.IsPlatformManagedRole(n) {
+		if inPlatform || !permission.IsPlatformManagedRole(n) {
 			names = append(names, n)
 		}
 	}
 	return a.mayChangePermissions(tid, names)
+}
+
+// inPlatformTenant: the actor decides in its own tenant as a platform operator (the same proxy
+// mayConferManaged uses for "the platform tenant").
+func (a Actor) inPlatformTenant(tid tenant.ID) bool {
+	return a.platformOperator && sameTenant(tid, a.tenantID)
 }
 
 // notIn is the names of a that are not in b.
@@ -296,13 +304,33 @@ func (a Actor) MayChangeOverrides(t Member, after Overrides) error {
 	}
 	delta := slices.Concat(grantDelta(t.overrides.Granted, after.Granted), Delta(t.overrides.Revoked, after.Revoked))
 	slices.Sort(delta)
-	if err := a.mayChange(t.tenantID, conferredByOverrides(t.overrides, after), slices.Compact(delta)); err != nil {
+	conferred := a.conferredBy(t, after)
+	if err := a.mayChange(t.tenantID, conferred, slices.Compact(delta)); err != nil {
 		return err
 	}
-	if err := a.mayConfer(conferredByOverrides(t.overrides, after)); err != nil {
+	if err := a.mayConfer(conferred); err != nil {
 		return err
 	}
 	return guardOwnerOverrides(t, after.Revoked)
+}
+
+// conferredBy is [conferredByOverrides] with the G2n rule for a company member's revoked list:
+// a managed name newly ADDED to it counts as conferred (nothing managed ever lands on a company
+// override, revoke or grant), and LIFTING a stale one counts as a removal. Inside the platform
+// tenant the plain rule stands.
+func (a Actor) conferredBy(t Member, after Overrides) []string {
+	if a.inPlatformTenant(t.tenantID) {
+		return conferredByOverrides(t.overrides, after)
+	}
+	before := t.overrides
+	before.Revoked = slices.DeleteFunc(slices.Clone(before.Revoked), permission.IsPlatformManagedRole)
+	out := conferredByOverrides(before, after)
+	for _, n := range after.Revoked {
+		if permission.IsPlatformManagedRole(n) && !slices.Contains(t.overrides.Revoked, n) {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // mayConfer - H3: conferring a permission on someone else is for durable
@@ -805,7 +833,7 @@ func (a Actor) MayReactivateRole(r *role.Role, holders RoleHolders) error {
 	if err := roleMayContain(r, names); err != nil {
 		return err
 	}
-	if err := a.mayConferManaged(r.TenantID(), names); err != nil {
+	if err := a.mayChange(r.TenantID(), names, nil); err != nil {
 		return err
 	}
 	return a.mayConfer(names)
