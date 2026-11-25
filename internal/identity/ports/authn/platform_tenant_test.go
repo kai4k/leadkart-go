@@ -46,10 +46,16 @@ func TestAuthorityFrom_PlatformTenantFallback(t *testing.T) {
 	unknown := func(context.Context) tenant.ID { return "" }
 	company := &jwt.Claims{TenantID: tenantA, TenantSlug: "acme", MembershipID: selfMem}
 	platform := &jwt.Claims{TenantID: platformTenantID, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true, MembershipID: selfMem}
+	// G2q m3: a platform-slug token that is NOT an operator (a platform staff member, IsPlatform false):
+	// NewActor's own default (operator tenant) does not apply, so only the authn fallback names the id.
+	staff := &jwt.Claims{TenantID: platformTenantID, TenantSlug: authn.PlatformTenantSlug, MembershipID: selfMem}
 	for name, ctx := range map[string]context.Context{
 		"no resolver":      t.Context(),
 		"resolver unknown": authn.WithPlatformTenant(t.Context(), unknown),
 	} {
+		if got := authn.AuthorityFrom(authn.WithClaims(ctx, staff)).PlatformTenantID(); got != platformTenantID {
+			t.Errorf("%s: platform staff token platform id = %q, want its own tenant", name, got)
+		}
 		if got := authn.AuthorityFrom(authn.WithClaims(ctx, company)).PlatformTenantID(); got != "" {
 			t.Errorf("%s: company token platform id = %q, want empty", name, got)
 		}

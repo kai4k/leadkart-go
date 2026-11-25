@@ -580,7 +580,7 @@ func newServer(
 	// ADR 0039 per-request scope selection (ADR 0068 D7): the single place
 	// X-Tenant-Id is read, wrapping the whole mux.
 	// Every actor knows LeadKart's own tenant id, read from the database (G2p).
-	return authn.PlatformTenant(ports.NewPlatformTenantResolver(identityApp))(
+	return authn.PlatformTenant(ports.NewPlatformTenantResolver(log, identityApp))(
 		authn.TenantScope(ports.NewTenantScopeResolver(identityApp).Lookup, log)(mux))
 }
 
