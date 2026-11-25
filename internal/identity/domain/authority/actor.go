@@ -33,6 +33,13 @@ type ActorInput struct {
 	// platform operator, an impersonation session, a super user of the platform tenant. authn
 	// computes it with the one decision rule (satisfiesIn); false is the safe default.
 	MayManageRoles bool
+	// PlatformTenantID is the id of LeadKart's own tenant when the caller's facts name it: the token's
+	// tenant when its slug is the platform slug (an operator, a platform super user, an impersonation
+	// session opened there), or the platform tenant a cross-tenant caller is known to act in. "Is this
+	// the platform tenant?" is decided on the TARGET tenant against this id, never on the actor's
+	// kind (G2o B1). Empty is the safe default: every tenant is then treated as a company.
+	// A slug-anchored platform operator with no value here is taken to be in its own tenant.
+	PlatformTenantID tenant.ID
 }
 
 // Actor is the authority of the caller performing a write. Carried
@@ -48,6 +55,7 @@ type Actor struct {
 	platformOperator bool
 	impersonation    bool
 	mayManageRoles   bool
+	platformTenantID tenant.ID // canonical, or empty when unknown (see ActorInput.PlatformTenantID)
 	// holdUntil is, for a permission the actor holds ONLY through a time-bound
 	// override, when that override ends. Set by NarrowedBy from the fresh read;
 	// never present on a token-only actor.
@@ -76,9 +84,18 @@ func NewActor(in ActorInput) (Actor, error) {
 	if in.IsImpersonation {
 		rank = RankAdmin
 	}
+	ptid := tenant.ID("")
+	switch {
+	case in.PlatformTenantID != "":
+		if ptid, err = tenant.ParseID(string(in.PlatformTenantID)); err != nil {
+			return Actor{}, fmt.Errorf("%w: platform tenant id is not a canonical uuid", ErrNoAuthority)
+		}
+	case in.IsPlatformOperator:
+		ptid = tid // slug-anchored: the operator's own tenant is the platform tenant
+	}
 	return Actor{valid: true, membershipID: mid, tenantID: tid, rank: rank, effective: effectiveSet(in.EffectivePermissions, in.MayManageRoles),
-		mayManageRoles: in.MayManageRoles,
-		superUser:      in.IsSuperUser, platformOperator: in.IsPlatformOperator, impersonation: in.IsImpersonation}, nil
+		mayManageRoles: in.MayManageRoles, platformTenantID: ptid,
+		superUser: in.IsSuperUser, platformOperator: in.IsPlatformOperator, impersonation: in.IsImpersonation}, nil
 }
 
 // Valid reports whether a was built by NewActor (the zero Actor is invalid and denies everything).

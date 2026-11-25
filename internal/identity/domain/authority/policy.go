@@ -192,10 +192,12 @@ func (a Actor) mayChange(tid tenant.ID, conferred, removed []string) error {
 	return a.mayChangePermissions(tid, names)
 }
 
-// inPlatformTenant: the actor decides in its own tenant as a platform operator (the same proxy
-// mayConferManaged uses for "the platform tenant").
+// inPlatformTenant: the TARGET tenant is LeadKart's own tenant. It is a fact about the target
+// (the platform tenant id the actor was built with), never about the actor's kind: an impersonation
+// session or a company super user acting there is classified the same as an operator (G2o B1).
+// Unknown (no id) is "not the platform tenant".
 func (a Actor) inPlatformTenant(tid tenant.ID) bool {
-	return a.platformOperator && sameTenant(tid, a.tenantID)
+	return a.platformTenantID != "" && sameTenant(tid, a.platformTenantID)
 }
 
 // notIn is the names of a that are not in b.

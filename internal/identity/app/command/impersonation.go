@@ -134,6 +134,12 @@ func (h CreateImpersonationSessionHandler) Handle(ctx context.Context, cmd Creat
 		return CreateImpersonationSessionResult{}, fmt.Errorf("create_impersonation_session: resolve target: %w", err)
 	}
 
+	// LeadKart staff act in LeadKart's own tenant directly, never through a session: a session there
+	// would hold tenant.admin over the platform tenant without any platform permission (G2o B1).
+	if target.Slug().String() == tenant.PlatformSlug {
+		return CreateImpersonationSessionResult{}, fmt.Errorf("%w: a session cannot be opened into the platform tenant", ErrImpersonationInvalid)
+	}
+
 	if target.Status() != tenant.StatusActive {
 		return CreateImpersonationSessionResult{}, fmt.Errorf("%w: %s is %s", ErrImpersonationTargetNotActive, cmd.TargetTenantID, target.Status())
 	}
