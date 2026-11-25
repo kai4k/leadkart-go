@@ -80,6 +80,15 @@ func GetSuperAdminRole(t testing.TB, ctx context.Context, db *sql.DB, tenantID, 
 	return id, name, isSuperAdmin, isSystemDefault
 }
 
+// DeactivateRole marks the role inactive (roles go inactive, never deleted, ADR 0073), freeing
+// its name among active roles. Used to prove the seed never returns an inactive same-name role.
+func DeactivateRole(t testing.TB, ctx context.Context, db *sql.DB, roleID string) {
+	t.Helper()
+	if _, err := db.ExecContext(ctx, `UPDATE identity.roles SET is_active = false WHERE id = $1`, roleID); err != nil {
+		t.Fatalf("seedtest.DeactivateRole(%s): %v", roleID, err)
+	}
+}
+
 // CountSuperAdminRoles returns the number of identity.roles rows
 // flagged as super-admin (active ones: a role is never deleted, ADR 0073). Used by the
 // row-count assertion ("seed wrote exactly one super-admin role").

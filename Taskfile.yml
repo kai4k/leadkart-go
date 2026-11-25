@@ -168,6 +168,11 @@ tasks:
       # (unused imports, shadowed vars) that the standard vet skips.
       - go vet -tags=integration ./...
 
+  test:int:bootstrap:
+    desc: 'Run the bootstrap seed integration tests (one Postgres testcontainer, ~20s, requires Docker). The seed SQL runs against the real migrated schema, so an index migration that breaks its ON CONFLICT target fails here and not only in CI (82230ad).'
+    cmds:
+      - go test -count=1 -tags=integration -timeout=10m -p 1 ./cmd/bootstrap/...
+
   test:smoke:
     desc: Container-level smoke against running compose stack (requires `docker:up:full`)
     cmds:
@@ -228,13 +233,14 @@ tasks:
       - go generate ./...
 
   ci:
-    desc: Fast pre-push gate (vet + lint + test + arch + integration-compile + vuln + build). No CGO/Docker needed.
+    desc: Fast pre-push gate (vet + lint + test + arch + integration-compile + bootstrap seed integration + vuln + build). No CGO needed; the bootstrap seed run needs Docker.
     cmds:
       - task: vet
       - task: lint
       - task: test
       - task: test:arch
       - task: test:int:compile
+      - task: test:int:bootstrap
       - task: vuln
       - task: build
 
@@ -246,6 +252,7 @@ tasks:
       - task: test:race
       - task: test:arch
       - task: test:int:compile
+      - task: test:int:bootstrap
       - task: vuln
       - task: build
 

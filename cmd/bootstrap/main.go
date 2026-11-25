@@ -222,13 +222,13 @@ func seedSuperAdmin(ctx context.Context, tx *sql.Tx, email, password, firstName,
 		        id, tenant_id, name, is_system_default, is_super_admin,
 		        hierarchy_level, permissions, created_at
 		    ) VALUES ($1, $2, $3, true, true, $4, '[]'::jsonb, $5)
-		    ON CONFLICT (tenant_id, name) DO NOTHING
+		    ON CONFLICT (tenant_id, name) WHERE is_active DO NOTHING
 		    RETURNING id
 		)
 		SELECT id FROM ins
 		UNION ALL
 		SELECT id FROM identity.roles
-		WHERE  tenant_id = $2 AND name = $3
+		WHERE  tenant_id = $2 AND name = $3 AND is_active
 		LIMIT  1
 	`, roleID, tenantID, superAdminRoleName, superAdminHierarchyLevel, now).
 		Scan(&roleID); err != nil {

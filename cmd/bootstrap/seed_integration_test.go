@@ -56,6 +56,56 @@ func TestSeedSuperAdmin_FreshDatabase(t *testing.T) {
 	assertRowCounts(t, ctx, db, 1)
 }
 
+// TestSeedSuperAdmin_RoleUpsertTargetsActiveNameIndex pins the role upsert to the partial
+// unique index (tenant_id, name) WHERE is_active: a second seed returns the same active role,
+// and an older INACTIVE role of the same name is never returned (a new active one is created).
+func TestSeedSuperAdmin_RoleUpsertTargetsActiveNameIndex(t *testing.T) {
+	const (
+		email    = "platform-admin@bootstrap.test"
+		password = "BootstrapTestPassword!2026"
+	)
+	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+	defer cancel()
+	db := startTestDB(t, ctx)
+
+	if err := runOnce(ctx, db, email, password, "Boot", "Strap", true); err != nil {
+		t.Fatalf("first seed: %v", err)
+	}
+	tenantID, _, _, _ := seedtest.GetTenantBySlug(t, ctx, db, "platform")
+	firstID, _, _, _ := seedtest.GetSuperAdminRole(t, ctx, db, tenantID, "SuperAdmin")
+
+	// Idempotent: same id, still one active SuperAdmin.
+	if err := runOnce(ctx, db, email, password, "Boot", "Strap", true); err != nil {
+		t.Fatalf("second seed: %v", err)
+	}
+	secondID, _, _, _ := seedtest.GetSuperAdminRole(t, ctx, db, tenantID, "SuperAdmin")
+	if secondID != firstID {
+		t.Errorf("re-seed role id = %s, want %s", secondID, firstID)
+	}
+	assertRowCounts(t, ctx, db, 1)
+
+	// Deactivate it: the name is free again among active roles.
+	seedtest.DeactivateRole(t, ctx, db, firstID)
+	if err := runOnce(ctx, db, email, password, "Boot", "Strap", true); err != nil {
+		t.Fatalf("seed with inactive same-name role: %v", err)
+	}
+	thirdID, _, isSuper, _ := seedtest.GetSuperAdminRole(t, ctx, db, tenantID, "SuperAdmin")
+	if thirdID == firstID {
+		t.Errorf("seed returned the inactive role %s", firstID)
+	}
+	if !isSuper {
+		t.Errorf("new active role is_super_admin = false, want true")
+	}
+	if n := seedtest.CountSuperAdminRoles(t, ctx, db); n != 1 {
+		t.Errorf("active super-admin roles = %d, want 1", n)
+	}
+	personID, _, _, _, _ := seedtest.GetSeededSuperAdminPerson(t, ctx, db, email)
+	membershipID, _ := seedtest.GetMembershipForPerson(t, ctx, db, personID, tenantID)
+	if assigned := seedtest.CountRoleAssignmentsForMembershipAndRole(t, ctx, db, membershipID, thirdID); assigned != 1 {
+		t.Errorf("assignments on the new active role = %d, want 1", assigned)
+	}
+}
+
 // TestSeedSuperAdmin_MissingEnv_NoOp asserts the env-skip contract
 // against a real DB (paranoia: confirms no rows leak in when the
 // caller hands us empty creds).
