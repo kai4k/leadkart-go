@@ -579,7 +579,9 @@ func newServer(
 	}
 	// ADR 0039 per-request scope selection (ADR 0068 D7): the single place
 	// X-Tenant-Id is read, wrapping the whole mux.
-	return authn.TenantScope(ports.NewTenantScopeResolver(identityApp).Lookup, log)(mux)
+	// Every actor knows LeadKart's own tenant id, read from the database (G2p).
+	return authn.PlatformTenant(ports.NewPlatformTenantResolver(identityApp))(
+		authn.TenantScope(ports.NewTenantScopeResolver(identityApp).Lookup, log)(mux))
 }
 
 // addRootHelpers registers humane handlers for the cross-cutting URLs

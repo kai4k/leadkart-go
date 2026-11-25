@@ -28,12 +28,10 @@ func AuthorityFrom(ctx context.Context) authority.Actor {
 		return authority.Actor{}
 	}
 	own := tenancy.ID(c.TenantID)
-	// "the platform tenant" is a fact about the token's tenant (its slug), true for an operator, a
-	// platform super user and an impersonation session opened there alike (G2o B1).
-	var platformTenant tenant.ID
-	if c.TenantSlug == PlatformTenantSlug {
-		platformTenant = tenant.ID(c.TenantID)
-	}
+	// Every actor knows the platform tenant's id (from the database, G2p), so "the target is the
+	// platform tenant" is decided the same way for an operator, a super user and an impersonation
+	// session, whichever tenant its token names (G2o B1, G2p n1).
+	platformTenant := platformTenantFor(ctx, c.TenantID, c.TenantSlug)
 	a, err := authority.NewActor(authority.ActorInput{
 		MembershipID:         membership.ID(c.MembershipID),
 		TenantID:             tenant.ID(c.TenantID),

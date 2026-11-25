@@ -195,9 +195,9 @@ func (a Actor) mayChange(tid tenant.ID, conferred, removed []string) error {
 // inPlatformTenant: the TARGET tenant is LeadKart's own tenant. It is a fact about the target
 // (the platform tenant id the actor was built with), never about the actor's kind: an impersonation
 // session or a company super user acting there is classified the same as an operator (G2o B1).
-// Unknown (no id) is "not the platform tenant".
+// Unknown (no id) is "not the platform tenant": sameTenant refuses an empty or non-canonical id.
 func (a Actor) inPlatformTenant(tid tenant.ID) bool {
-	return a.platformTenantID != "" && sameTenant(tid, a.platformTenantID)
+	return sameTenant(tid, a.platformTenantID)
 }
 
 // notIn is the names of a that are not in b.
